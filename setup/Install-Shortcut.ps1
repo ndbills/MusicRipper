@@ -1,0 +1,59 @@
+<#
+.SYNOPSIS
+    Create a Desktop shortcut "Rip a CD" that launches Start-Ripper.ps1 in PS7.
+
+.DESCRIPTION
+    Pipeline position:
+        Setup script #4. Run after the others. Creates the one-click entry
+        point parents will use.
+
+    Implementation: WScript.Shell COM object — present on all Windows by
+    default, no extra runtime, lets us set the icon. The shortcut points at
+    `pwsh.exe -NoProfile -ExecutionPolicy Bypass -File <repo>\src\Start-Ripper.ps1`
+    so it runs in PS7 regardless of the user's default association.
+
+.EXAMPLE
+    PS> ./setup/Install-Shortcut.ps1
+
+.NOTES
+    Why -NoProfile: parents' machines might have a slow profile (corporate,
+    big modules) and we want the dialog up fast. Also avoids surprise
+    behavior from $PROFILE customizations.
+#>
+
+[CmdletBinding()]
+param(
+    [string]$ShortcutName = 'Rip a CD'
+)
+
+Set-StrictMode -Version 3.0
+$ErrorActionPreference = 'Stop'
+
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$target   = Join-Path $repoRoot 'src\Start-Ripper.ps1'
+if (-not (Test-Path -LiteralPath $target)) {
+    throw "Start-Ripper.ps1 not found at '$target'. Has the repo been laid out correctly?"
+}
+
+# Locate pwsh.exe explicitly — `where.exe pwsh` is more reliable than relying
+# on the COM shortcut to resolve %PATH% at click time.
+$pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+
+$desktop      = [Environment]::GetFolderPath('Desktop')
+$shortcutPath = Join-Path $desktop "$ShortcutName.lnk"
+
+$shell = New-Object -ComObject WScript.Shell
+$lnk = $shell.CreateShortcut($shortcutPath)
+$lnk.TargetPath       = $pwsh
+$lnk.Arguments        = "-NoProfile -ExecutionPolicy Bypass -File `"$target`""
+$lnk.WorkingDirectory = Split-Path -Parent $target
+$lnk.Description      = 'MusicRipper — rip an Audio CD to FLAC'
+
+# Optional icon. If the project ships an .ico later we'll point here. For now
+# fall back to pwsh's icon so the shortcut isn't blank.
+$icon = Join-Path $repoRoot 'assets\musicripper.ico'
+$lnk.IconLocation = if (Test-Path -LiteralPath $icon) { $icon } else { "$pwsh,0" }
+
+$lnk.Save()
+
+Write-Host "Created shortcut: $shortcutPath" -ForegroundColor Green
