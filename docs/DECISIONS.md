@@ -118,3 +118,47 @@ copy. The review queue keeps the library trustworthy and gives you a
 clear backlog to clear.
 
 ---
+
+## D-007 — Remote NAS access via self-hosted WireGuard, not third-party relay *(deferred to Phase 6)*
+
+**Choice:** When the rip machine is off the home LAN, reach the
+Synology share over the user's existing **router-hosted WireGuard
+VPN**. MusicRipper itself will manage the tunnel: bring it up before
+`Sync-ToSynologyNAS.ps1` runs, leave it up for an idle-timeout window
+(default 10 min) to coalesce a batch of rips, then tear it down.
+
+**Alternatives considered:**
+
+- **Tailscale on the NAS + clients.** Easiest UX, no router config,
+  free for personal use. Rejected because traffic is brokered
+  through Tailscale's coordination + DERP relays; the user
+  explicitly does not want their data path to involve any third
+  party.
+- **Synology QuickConnect + WebDAV.** Same third-party-relay
+  objection, plus WebDAV-on-Windows is flaky for big file batches.
+- **SMB exposed to the internet.** Security non-starter (port 445
+  is a ransomware magnet).
+- **VPN always-on.** Rejected because the rip machine may be a
+  family laptop where forcing all traffic through the home router
+  would tank web browsing.
+
+**Implementation sketch (deferred to Phase 6, captured in
+[SYNOLOGY-SHARE-SETUP.md](SYNOLOGY-SHARE-SETUP.md)):**
+
+- Add `WireGuard.WireGuard` to `setup/Install-Dependencies.ps1`.
+- New `src/lib/Wireguard.psm1` with idempotent
+  `Start-/Stop-/Test-RipperVpnTunnel` wrapping `wireguard.exe
+  /installtunnelservice` and `/uninstalltunnelservice`.
+- New config keys: `WireGuardTunnelName`,
+  `WireGuardAutoToggle`, `WireGuardIdleTimeoutMinutes`.
+- `Sync-ToSynologyNAS.ps1` brings the tunnel up if not already up,
+  syncs, registers a teardown hook in `Start-Ripper.ps1` that fires
+  on exit or after the idle timeout. Repeated rips inside the
+  window reuse the existing tunnel (no thrash).
+- **Split-tunnel scope:** the user authors the `.conf` with
+  `AllowedIPs = <nas-subnet>/24` so only NAS traffic is routed
+  through the VPN. MusicRipper does NOT modify the user's
+  `.conf` — split-tunnel is a documentation concern, not a code
+  concern.
+
+---
