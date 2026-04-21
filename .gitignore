@@ -1,0 +1,32 @@
+# Audio output (never commit ripped media)
+*.flac
+*.wav
+*.ape
+*.cue
+*.m4a
+*.mp3
+
+# Local runtime artifacts (logs go to %LOCALAPPDATA%\MusicRipper\logs\, but if
+# anyone runs the tool from inside the repo we still want to ignore stray logs).
+*.log
+logs/
+
+# Per-machine, secret-bearing config; only the template is committed.
+config.json
+config/config.json
+credentials.clixml
+*.clixml
+
+# OS / editor cruft
+Thumbs.db
+desktop.ini
+.DS_Store
+.vs/
+.vscode/
+*.user
+
+# Temp / build
+tmp/
+temp/
+out/
+dist/
