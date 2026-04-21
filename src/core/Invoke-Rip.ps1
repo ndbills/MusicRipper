@@ -289,24 +289,40 @@ function Invoke-RipperRip {
         # The pregap audio is encoded into file (N-1). So the encoder for
         # track i covers [startSamples(i), startSamples(i+1)) — i.e. its
         # OWN audio plus the trailing pregap of the NEXT track.
+        #
+        # CRITICAL: CDDriveReader.Read() starts at track 1's INDEX 01 and
+        # delivers exactly $reader.Length samples (the program area only,
+        # not the lead-in). But CDTrack.Start is the absolute MSF sector
+        # address (track 1 is typically sector 150 = the start-of-disc
+        # offset). We must subtract track 1's start so boundaries[0]=0
+        # aligns with samplesRead=0; otherwise every track's encoder
+        # would over-receive by 88200 samples and Close() would throw
+        # "Samples written differs from the expected sample count."
+        # (Manual-test-2 fix.)
         $audioTracks = @($DiscIdInfo.Tracks | Where-Object { $_.IsAudio })
         $trackCount  = $audioTracks.Count
         $samplesPerSector = 588
+        $firstSample = [int64]$audioTracks[0].StartSector * $samplesPerSector
 
-        # boundaries[i] = first sample BELONGING to logical track i+1.
+        # boundaries[i] = first sample BELONGING to logical track i+1,
+        # measured from the start of the reader's audio stream.
         # boundaries[trackCount] = totalSamples (= end of last file).
         $boundaries = New-Object 'System.Int64[]' ($trackCount + 1)
         for ($i = 0; $i -lt $trackCount; $i++) {
-            $boundaries[$i] = [int64]$audioTracks[$i].StartSector * $samplesPerSector
+            $boundaries[$i] = ([int64]$audioTracks[$i].StartSector * $samplesPerSector) - $firstSample
         }
         $boundaries[$trackCount] = $totalSamples
 
-        # HTOA detection — record a warning but do not encode. (Per spike §8
-        # the HTOA-as-track-zero feature is deferred; we still surface the
-        # fact so the user knows audio was discarded.)
+        # HTOA detection: per CUETools, CDTrack.Pregap on track 1 is the
+        # index-00 -> index-01 gap, i.e. audio that lives BEFORE the start
+        # of track 1's main content. The drive reader doesn't deliver
+        # that audio when starting at INDEX 01, so we just record a
+        # warning. (Per spike §8 the HTOA-as-track-zero feature is
+        # deferred.)
         $htoaWarning = $null
-        if ($boundaries[0] -gt 0) {
-            $htoaWarning = "Track 1 begins at sample $($boundaries[0]) (sector $($audioTracks[0].StartSector)); pregap audio (Hidden Track) was not encoded."
+        $track1Pregap = [int64]$audioTracks[0].Pregap
+        if ($track1Pregap -gt 0) {
+            $htoaWarning = "Track 1 has a $track1Pregap-sector pregap (Hidden Track One Audio); pregap audio was not encoded."
             Write-RipperLog WARN 'Invoke-Rip' $htoaWarning
             $errors += $htoaWarning
         }
