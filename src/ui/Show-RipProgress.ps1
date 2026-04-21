@@ -220,6 +220,24 @@ function Show-RipperRipProgress {
     $totalTracks = @($Metadata.Tracks).Count
     $controls.CurrentTrackText.Text = "Opening drive $($DiscIdInfo.DriveLetter)..."
 
+    # Dispatcher-level safety net. Anything that escapes onto the WPF
+    # dispatcher (any event handler, any binding update, any internal
+    # WPF callback) lands here. Without this, ShowDialog re-raises it
+    # to the caller as an unhelpful "Cannot index into a null array"
+    # / NRE that we can never catch in PowerShell-level try/catch.
+    # Setting Handled=$true keeps the window alive long enough for
+    # our normal teardown to run.
+    $window.Dispatcher.Add_UnhandledException({
+        param($sender, $eArgs)
+        try {
+            $msg = "$($eArgs.Exception.GetType().FullName): $($eArgs.Exception.Message)`r`n$($eArgs.Exception.StackTrace)"
+            [System.IO.File]::AppendAllText(
+                (Join-Path $env:TEMP 'musicripper-ui-error.log'),
+                "[Dispatcher.UnhandledException] $msg`r`n`r`n")
+            $eArgs.Handled = $true
+        } catch { }
+    })
+
     # --- Shared state across UI thread and rip runspace --------------------
     # Synchronized hashtable: both threads can write, reads are atomic per
     # key. Simpler than a ManualResetEvent for our "latest wins" progress
