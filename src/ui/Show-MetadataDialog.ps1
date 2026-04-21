@@ -361,8 +361,8 @@ function Show-RipperMetadataDialog {
               SelectionUnit="Cell" RowHeight="22">
       <DataGrid.Columns>
         <DataGridTextColumn Header="#"      Binding="{Binding Number}" IsReadOnly="True" Width="40"/>
-        <DataGridTextColumn Header="Title"  Binding="{Binding Title,  UpdateSourceTrigger=LostFocus}" Width="2*"/>
-        <DataGridTextColumn Header="Artist" Binding="{Binding Artist, UpdateSourceTrigger=LostFocus}" Width="1*"/>
+        <DataGridTextColumn Header="Title"  Binding="{Binding Title,  UpdateSourceTrigger=LostFocus}" Width="SizeToCells" MinWidth="120"/>
+        <DataGridTextColumn Header="Artist" Binding="{Binding Artist, UpdateSourceTrigger=LostFocus}" Width="*"      MinWidth="160"/>
         <DataGridTextColumn Header="Length" Binding="{Binding Length}" IsReadOnly="True" Width="70"/>
       </DataGrid.Columns>
     </DataGrid>
