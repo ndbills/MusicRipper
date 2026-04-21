@@ -37,7 +37,7 @@ the first thing to update.
 | `src/Start-Ripper.ps1`             | 1→7   | Orchestrator (currently runs Phase 1+2 stubs).         |
 | `src/core/Get-DiscId.ps1`          | 2     | Read TOC via CUETools .NET DLLs; emit MB disc id.      |
 | `src/core/Get-DiscMetadata.ps1`    | 2     | MusicBrainz + Cover Art Archive lookup, throttled.     |
-| `src/ui/Show-MetadataDialog.ps1`   | 3     | WPF confirm/edit dialog.                               |
+| `src/ui/Show-MetadataDialog.ps1`   | 3     | WPF confirm/edit dialog. Returns Rip / Review / Cancel. |
 | `src/ui/Show-RipProgress.ps1`      | 4     | Non-modal progress window.                             |
 | `src/core/Invoke-Rip.ps1`          | 4     | Drive CUETools to perform the secure rip.              |
 | `src/core/Test-RipQuality.ps1`     | 5     | Parse rip log → Verified/Probably-good/Suspect.        |
