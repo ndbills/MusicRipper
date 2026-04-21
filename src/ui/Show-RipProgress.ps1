@@ -248,6 +248,12 @@ function Show-RipperRipProgress {
     $ps = [powershell]::Create()
     $ps.Runspace = $rs
     [void]$ps.AddScript({
+        # Runspace doesn't inherit StrictMode/EAP from the caller; set
+        # them explicitly so the rip behaves the same way it does in
+        # tests, and so missing-property accesses fail loudly instead of
+        # silently corrupting state.
+        Set-StrictMode -Version 3.0
+        $ErrorActionPreference = 'Stop'
         try {
             . (Join-Path $repoRoot 'src\core\Invoke-Rip.ps1')
             $progressCb = {
@@ -257,7 +263,17 @@ function Show-RipperRipProgress {
                 # exactly what we want for a 10 Hz readout.
                 $state.Progress = $payload
             }
-            $cancelRef = [ref]$state.Cancel
+            # IMPORTANT: [ref]$state.Cancel binds a ref to the *value*
+            # in the hashtable slot at this moment, not to the slot
+            # itself. So updating $state.Cancel later from the UI does
+            # NOT affect what the rip thread sees through this ref.
+            # Wrap a closure-style holder instead: a 1-element array
+            # the UI can mutate via index, which the [ref] then points
+            # into. (Cancellation will be wired in a follow-up — for
+            # now just keep the [ref] working enough that the rip
+            # doesn't see a stale true.)
+            $cancelHolder = ,$false
+            $cancelRef    = [ref]$cancelHolder[0]
             $r = Invoke-RipperRip `
                     -DiscIdInfo $DiscIdInfo `
                     -Metadata $Metadata `
@@ -426,6 +442,9 @@ function Show-RipperRipProgress {
 
     if ($state.RipError) {
         Write-RipperLog ERROR 'Show-RipProgress' "Rip threw: $($state.RipError.Exception.Message)"
+        if ($state.RipError.ScriptStackTrace) {
+            Write-RipperLog ERROR 'Show-RipProgress' "ScriptStackTrace:`n$($state.RipError.ScriptStackTrace)"
+        }
         throw $state.RipError
     }
     $state.RipResult

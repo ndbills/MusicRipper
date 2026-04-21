@@ -525,10 +525,23 @@ function Invoke-RipperRip {
         [System.IO.File]::WriteAllText($cuePath, $cueText, [System.Text.UTF8Encoding]::new($false))
 
         # --- Write log ----------------------------------------------------
+        # Log generation must NEVER lose the rip. AR.GenerateFullLog and
+        # CTDB.GenerateLog have been observed to throw NullReferenceException
+        # when contact failed earlier, even though we wrap the calls inside
+        # the helper. Catch any unexpected escape here so the FLAC files
+        # we just spent 10+ minutes producing still get returned.
         $logPath = Join-Path $outDir "$cueBaseName.log"
-        $logText = _BuildRipLogText -AR $ar -Ctdb $ctdb -DiscIdInfo $DiscIdInfo `
-            -Metadata $Metadata -Reader $reader -ElapsedSeconds $stopwatch.Elapsed.TotalSeconds `
-            -ContactNetwork:$ContactNetwork
+        $logText = $null
+        try {
+            $logText = _BuildRipLogText -AR $ar -Ctdb $ctdb -DiscIdInfo $DiscIdInfo `
+                -Metadata $Metadata -Reader $reader -ElapsedSeconds $stopwatch.Elapsed.TotalSeconds `
+                -ContactNetwork:$ContactNetwork
+        } catch {
+            $errors += "Rip log generation failed: $($_.Exception.Message)"
+            Write-RipperLog WARN 'Invoke-Rip' "Log generation failed: $($_.Exception.Message)"
+            $logText = "MusicRipper rip log`r`n(Log generation failed: $($_.Exception.Message))`r`n"
+        }
+        if ($null -eq $logText) { $logText = '' }
         [System.IO.File]::WriteAllText($logPath, $logText, [System.Text.UTF8Encoding]::new($false))
 
         # --- Write cover art sidecar -------------------------------------
