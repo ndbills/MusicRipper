@@ -243,10 +243,16 @@ function New-RipperCueSheet {
     fussy about this on Windows).
 
 .PARAMETER Layout
-    A CUETools.CDImage.CDImageLayout object (from CDDriveReader.TOC) OR
-    a hashtable shaped { TrackCount, Tracks=[{Number,LengthFrames,
-    PregapFrames,IsAudio,ISRC,DCP,PreEmphasis}] }. We accept the hashtable
-    shape so unit tests can run without loading CUETools DLLs.
+    Disc TOC. Two shapes accepted (so we don't have to load CUETools
+    DLLs in tests):
+        - The pscustomobject Get-RipperDiscId returns:
+              { DiscId, Tracks = [{Number, IsAudio, StartSector,
+                                   LengthSectors, PreEmphasis, ...}] }
+        - A hashtable mirror of the same shape (used by tests).
+    Pregap is COMPUTED on the fly from each track's StartSector minus
+    the previous track's StartSector + LengthSectors — that's how
+    the disc's TOC actually encodes it. Optional fields ISRC and DCP
+    are read if present and emitted into the per-track block.
 
 .PARAMETER Metadata
     Confirmed metadata from Show-RipperMetadataDialog. Required fields:
@@ -282,6 +288,17 @@ function New-RipperCueSheet {
         throw "Metadata track count ($(@($Metadata.Tracks).Count)) does not match audio track count on disc ($($audioTracks.Count))."
     }
 
+    # HTOA detection: track 1 starts after sector 0 ⇒ there's audio in the
+    # disc's pregap (a "hidden" track). We don't encode it (Phase 4 spike §8
+    # punts this), but we record its presence in a REM HTOA comment so the
+    # CUE at least documents that audio was discarded — a careful re-rip
+    # later can recover it.
+    $htoaWarning = $null
+    $firstStart = [int64](_GetField $audioTracks[0] 'StartSector')
+    if ($firstStart -gt 0) {
+        $htoaWarning = "Track 1 begins at sector $firstStart; pregap audio (Hidden Track) was not encoded."
+    }
+
     $sb = [System.Text.StringBuilder]::new()
     $nl = "`r`n"
 
@@ -292,6 +309,7 @@ function New-RipperCueSheet {
     $discId = _GetField $Metadata 'DiscId'
     if ($discId) { [void]$sb.Append("REM DISCID $discId$nl") }
     [void]$sb.Append("REM COMMENT `"$ToolTag`"$nl")
+    if ($htoaWarning) { [void]$sb.Append("REM HTOA `"$htoaWarning`"$nl") }
     [void]$sb.Append("PERFORMER `"$(_CueQuote $Metadata.AlbumArtist)`"$nl")
     [void]$sb.Append("TITLE `"$(_CueQuote $Metadata.Album)`"$nl")
 
@@ -301,7 +319,6 @@ function New-RipperCueSheet {
         $tm       = $Metadata.Tracks[$i]
         $fname    = $FlacFileNames[$i]
         $num      = [int](_GetField $t 'Number')
-        $pregapFr = [int]((_GetField $t 'PregapFrames'))
 
         [void]$sb.Append("FILE `"$fname`" WAVE$nl")
         [void]$sb.Append("  TRACK $($num.ToString('D2')) AUDIO$nl")
@@ -322,22 +339,28 @@ function New-RipperCueSheet {
         if ($pre) { $flags += 'PRE' }
         if ($flags.Count -gt 0) { [void]$sb.Append("    FLAGS $($flags -join ' ')$nl") }
 
-        if ($pregapFr -gt 0) {
-            # The pregap was appended to the END of the previous file, so
-            # INDEX 00 here is the offset into the previous track's file
-            # where this logical track's pregap begins. For per-track CUEs
-            # this is conventionally written relative to the previous file
-            # as (prevFileLen - pregap) — but since the player only uses
-            # INDEX 01 for seek-to-track, most modern tools accept the
-            # simplified form below where INDEX 00 sits at offset
-            # 00:00:00 of *this* file. We emit the simplified form for
-            # readability; a caller that needs strict EAC compatibility
-            # can post-process.
-            [void]$sb.Append("    INDEX 00 00:00:00$nl")
-            [void]$sb.Append("    INDEX 01 $(ConvertTo-RipperCueTime -Samples ($pregapFr * 588))$nl")
-        } else {
-            [void]$sb.Append("    INDEX 01 00:00:00$nl")
+        # INDEX 00 (pregap reference). Under "append-to-previous" the
+        # pregap audio is encoded into the END of the previous file, so
+        # for track N (N>=2) we compute:
+        #     pregapSectors = thisTrack.StartSector
+        #                   - prevTrack.StartSector - prevTrack.LengthSectors
+        # When non-zero, INDEX 00 inside this TRACK block points to the
+        # offset INSIDE THE PREVIOUS FILE where the pregap begins. That
+        # offset equals prevTrack.LengthSectors (the previous file is
+        # prevLen + pregap sectors long, and the pregap starts after the
+        # clean-track portion).
+        if ($i -gt 0) {
+            $prev = $audioTracks[$i - 1]
+            $prevStart = [int64](_GetField $prev 'StartSector')
+            $prevLen   = [int64](_GetField $prev 'LengthSectors')
+            $thisStart = [int64](_GetField $t 'StartSector')
+            $pregapSectors = $thisStart - $prevStart - $prevLen
+            if ($pregapSectors -gt 0) {
+                $offsetSamples = $prevLen * 588
+                [void]$sb.Append("    INDEX 00 $(ConvertTo-RipperCueTime -Samples $offsetSamples)$nl")
+            }
         }
+        [void]$sb.Append("    INDEX 01 00:00:00$nl")
     }
 
     $sb.ToString()
@@ -373,96 +396,156 @@ function _GetField {
 function Get-RipperLogSummary {
 <#
 .SYNOPSIS
-    Parse AccurateRip + CTDB summary fields out of a CUETools rip log.
+    Parse a CUETools rip log into a structured summary with a roll-up
+    Status field that the UI and Phase 5's Test-RipQuality can consume.
 
 .DESCRIPTION
-    Input: the multi-line text emitted by
-    AccurateRipVerify.GenerateFullLog() (the same log the Console ripper
-    writes to disk). We extract:
-        - AccurateRip per-track confidences
-        - AccurateRip total verified track count
-        - CTDB verification status
-        - Any per-sector-error counts
+    Input: the multi-line text emitted by AccurateRipVerify.GenerateFullLog
+    (the same log the Console ripper writes to disk). Lines look like:
 
-    The log format is informally specified — it's whatever
-    GenerateFullLog() prints. We pin a small set of regexes that have
-    been stable across CUETools 2.1.x and 2.2.x. If a regex fails to
-    match we return the corresponding field as $null rather than
-    throwing; the caller (Phase 5 Test-RipQuality) decides what counts
-    as "good enough".
+        [Disc ID: 0123abcd]
+        [AccurateRip: Disc not present in database]
+        [AccurateRip: Disc present in database, all tracks accurately ripped (confidence 7)]
+        [CTDB: id=..., all tracks accurately ripped (confidence 8)]
+        Track 01 [aaaa]: accurately ripped (confidence 9)
+        Track 02 [bbbb]: differs in 14 samples @00:00.50, no match in any version
 
-    Output:
-        @{
+    The CUETools log format is informally specified — it drifts a little
+    between versions. We pin a small set of permissive regexes; on no-match
+    we return the field as 'Unknown' rather than throwing. Phase 5's
+    Test-RipQuality will be the one that decides "good enough vs send to
+    review" — this helper only surfaces the raw evidence + a coarse rollup
+    so the progress UI can render a final-status line.
+
+    Output (per the Phase 4 spike §7 contract):
+
+        [pscustomobject]@{
+            Status      = 'Verified' | 'ProbablyGood' | 'Suspect'
+                        | 'NotInDatabase' | 'Unknown'
             AccurateRip = @{
-                MatchedTracks = <int> | $null
-                TotalTracks   = <int> | $null
-                Confidences   = @(<int>...)   # per-track, or @() if none
-                Status        = 'verified' | 'partial' | 'notpresent' | 'unknown'
+                Status        = 'Verified' | 'NotInDatabase' | 'Unknown'
+                MatchedTracks = <int>
+                TotalTracks   = <int>
+                MinConfidence = <int> | $null
             }
             Ctdb = @{
-                Status     = 'verified' | 'differ' | 'notpresent' | 'unknown'
-                Confidence = <int> | $null
+                Status        = 'Verified' | 'Partial' | 'Unknown'
+                MinConfidence = <int> | $null
             }
-            FailedSectors = <int> | $null
+            Tracks = @(
+                @{ Number=<int>; Verdict='Verified'|'Suspect'|'Unverified'|'NotInDatabase'|'Unknown'; Confidence=<int>|$null }
+                ...
+            )
         }
 
+    Status rollup:
+        - any track Suspect            ⇒ Suspect
+        - all tracks Verified, AR conf ≥ 2 ⇒ Verified
+        - all tracks Verified, AR conf 1   ⇒ ProbablyGood
+        - any track Verified + Ctdb Verified ⇒ ProbablyGood
+        - all NotInDatabase             ⇒ NotInDatabase
+        - otherwise                     ⇒ Unknown
+
 .PARAMETER LogText
-    Full text of the log (newline separators).
+    Full text of the log (newline separators; CRLF and LF both fine).
 
 .EXAMPLE
-    PS> Get-RipperLogSummary -LogText (Get-Content -Raw rip.log)
+    PS> $summary = Get-RipperLogSummary -LogText (Get-Content -Raw $logPath)
+    PS> $summary.Status
+    Verified
 #>
     [CmdletBinding()]
-    [OutputType([hashtable])]
+    [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)] [AllowEmptyString()] [string]$LogText
     )
 
-    $result = @{
-        AccurateRip = @{ MatchedTracks = $null; TotalTracks = $null; Confidences = @(); Status = 'unknown' }
-        Ctdb        = @{ Status = 'unknown'; Confidence = $null }
-        FailedSectors = $null
+    $text = ($LogText -replace "`r`n", "`n").Trim()
+
+    $result = [pscustomobject]@{
+        Status      = 'Unknown'
+        AccurateRip = [pscustomobject]@{ Status='Unknown'; MatchedTracks=0; TotalTracks=0; MinConfidence=$null }
+        Ctdb        = [pscustomobject]@{ Status='Unknown'; MinConfidence=$null }
+        Tracks      = @()
+    }
+    if ([string]::IsNullOrWhiteSpace($text)) { return $result }
+
+    # --- AR album-level line ---------------------------------------------
+    $arNotPresent  = $text -match '(?im)^\[?AccurateRip[:\]].*not present.*database'
+    $arAllAccurate = $text -match '(?im)^\[?AccurateRip[:\]].*accurately ripped(?:.*confidence\s+(\d+))?'
+    if ($arAllAccurate) {
+        $result.AccurateRip.Status = 'Verified'
+        if ($Matches.Count -gt 1 -and $Matches[1]) {
+            $result.AccurateRip.MinConfidence = [int]$Matches[1]
+        }
+    } elseif ($arNotPresent) {
+        $result.AccurateRip.Status = 'NotInDatabase'
     }
 
-    # AccurateRip per-track lines look like:
-    #   "Track  1: ... AccurateRip: confidence 5  [...]"
-    # or "Track  1: ... AccurateRip: not present"
-    $arConfidences = @()
-    $arNotPresent  = 0
-    $arTotal       = 0
-    foreach ($m in [regex]::Matches($LogText, '(?im)^\s*Track\s+\d+\s*:.*?AccurateRip\s*:\s*(?:confidence\s+(\d+)|not\s+present)\b')) {
-        $arTotal++
-        if ($m.Groups[1].Success) {
-            $arConfidences += [int]$m.Groups[1].Value
-        } else {
-            $arNotPresent++
+    # --- CTDB album-level line -------------------------------------------
+    $ctdbAllMatch = $text -match '(?im)^\[?CTDB[:\]].*all tracks accurately ripped(?:.*confidence\s+(\d+))?'
+    $ctdbPartial  = $text -match '(?im)^\[?CTDB[:\]].*?(\d+)\s+entries?\s+match'
+    if ($ctdbAllMatch) {
+        $result.Ctdb.Status = 'Verified'
+        if ($Matches.Count -gt 1 -and $Matches[1]) {
+            $result.Ctdb.MinConfidence = [int]$Matches[1]
+        }
+    } elseif ($ctdbPartial) {
+        $result.Ctdb.Status = 'Partial'
+    }
+
+    # --- Per-track lines (permissive) ------------------------------------
+    # Both of these shapes appear across CUETools versions:
+    #   "Track 01 [aaaa]: accurately ripped (confidence 8)"
+    #   "01: AccurateRip-verified, confidence 7"
+    $trackLines = New-Object System.Collections.Generic.List[psobject]
+    $rxFull = '(?im)^\s*(?:Track\s+)?(\d{1,3})\b.*?(accurately\s+ripped|differs?|unverified|not\s+present)(?:.*?confidence\s+(\d+))?'
+    foreach ($m in [regex]::Matches($text, $rxFull)) {
+        $verdict = ($m.Groups[2].Value -replace '\s+', ' ').ToLowerInvariant()
+        $verdictClass = switch -Regex ($verdict) {
+            'accurately'   { 'Verified';      break }
+            'differ'       { 'Suspect';       break }
+            'unverified'   { 'Unverified';    break }
+            'not present'  { 'NotInDatabase'; break }
+            default        { 'Unknown' }
+        }
+        $confidence = if ($m.Groups[3].Success) { [int]$m.Groups[3].Value } else { $null }
+        $trackLines.Add([pscustomobject]@{
+            Number     = [int]$m.Groups[1].Value
+            Verdict    = $verdictClass
+            Confidence = $confidence
+        })
+    }
+    $result.Tracks = @($trackLines | Sort-Object Number -Unique)
+
+    if ($result.Tracks.Count -gt 0) {
+        $result.AccurateRip.TotalTracks   = $result.Tracks.Count
+        $result.AccurateRip.MatchedTracks = @($result.Tracks | Where-Object Verdict -eq 'Verified').Count
+        $confidences = @($result.Tracks | Where-Object { $null -ne $_.Confidence } | ForEach-Object Confidence)
+        if ($confidences.Count -gt 0 -and -not $result.AccurateRip.MinConfidence) {
+            $result.AccurateRip.MinConfidence = ($confidences | Measure-Object -Minimum).Minimum
         }
     }
-    if ($arTotal -gt 0) {
-        $result.AccurateRip.TotalTracks  = $arTotal
-        $result.AccurateRip.MatchedTracks = $arConfidences.Count
-        $result.AccurateRip.Confidences   = $arConfidences
-        $result.AccurateRip.Status =
-            if ($arNotPresent -eq $arTotal) { 'notpresent' }
-            elseif ($arConfidences.Count -eq $arTotal) { 'verified' }
-            else { 'partial' }
-    }
 
-    # CTDB summary line examples:
-    #   "CTDB: verified (confidence 12)"
-    #   "CTDB: differ"
-    #   "CTDB: not present"
-    if ($LogText -match '(?im)^\s*CTDB\s*:\s*(verified|differ|not\s+present)(?:.*?confidence\s+(\d+))?') {
-        $status = $Matches[1].ToLowerInvariant() -replace '\s+', ''
-        $map = @{ 'verified' = 'verified'; 'differ' = 'differ'; 'notpresent' = 'notpresent' }
-        if ($map.ContainsKey($status)) { $result.Ctdb.Status = $map[$status] }
-        if ($Matches.Count -gt 2 -and $Matches[2]) { $result.Ctdb.Confidence = [int]$Matches[2] }
-    }
+    # --- Roll up Status --------------------------------------------------
+    $allVerified = $result.Tracks.Count -gt 0 -and (@($result.Tracks | Where-Object Verdict -ne 'Verified').Count -eq 0)
+    $anySuspect  = @($result.Tracks | Where-Object Verdict -eq 'Suspect').Count -gt 0
+    $allNotInDb  = $result.Tracks.Count -gt 0 -and (@($result.Tracks | Where-Object Verdict -ne 'NotInDatabase').Count -eq 0)
 
-    # Failed sectors (uncorrected read errors). Format:
-    #   "Failed sectors: 0"
-    if ($LogText -match '(?im)^\s*Failed\s+sectors\s*:\s*(\d+)') {
-        $result.FailedSectors = [int]$Matches[1]
+    $result.Status = if ($anySuspect) {
+        'Suspect'
+    } elseif ($allVerified) {
+        if ($result.AccurateRip.MinConfidence -and $result.AccurateRip.MinConfidence -ge 2) {
+            'Verified'
+        } else {
+            'ProbablyGood'
+        }
+    } elseif ($result.Ctdb.Status -eq 'Verified') {
+        'ProbablyGood'
+    } elseif ($allNotInDb -or $result.AccurateRip.Status -eq 'NotInDatabase') {
+        'NotInDatabase'
+    } else {
+        'Unknown'
     }
 
     $result

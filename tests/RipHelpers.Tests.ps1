@@ -85,13 +85,18 @@ Describe 'ConvertTo-RipperCueTime' {
 
 Describe 'New-RipperCueSheet' {
     BeforeAll {
-        # Hashtable-shaped layout mimics CDImageLayout enough for the
-        # generator to consume. Two audio tracks, no pregaps, no flags.
+        # Hashtable-shaped layout mirrors the pscustomobject Get-RipperDiscId
+        # returns: {Number, IsAudio, StartSector, LengthSectors,
+        # PreEmphasis} plus the optional ISRC/DCP fields the helper
+        # also recognises. Pregap is COMPUTED from sector arithmetic
+        # (this track's StartSector minus previous track's StartSector +
+        # LengthSectors), not stored directly.
+        # Two contiguous audio tracks, no pregaps, no HTOA.
         $script:layout = @{
             TrackCount = 2
             Tracks = @(
-                @{ Number = 1; IsAudio = $true; PregapFrames = 0; ISRC = ''; DCP = $false; PreEmphasis = $false }
-                @{ Number = 2; IsAudio = $true; PregapFrames = 0; ISRC = ''; DCP = $false; PreEmphasis = $false }
+                @{ Number = 1; IsAudio = $true; StartSector = 0;     LengthSectors = 15000; ISRC = ''; DCP = $false; PreEmphasis = $false }
+                @{ Number = 2; IsAudio = $true; StartSector = 15000; LengthSectors = 15000; ISRC = ''; DCP = $false; PreEmphasis = $false }
             )
         }
         $script:meta = [pscustomobject]@{
@@ -131,6 +136,53 @@ Describe 'New-RipperCueSheet' {
         $cue | Should -Match 'FILE "02 - Two.flac" WAVE'
     }
 
+    It 'omits INDEX 00 when adjacent tracks are contiguous (no pregap)' {
+        $cue = New-RipperCueSheet -Layout $script:layout -Metadata $script:meta `
+            -FlacFileNames @('01 - One.flac','02 - Two.flac')
+        $cue | Should -Not -Match 'INDEX 00'
+    }
+
+    It 'emits INDEX 00 with offset = previous track length when track 2 has a 150-sector pregap' {
+        # Track 2 starts at sector 15150 — 150 sectors after track 1 ends.
+        # Under append-to-previous, those 150 pregap sectors get encoded
+        # into the END of file 1, so file 1's playable length is now
+        # 15000 (clean) + 150 (pregap) = 15150 sectors. INDEX 00 in
+        # track 2's block points to offset 15000 INSIDE file 1, which
+        # is 15000 / 75 = 200 seconds = 03:20:00.
+        $layout2 = @{
+            TrackCount = 2
+            Tracks = @(
+                @{ Number=1; IsAudio=$true; StartSector=0;     LengthSectors=15000; PreEmphasis=$false }
+                @{ Number=2; IsAudio=$true; StartSector=15150; LengthSectors=14850; PreEmphasis=$false }
+            )
+        }
+        $meta2 = [pscustomobject]@{
+            AlbumArtist='Y'; Album='X'; Year=2000
+            Tracks=@(
+                [pscustomobject]@{ Number=1; Title='A'; Artist='Y' }
+                [pscustomobject]@{ Number=2; Title='B'; Artist='Y' }
+            )
+        }
+        $cue = New-RipperCueSheet -Layout $layout2 -Metadata $meta2 `
+            -FlacFileNames @('01 - A.flac','02 - B.flac')
+        $cue | Should -Match '(?s)TRACK 02 AUDIO.*?INDEX 00 03:20:00.*?INDEX 01 00:00:00'
+    }
+
+    It 'emits a REM HTOA comment when track 1 starts after sector 0 (hidden track)' {
+        $layoutHtoa = @{
+            TrackCount = 1
+            Tracks = @(
+                @{ Number=1; IsAudio=$true; StartSector=4500; LengthSectors=15000; PreEmphasis=$false }
+            )
+        }
+        $meta1 = [pscustomobject]@{
+            AlbumArtist='Y'; Album='X'; Year=2000
+            Tracks=@( [pscustomobject]@{ Number=1; Title='A'; Artist='Y' } )
+        }
+        $cue = New-RipperCueSheet -Layout $layoutHtoa -Metadata $meta1 -FlacFileNames @('01 - A.flac')
+        $cue | Should -Match 'REM HTOA "Track 1 begins at sector 4500'
+    }
+
     It 'omits per-track PERFORMER when it equals AlbumArtist' {
         $cue = New-RipperCueSheet -Layout $script:layout -Metadata $script:meta `
             -FlacFileNames @('01 - One.flac','02 - Two.flac')
@@ -157,7 +209,7 @@ Describe 'New-RipperCueSheet' {
             AlbumArtist = 'Band'; Album = 'They said "hi"'; Year = 2020
             Tracks = @([pscustomobject]@{ Number = 1; Title = 'a "b" c'; Artist = 'Band' })
         }
-        $layout1 = @{ TrackCount = 1; Tracks = @(@{ Number = 1; IsAudio = $true; PregapFrames = 0 }) }
+        $layout1 = @{ TrackCount = 1; Tracks = @(@{ Number = 1; IsAudio = $true; StartSector = 0; LengthSectors = 15000 }) }
         $cue = New-RipperCueSheet -Layout $layout1 -Metadata $meta2 -FlacFileNames @('01 - a.flac')
         $cue | Should -Match "TITLE `"They said 'hi'`""
         $cue | Should -Match "TITLE `"a 'b' c`""
@@ -180,7 +232,7 @@ Describe 'New-RipperCueSheet' {
     It 'emits FLAGS line when DCP/PRE set on the layout track' {
         $layoutFlags = @{
             TrackCount = 1
-            Tracks = @(@{ Number = 1; IsAudio = $true; PregapFrames = 0;
+            Tracks = @(@{ Number = 1; IsAudio = $true; StartSector = 0; LengthSectors = 15000;
                           ISRC = ''; DCP = $true; PreEmphasis = $true })
         }
         $meta1 = [pscustomobject]@{
@@ -194,7 +246,7 @@ Describe 'New-RipperCueSheet' {
     It 'emits ISRC line when layout reports one' {
         $layoutIsrc = @{
             TrackCount = 1
-            Tracks = @(@{ Number = 1; IsAudio = $true; PregapFrames = 0;
+            Tracks = @(@{ Number = 1; IsAudio = $true; StartSector = 0; LengthSectors = 15000;
                           ISRC = 'USRC17607839'; DCP = $false; PreEmphasis = $false })
         }
         $meta1 = [pscustomobject]@{
@@ -207,63 +259,64 @@ Describe 'New-RipperCueSheet' {
 }
 
 Describe 'Get-RipperLogSummary' {
-    It 'returns unknown structure for empty input' {
+    It 'returns Status=Unknown for empty input' {
         $r = Get-RipperLogSummary -LogText ''
-        $r.AccurateRip.Status | Should -Be 'unknown'
-        $r.Ctdb.Status        | Should -Be 'unknown'
-        $r.FailedSectors      | Should -BeNullOrEmpty
+        $r.Status              | Should -Be 'Unknown'
+        $r.AccurateRip.Status  | Should -Be 'Unknown'
+        $r.Ctdb.Status         | Should -Be 'Unknown'
+        $r.Tracks.Count        | Should -Be 0
     }
 
-    It 'parses fully-verified AccurateRip block' {
-        $log = @"
-Track  1: AccurateRip: confidence 12
-Track  2: AccurateRip: confidence 10
-Track  3: AccurateRip: confidence 9
-"@
+    It 'detects "all tracks accurately ripped" with confidence' {
+        $log = @(
+            '[Disc ID: 0123abcd]'
+            '[AccurateRip: Disc present in database, all tracks accurately ripped (confidence 9)]'
+            'Track 01 [aaaa]: accurately ripped (confidence 9)'
+            'Track 02 [bbbb]: accurately ripped (confidence 9)'
+        ) -join "`n"
         $r = Get-RipperLogSummary -LogText $log
-        $r.AccurateRip.TotalTracks    | Should -Be 3
-        $r.AccurateRip.MatchedTracks  | Should -Be 3
-        $r.AccurateRip.Confidences    | Should -Be @(12, 10, 9)
-        $r.AccurateRip.Status         | Should -Be 'verified'
-    }
-
-    It 'reports partial when some tracks not present' {
-        $log = @"
-Track  1: AccurateRip: confidence 5
-Track  2: AccurateRip: not present
-Track  3: AccurateRip: confidence 7
-"@
-        $r = Get-RipperLogSummary -LogText $log
-        $r.AccurateRip.Status        | Should -Be 'partial'
+        $r.AccurateRip.Status        | Should -Be 'Verified'
+        $r.AccurateRip.MinConfidence | Should -Be 9
         $r.AccurateRip.MatchedTracks | Should -Be 2
-        $r.AccurateRip.TotalTracks   | Should -Be 3
+        $r.AccurateRip.TotalTracks   | Should -Be 2
+        $r.Tracks.Count              | Should -Be 2
+        $r.Status                    | Should -Be 'Verified'
     }
 
-    It 'reports notpresent when ALL tracks missing from AR' {
-        $log = "Track  1: AccurateRip: not present`nTrack  2: AccurateRip: not present"
+    It 'classifies "differs in N samples" as Suspect' {
+        $log = @(
+            '[AccurateRip: Disc present in database, all tracks accurately ripped (confidence 5)]'
+            'Track 01 [aaaa]: accurately ripped (confidence 5)'
+            'Track 02 [bbbb]: differs in 14 samples @00:00.50, no match in any version'
+        ) -join "`n"
         $r = Get-RipperLogSummary -LogText $log
-        $r.AccurateRip.Status | Should -Be 'notpresent'
+        $r.Status | Should -Be 'Suspect'
+        ($r.Tracks | Where-Object Number -eq 2).Verdict | Should -Be 'Suspect'
     }
 
-    It 'parses CTDB verified with confidence' {
-        $r = Get-RipperLogSummary -LogText 'CTDB: verified (confidence 14)'
-        $r.Ctdb.Status     | Should -Be 'verified'
-        $r.Ctdb.Confidence | Should -Be 14
+    It 'reports NotInDatabase when AR has no entry' {
+        $log = '[AccurateRip: Disc not present in database]'
+        $r = Get-RipperLogSummary -LogText $log
+        $r.AccurateRip.Status | Should -Be 'NotInDatabase'
+        $r.Status             | Should -Be 'NotInDatabase'
     }
 
-    It 'parses CTDB differ' {
-        $r = Get-RipperLogSummary -LogText 'CTDB: differ'
-        $r.Ctdb.Status | Should -Be 'differ'
+    It 'falls back to ProbablyGood when CTDB verifies but AR confidence is 1' {
+        $log = @(
+            '[AccurateRip: Disc present in database, all tracks accurately ripped (confidence 1)]'
+            '[CTDB: id=xyz, all tracks accurately ripped (confidence 6)]'
+            'Track 01 [aaaa]: accurately ripped (confidence 1)'
+        ) -join "`n"
+        $r = Get-RipperLogSummary -LogText $log
+        $r.AccurateRip.MinConfidence | Should -Be 1
+        $r.Ctdb.Status               | Should -Be 'Verified'
+        $r.Status                    | Should -Be 'ProbablyGood'
     }
 
-    It 'parses CTDB not present' {
-        $r = Get-RipperLogSummary -LogText 'CTDB: not present'
-        $r.Ctdb.Status | Should -Be 'notpresent'
-    }
-
-    It 'parses Failed sectors count' {
-        $r = Get-RipperLogSummary -LogText "Failed sectors: 0`nFailed sectors: ignore-me"
-        $r.FailedSectors | Should -Be 0
+    It 'tolerates CRLF line endings' {
+        $log = "[AccurateRip: Disc present in database, all tracks accurately ripped (confidence 4)]`r`nTrack 01 [aa]: accurately ripped (confidence 4)`r`n"
+        $r = Get-RipperLogSummary -LogText $log
+        $r.Status | Should -Be 'Verified'
     }
 }
 
