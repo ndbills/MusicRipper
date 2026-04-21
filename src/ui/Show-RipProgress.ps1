@@ -424,8 +424,8 @@ function Show-RipperRipProgress {
     $confirmCancel = {
         # Ignore the cancel request once the rip has entered its terminal
         # phase — "cancel" makes no sense once the rip is already wrapping
-        # up.
-        if ($state.RipDone -or $state.Cancel) { return $true }
+        # up. Indexer access on $state — see manual-test-5 / -6 lessons.
+        if ($state['RipDone'] -or $state['Cancel']) { return $true }
         $resp = [System.Windows.MessageBox]::Show(
             $window,
             "Cancel the rip? Partial FLAC files will be deleted.",
@@ -437,7 +437,7 @@ function Show-RipperRipProgress {
 
     $controls.CancelButton.Add_Click({
         if (& $confirmCancel) {
-            $state.Cancel = $true
+            $state['Cancel'] = $true
             $controls.CancelButton.IsEnabled = $false
             $controls.CancelButton.Content   = 'Cancelling...'
             $controls.CurrentTrackText.Text  = 'Cancelling — finishing current buffer...'
@@ -446,16 +446,31 @@ function Show-RipperRipProgress {
 
     $window.Add_Closing({
         param($sender, $e)
-        if ($state.RipDone) { return }           # allow close
-        if ($state.Cancel)  { $e.Cancel = $true; return }  # cancel in progress
-        if (& $confirmCancel) {
-            $state.Cancel = $true
-            $e.Cancel = $true                    # wait for rip to unwind
-            $controls.CancelButton.IsEnabled = $false
-            $controls.CancelButton.Content   = 'Cancelling...'
-            $controls.CurrentTrackText.Text  = 'Cancelling — finishing current buffer...'
-        } else {
-            $e.Cancel = $true
+        # Closing fires when the closeDelay tick calls $window.Close()
+        # AND when the user clicks [X]. Both paths must use indexer
+        # access on $state — dot-property access here was the source
+        # of the manual-test-7 NRE that ShowDialog rewrapped as the
+        # cryptic "Cannot index into a null array".
+        try {
+            if ($state['RipDone']) { return }           # allow close
+            if ($state['Cancel'])  { $e.Cancel = $true; return }  # cancel in progress
+            if (& $confirmCancel) {
+                $state['Cancel'] = $true
+                $e.Cancel = $true                    # wait for rip to unwind
+                $controls.CancelButton.IsEnabled = $false
+                $controls.CancelButton.Content   = 'Cancelling...'
+                $controls.CurrentTrackText.Text  = 'Cancelling — finishing current buffer...'
+            } else {
+                $e.Cancel = $true
+            }
+        } catch {
+            # Don't let a Closing-handler exception bubble out of
+            # ShowDialog as a confusing NRE — capture and allow close.
+            if (-not $state['UiError']) { $state['UiError'] = $_ }
+            try { [System.IO.File]::AppendAllText(
+                (Join-Path $env:TEMP 'musicripper-ui-error.log'),
+                "[Closing] $($_.Exception.Message)`r`n$($_.ScriptStackTrace)`r`n`r`n"
+            ) } catch { }
         }
     }.GetNewClosure())
 
