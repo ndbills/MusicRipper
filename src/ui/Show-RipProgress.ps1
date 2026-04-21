@@ -230,10 +230,17 @@ function Show-RipperRipProgress {
     $window.Dispatcher.Add_UnhandledException({
         param($sender, $eArgs)
         try {
-            $msg = "$($eArgs.Exception.GetType().FullName): $($eArgs.Exception.Message)`r`n$($eArgs.Exception.StackTrace)"
+            $exMsg = "$($eArgs.Exception.GetType().FullName): $($eArgs.Exception.Message)`r`n$($eArgs.Exception.StackTrace)"
+            $invInfo = ''
+            if ($eArgs.Exception -is [System.Management.Automation.RuntimeException]) {
+                $er = $eArgs.Exception.ErrorRecord
+                if ($er) {
+                    $invInfo = "PositionMessage:`r`n$($er.InvocationInfo.PositionMessage)`r`nScriptStackTrace:`r`n$($er.ScriptStackTrace)"
+                }
+            }
             [System.IO.File]::AppendAllText(
                 (Join-Path $env:TEMP 'musicripper-ui-error.log'),
-                "[Dispatcher.UnhandledException] $msg`r`n`r`n")
+                "[Dispatcher.UnhandledException] $exMsg`r`n$invInfo`r`n`r`n")
             $eArgs.Handled = $true
         } catch { }
     })
@@ -264,18 +271,23 @@ function Show-RipperRipProgress {
     $rs.SessionStateProxy.SetVariable('Metadata',       $Metadata)
     $rs.SessionStateProxy.SetVariable('OutputRoot',     $OutputRoot)
     $rs.SessionStateProxy.SetVariable('ContactNetwork', $ContactNetwork)
+    # Test-harness override: tests/manual/Repro-RipProgress.ps1 sets
+    # this env var to point at a stub Invoke-Rip.ps1 so we can repro
+    # post-rip UI bugs in 3 seconds without burning a real disc.
+    $ripScriptPath = if ($env:MUSICRIPPER_RIP_STUB -and (Test-Path -LiteralPath $env:MUSICRIPPER_RIP_STUB)) {
+        $env:MUSICRIPPER_RIP_STUB
+    } else {
+        Join-Path $repoRoot 'src\core\Invoke-Rip.ps1'
+    }
+    $rs.SessionStateProxy.SetVariable('ripScriptPath', $ripScriptPath)
 
     $ps = [powershell]::Create()
     $ps.Runspace = $rs
     [void]$ps.AddScript({
-        # Runspace doesn't inherit StrictMode/EAP from the caller; set
-        # them explicitly so the rip behaves the same way it does in
-        # tests, and so missing-property accesses fail loudly instead of
-        # silently corrupting state.
         Set-StrictMode -Version 3.0
         $ErrorActionPreference = 'Stop'
         try {
-            . (Join-Path $repoRoot 'src\core\Invoke-Rip.ps1')
+            . $ripScriptPath
             $progressCb = {
                 param($payload)
                 # Latest-wins: UI reads whatever is in $state.Progress at
@@ -401,30 +413,17 @@ function Show-RipperRipProgress {
             } elseif ($state['RipError']) {
                 $controls.CurrentTrackText.Text = "Error: $($state['RipError'].Exception.Message)"
             }
-            # 600 ms hold; shorter than a human blink-and-look cycle.
-            $closeDelay = New-Object System.Windows.Threading.DispatcherTimer
-            $closeDelay.Interval = [TimeSpan]::FromMilliseconds(600)
-            # GetNewClosure() captures $closeDelay + $window from the
-            # current scope so the inner Tick handler can reach them
-            # under StrictMode 3 (timer ticks otherwise fire in a fresh
-            # scope where these locals don't exist).
-            $closeDelay.Add_Tick({
-                try {
-                    $closeDelay.Stop()
-                    $window.Close()
-                } catch {
-                    # Indexer syntax — dot-property assignment on a
-                    # synchronized hashtable from a dispatcher tick
-                    # context fails under StrictMode 3 ("property X
-                    # cannot be found"). Indexer bypasses that adapter.
-                    $state['UiError'] = $_
-                    try { [System.IO.File]::AppendAllText(
-                        (Join-Path $env:TEMP 'musicripper-ui-error.log'),
-                        "[closeDelay tick] $($_.Exception.Message)`r`n$($_.ScriptStackTrace)`r`n`r`n"
-                    ) } catch { }
-                }
-            }.GetNewClosure())
-            $closeDelay.Start()
+            # Close immediately. The previous 600 ms hold via a nested
+            # DispatcherTimer + .GetNewClosure() pattern was the source
+            # of the manual-test-3-through-9 failures (the inner
+            # closure couldn't see $state, so its catch handler threw
+            # "Cannot index into a null array" trying to record the
+            # actual exception, which ShowDialog then re-raised as the
+            # cryptic NRE). Start-Ripper pops a success summary dialog
+            # right after this returns, so the user gets confirmation
+            # of the result; the cosmetic "100% for a beat" hold isn't
+            # worth the closure-capture rabbit hole.
+            try { $window.Close() } catch { }
         }
         } catch {
             if (-not $state['UiError']) { $state['UiError'] = $_ }
