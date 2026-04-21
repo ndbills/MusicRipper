@@ -374,11 +374,13 @@ function Show-RipperMetadataDialog {
     </DataGrid>
 
     <!-- Row 3: action buttons -->
-    <DockPanel Grid.Row="3" Margin="0,8,0,0" LastChildFill="False">
+    <DockPanel Grid.Row="3" Margin="0,8,0,0" LastChildFill="True">
       <Button x:Name="CancelButton" Content="Cancel"          DockPanel.Dock="Right" Padding="14,4" MinWidth="110" Margin="6,0,0,0"/>
       <Button x:Name="ReviewButton" Content="Send to Review"  DockPanel.Dock="Right" Padding="14,4" MinWidth="130" Margin="6,0,0,0"/>
       <Button x:Name="RipButton"    Content="Rip"             DockPanel.Dock="Right" Padding="14,4" MinWidth="110"
               IsDefault="True" Background="#0a7" Foreground="White" FontWeight="Bold"/>
+      <TextBlock x:Name="ActionHint" VerticalAlignment="Center" Foreground="#444" FontStyle="Italic"
+                 TextWrapping="Wrap" Margin="0,0,12,0"/>
     </DockPanel>
   </Grid>
 </Window>
@@ -392,7 +394,7 @@ function Show-RipperMetadataDialog {
     foreach ($name in @(
         'CoverImage','StatusText','CandidateCombo','ResearchButton','DiscIdText',
         'AlbumBox','ArtistBox','YearBox','CompilationBox','TracksGrid',
-        'RipButton','ReviewButton','CancelButton'
+        'RipButton','ReviewButton','CancelButton','ActionHint'
     )) {
         $controls[$name] = $window.FindName($name)
     }
@@ -533,6 +535,12 @@ function Show-RipperMetadataDialog {
         }
         # Disable Rip when we have nothing — Review is the right action.
         $controls.RipButton.IsEnabled = $false
+        # Promote Send to Review to the primary action so the user knows what to click.
+        $controls.ReviewButton.IsDefault  = $true
+        $controls.ReviewButton.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#0a7')
+        $controls.ReviewButton.Foreground = [System.Windows.Media.Brushes]::White
+        $controls.ReviewButton.FontWeight = 'Bold'
+        $controls.ActionHint.Text = 'No metadata match — click "Send to Review" to rip and tag this disc later.'
     }
 
     & $rebuildViewModels
