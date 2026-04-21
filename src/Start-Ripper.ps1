@@ -78,6 +78,56 @@ function Invoke-RipperEject {
     }
 }
 
+function Close-RipperTray {
+    # Best-effort close of an open tray on the configured drive. Used before
+    # the disc-id read so a parent who left the tray hanging open doesn't
+    # immediately get a "no disc" error.
+    #
+    # Why MCI and not Shell.Application: the shell's "Close" verb is
+    # unreliable across Windows versions (sometimes hidden, sometimes named
+    # differently per locale). `mciSendString` is the Win32-supported way to
+    # drive the tray and works regardless of locale.
+    #
+    # Drive selection: MCI's `!<drive>` selector wants the bare letter (e.g.
+    # "D"), not "D:". We strip the colon if present.
+    if (-not $cfg.DriveLetter) { return }
+    $letter = ($cfg.DriveLetter -replace '[:\\]','').ToUpperInvariant()
+    if ($letter.Length -ne 1) { return }
+
+    if (-not ('MusicRipper.Mci' -as [type])) {
+        Add-Type -Language CSharp -TypeDefinition @'
+using System.Runtime.InteropServices;
+namespace MusicRipper {
+    public static class Mci {
+        [DllImport("winmm.dll", CharSet = CharSet.Auto)]
+        public static extern int mciSendString(
+            string lpstrCommand, System.Text.StringBuilder lpstrReturnString,
+            int uReturnLength, System.IntPtr hwndCallback);
+    }
+}
+'@
+    }
+
+    $alias = "ripper_cd_$letter"
+    $rb    = [System.Text.StringBuilder]::new(128)
+    try {
+        # Open the device (idempotent if already open under another alias).
+        [void][MusicRipper.Mci]::mciSendString(
+            "open $($cfg.DriveLetter) type CDAudio alias $alias", $rb, 128, [System.IntPtr]::Zero)
+        $rc = [MusicRipper.Mci]::mciSendString(
+            "set $alias door closed wait", $rb, 128, [System.IntPtr]::Zero)
+        [void][MusicRipper.Mci]::mciSendString(
+            "close $alias", $rb, 128, [System.IntPtr]::Zero)
+        if ($rc -eq 0) {
+            Write-RipperLog INFO 'Start-Ripper' "Closed tray on $($cfg.DriveLetter) (or it was already closed)."
+        } else {
+            Write-RipperLog INFO 'Start-Ripper' "Tray-close on $($cfg.DriveLetter) returned MCI rc=$rc (non-fatal)."
+        }
+    } catch {
+        Write-RipperLog WARN 'Start-Ripper' "Tray-close failed: $($_.Exception.Message)"
+    }
+}
+
 # --- Config check ----------------------------------------------------------
 $configPath = Get-RipperConfigPath
 if (-not (Test-Path -LiteralPath $configPath)) {
@@ -89,11 +139,34 @@ if (-not (Test-Path -LiteralPath $configPath)) {
 $cfg = Import-RipperConfig
 
 # --- Read disc -------------------------------------------------------------
-try {
-    $disc = Get-RipperDiscId
-} catch {
-    Write-RipperLog WARN 'Start-Ripper' "Disc-id failed: $($_.Exception.Message)"
-    Show-RipperInfo "No disc / drive error:`n`n  $($_.Exception.Message)`n`nInsert a CD and try again." `
+# If the tray was left open, close it first so the user doesn't get an
+# immediate "no disc" error. After a close, the drive needs a beat to spin
+# up and report the TOC, so we retry a few times on transient "not ready"
+# errors before giving up.
+Close-RipperTray
+
+$disc          = $null
+$lastDiscError = $null
+for ($attempt = 1; $attempt -le 5; $attempt++) {
+    try {
+        $disc = Get-RipperDiscId
+        break
+    } catch {
+        $lastDiscError = $_
+        $msg = $_.Exception.Message
+        if ($msg -match 'not ready|medium not present|tray open|no disc') {
+            Write-RipperLog INFO 'Start-Ripper' "Drive not ready (attempt $attempt/5); waiting for spin-up."
+            Start-Sleep -Seconds 2
+            continue
+        }
+        # Non-transient error: don't burn retries on it.
+        break
+    }
+}
+
+if (-not $disc) {
+    Write-RipperLog WARN 'Start-Ripper' "Disc-id failed: $($lastDiscError.Exception.Message)"
+    Show-RipperInfo "No disc / drive error:`n`n  $($lastDiscError.Exception.Message)`n`nInsert a CD and try again." `
         'MusicRipper' 'Warning'
     Stop-RipperLog
     return
