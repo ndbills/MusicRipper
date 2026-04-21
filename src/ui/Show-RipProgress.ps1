@@ -230,6 +230,7 @@ function Show-RipperRipProgress {
         RipResult      = $null         # rip -> UI, set at end
         RipError       = $null         # rip -> UI if it threw
         RipDone        = $false        # rip -> UI: terminal state reached
+        Closing        = $false        # UI tick -> UI tick: guard against re-entry
         UiError        = $null         # UI tick -> caller (after ShowDialog re-raises NRE)
         StartedAt      = [DateTime]::UtcNow
     })
@@ -262,17 +263,8 @@ function Show-RipperRipProgress {
                 # Latest-wins: UI reads whatever is in $state.Progress at
                 # its next timer tick. Dropping intermediate updates is
                 # exactly what we want for a 10 Hz readout.
-                $state.Progress = $payload
+                $state['Progress'] = $payload
             }
-            # IMPORTANT: [ref]$state.Cancel binds a ref to the *value*
-            # in the hashtable slot at this moment, not to the slot
-            # itself. So updating $state.Cancel later from the UI does
-            # NOT affect what the rip thread sees through this ref.
-            # Wrap a closure-style holder instead: a 1-element array
-            # the UI can mutate via index, which the [ref] then points
-            # into. (Cancellation will be wired in a follow-up — for
-            # now just keep the [ref] working enough that the rip
-            # doesn't see a stale true.)
             $cancelHolder = ,$false
             $cancelRef    = [ref]$cancelHolder[0]
             $r = Invoke-RipperRip `
@@ -282,11 +274,11 @@ function Show-RipperRipProgress {
                     -OnProgress $progressCb `
                     -CancelRequested $cancelRef `
                     -ContactNetwork $ContactNetwork
-            $state.RipResult = $r
+            $state['RipResult'] = $r
         } catch {
-            $state.RipError = $_
+            $state['RipError'] = $_
         } finally {
-            $state.RipDone = $true
+            $state['RipDone'] = $true
         }
     })
 
@@ -369,7 +361,14 @@ function Show-RipperRipProgress {
 
         # Check for completion (normal, error, or cancel). Use indexer
         # access on $state — see closeDelay catch comment.
-        if ($state['RipDone']) {
+        # Guard via $state['Closing'] because $timer.Stop() inside a
+        # DispatcherTimer Tick is asynchronous — the timer may already
+        # have queued another tick onto the dispatcher, which would then
+        # create a second closeDelay and call $window.Close() again
+        # (throws "Cannot index into a null array" once the window is
+        # mid-close). Set the guard FIRST, then do everything else.
+        if ($state['RipDone'] -and -not $state['Closing']) {
+            $state['Closing'] = $true
             $timer.Stop()
             # Brief pause so the user sees "100%" for a beat before the
             # window vanishes on a fast rip.
