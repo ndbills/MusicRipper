@@ -258,9 +258,13 @@ function Invoke-RipperRip {
 
         if ($ContactNetwork) {
             try {
-                $ar.ContactAccurateRip($DiscIdInfo.DiscId) | Out-Null
+                # ContactAccurateRip expects the AR-format disc id
+                # ("NNN-XXXXXXXX-XXXXXXXX-XXXXXXXX"), NOT the MusicBrainz
+                # disc id. CUETools computes it from the TOC.
+                $arDiscId = [CUETools.AccurateRip.AccurateRipVerify]::CalculateAccurateRipId($toc)
+                $ar.ContactAccurateRip($arDiscId) | Out-Null
                 $arStatusText = [string]$ar.ARStatus
-                Write-RipperLog INFO 'Invoke-Rip' "AccurateRip contact: $arStatusText"
+                Write-RipperLog INFO 'Invoke-Rip' "AccurateRip contact: $arStatusText (ARId=$arDiscId)"
             } catch {
                 $errors += "AccurateRip offline: $($_.Exception.Message)"
                 Write-RipperLog WARN 'Invoke-Rip' "AccurateRip contact failed: $($_.Exception.Message)"
@@ -275,7 +279,10 @@ function Invoke-RipperRip {
             try {
                 # Args: server (null = default), userAgent, driveName,
                 #       ctdb=$true, fuzzy=$true, metadataSearch=None(0).
-                $ua = "MusicRipper/0.1 ( $($cfg.MusicBrainzContactEmail) )"
+                # Re-use the MusicBrainz UA — CTDB just wants any contact
+                # string and we already validated this one at config time.
+                $ua = [string]$cfg.MusicBrainzUserAgent
+                if (-not $ua) { throw 'config.json missing MusicBrainzUserAgent.' }
                 $ctdb.ContactDB($null, $ua, [string]$reader.EACName, $true, $true, 0) | Out-Null
                 Write-RipperLog INFO 'Invoke-Rip' "CTDB contact: $($ctdb.DBStatus)"
             } catch {
