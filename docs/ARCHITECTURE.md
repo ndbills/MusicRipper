@@ -34,9 +34,9 @@ the first thing to update.
 | `src/lib/Config.psm1`              | 1     | config.json schema + DPAPI cred load/save.             |
 | `src/lib/Logging.psm1`             | 1     | Per-session structured log files.                      |
 | `src/lib/Common.psm1`              | 1     | Path sanitization, repo-root locator.                  |
-| `src/Start-Ripper.ps1`             | 1→7   | Orchestrator (currently a Phase-1 stub).               |
-| `src/core/Get-DiscId.ps1`          | 2     | Read TOC, compute MusicBrainz disc ID.                 |
-| `src/core/Get-DiscMetadata.ps1`    | 2     | MusicBrainz + Cover Art Archive lookup.                |
+| `src/Start-Ripper.ps1`             | 1→7   | Orchestrator (currently runs Phase 1+2 stubs).         |
+| `src/core/Get-DiscId.ps1`          | 2     | Read TOC via CUETools .NET DLLs; emit MB disc id.      |
+| `src/core/Get-DiscMetadata.ps1`    | 2     | MusicBrainz + Cover Art Archive lookup, throttled.     |
 | `src/ui/Show-MetadataDialog.ps1`   | 3     | WPF confirm/edit dialog.                               |
 | `src/ui/Show-RipProgress.ps1`      | 4     | Non-modal progress window.                             |
 | `src/core/Invoke-Rip.ps1`          | 4     | Drive CUETools to perform the secure rip.              |

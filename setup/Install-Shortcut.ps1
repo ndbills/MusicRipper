@@ -19,6 +19,11 @@
     Why -NoProfile: parents' machines might have a slow profile (corporate,
     big modules) and we want the dialog up fast. Also avoids surprise
     behavior from $PROFILE customizations.
+
+    Why elevation: CUETools' SCSI driver (used by Get-RipperDiscId) requires
+    Administrator privileges to open the optical drive. The shortcut sets
+    the SHLLINK RunAsAdministrator flag so users get one UAC prompt per
+    launch instead of a confusing "drive open failed" error.
 #>
 
 [CmdletBinding()]
@@ -56,4 +61,15 @@ $lnk.IconLocation = if (Test-Path -LiteralPath $icon) { $icon } else { "$pwsh,0"
 
 $lnk.Save()
 
-Write-Host "Created shortcut: $shortcutPath" -ForegroundColor Green
+# WScript.Shell can't set the "Run as administrator" flag on a .lnk, so we
+# patch byte 21 (0x15) of the binary directly: bit 0x20 in that byte is the
+# documented RunAsAdministrator flag in the Microsoft-MS-SHLLINK spec.
+# We need elevation because CUETools' SCSI driver (CDDriveReader.Open) needs
+# Administrator privileges to open the optical drive — without it the call
+# fails with E_ACCESSDENIED (or, confusingly, "0x80070000 success").
+# Spec: https://learn.microsoft.com/openspecs/windows_protocols/ms-shllink/16cb4ca1-9339-4d0c-a68d-bf1d6cc0f943
+$bytes = [System.IO.File]::ReadAllBytes($shortcutPath)
+$bytes[21] = $bytes[21] -bor 0x20
+[System.IO.File]::WriteAllBytes($shortcutPath, $bytes)
+
+Write-Host "Created shortcut: $shortcutPath  (will request elevation on launch)" -ForegroundColor Green

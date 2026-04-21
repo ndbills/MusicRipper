@@ -5,7 +5,7 @@
     Author            = 'MusicRipper'
     Description       = 'Shared utilities (path sanitization, repo root) for MusicRipper.'
     PowerShellVersion = '7.0'
-    FunctionsToExport = @('ConvertTo-SafeWindowsPathSegment', 'Get-RipperRepoRoot')
+    FunctionsToExport = @('ConvertTo-SafeWindowsPathSegment', 'Get-RipperRepoRoot', 'Get-CueToolsPath')
     CmdletsToExport   = @()
     AliasesToExport   = @()
     VariablesToExport = @()

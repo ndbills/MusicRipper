@@ -1,0 +1,72 @@
+{
+  "id": "Wn8eRBtfLDfM0qjYPdxrz.Zjs_I-",
+  "releases": [
+    {
+      "id": "f5093c06-23e3-404f-aeaa-40f72885ee3a",
+      "title": "The Dark Side of the Moon",
+      "date": "1973-03-01",
+      "country": "US",
+      "release-group": {
+        "id": "f5093c06-23e3-404f-aeaa-40f72885ee3a",
+        "primary-type": "Album",
+        "secondary-types": []
+      },
+      "cover-art-archive": {
+        "front": true,
+        "back": true,
+        "count": 4,
+        "artwork": true
+      },
+      "artist-credit": [
+        {
+          "name": "Pink Floyd",
+          "joinphrase": "",
+          "artist": {
+            "id": "83d91898-7763-47d7-b03b-b92132375c47",
+            "name": "Pink Floyd",
+            "sort-name": "Pink Floyd"
+          }
+        }
+      ],
+      "media": [
+        {
+          "position": 1,
+          "format": "CD",
+          "track-count": 10,
+          "discs": [
+            { "id": "Wn8eRBtfLDfM0qjYPdxrz.Zjs_I-", "sectors": 264250 }
+          ],
+          "tracks": [
+            {
+              "position": 1, "number": "1", "title": "Speak to Me",
+              "length": 67000, "id": "t01",
+              "recording": { "id": "r01", "title": "Speak to Me", "length": 67000 },
+              "artist-credit": [
+                { "name": "Pink Floyd", "joinphrase": "",
+                  "artist": { "id": "83d91898-7763-47d7-b03b-b92132375c47", "name": "Pink Floyd" } }
+              ]
+            },
+            {
+              "position": 2, "number": "2", "title": "Breathe",
+              "length": 163000, "id": "t02",
+              "recording": { "id": "r02", "title": "Breathe", "length": 163000 },
+              "artist-credit": [
+                { "name": "Pink Floyd", "joinphrase": "",
+                  "artist": { "id": "83d91898-7763-47d7-b03b-b92132375c47", "name": "Pink Floyd" } }
+              ]
+            },
+            {
+              "position": 3, "number": "3", "title": "On the Run",
+              "length": 216000, "id": "t03",
+              "recording": { "id": "r03", "title": "On the Run", "length": 216000 },
+              "artist-credit": [
+                { "name": "Pink Floyd", "joinphrase": "",
+                  "artist": { "id": "83d91898-7763-47d7-b03b-b92132375c47", "name": "Pink Floyd" } }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

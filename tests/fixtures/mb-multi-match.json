@@ -1,0 +1,75 @@
+{
+  "id": "abcdefMULTIabcdefMULTI______",
+  "releases": [
+    {
+      "id": "11111111-1111-1111-1111-111111111111",
+      "title": "Abbey Road",
+      "date": "1969-09-26",
+      "country": "GB",
+      "release-group": {
+        "id": "rg-abbey-road",
+        "primary-type": "Album",
+        "secondary-types": []
+      },
+      "cover-art-archive": { "front": false, "back": false, "count": 0, "artwork": false },
+      "artist-credit": [
+        {
+          "name": "The Beatles",
+          "joinphrase": "",
+          "artist": { "id": "b10bbbfc-cf9e-42e0-be17-e2c3e1d2600d", "name": "The Beatles" }
+        }
+      ],
+      "media": [
+        {
+          "position": 1, "format": "CD", "track-count": 2,
+          "discs": [ { "id": "abcdefMULTIabcdefMULTI______", "sectors": 200000 } ],
+          "tracks": [
+            { "position": 1, "number": "1", "title": "Come Together", "length": 259000, "id": "tA1",
+              "recording": { "id": "rA1", "title": "Come Together", "length": 259000 },
+              "artist-credit": [ { "name": "The Beatles", "joinphrase": "",
+                "artist": { "id": "b10bbbfc-cf9e-42e0-be17-e2c3e1d2600d", "name": "The Beatles" } } ] },
+            { "position": 2, "number": "2", "title": "Something", "length": 183000, "id": "tA2",
+              "recording": { "id": "rA2", "title": "Something", "length": 183000 },
+              "artist-credit": [ { "name": "The Beatles", "joinphrase": "",
+                "artist": { "id": "b10bbbfc-cf9e-42e0-be17-e2c3e1d2600d", "name": "The Beatles" } } ] }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "22222222-2222-2222-2222-222222222222",
+      "title": "Abbey Road (2019 Remix)",
+      "date": "2019-09-27",
+      "country": "US",
+      "release-group": {
+        "id": "rg-abbey-road",
+        "primary-type": "Album",
+        "secondary-types": []
+      },
+      "cover-art-archive": { "front": true, "back": true, "count": 2, "artwork": true },
+      "artist-credit": [
+        {
+          "name": "The Beatles",
+          "joinphrase": "",
+          "artist": { "id": "b10bbbfc-cf9e-42e0-be17-e2c3e1d2600d", "name": "The Beatles" }
+        }
+      ],
+      "media": [
+        {
+          "position": 1, "format": "CD", "track-count": 2,
+          "discs": [ { "id": "abcdefMULTIabcdefMULTI______", "sectors": 200000 } ],
+          "tracks": [
+            { "position": 1, "number": "1", "title": "Come Together (2019 Mix)", "length": 261000, "id": "tB1",
+              "recording": { "id": "rB1", "title": "Come Together", "length": 261000 },
+              "artist-credit": [ { "name": "The Beatles", "joinphrase": "",
+                "artist": { "id": "b10bbbfc-cf9e-42e0-be17-e2c3e1d2600d", "name": "The Beatles" } } ] },
+            { "position": 2, "number": "2", "title": "Something (2019 Mix)", "length": 184000, "id": "tB2",
+              "recording": { "id": "rB2", "title": "Something", "length": 184000 },
+              "artist-credit": [ { "name": "The Beatles", "joinphrase": "",
+                "artist": { "id": "b10bbbfc-cf9e-42e0-be17-e2c3e1d2600d", "name": "The Beatles" } } ] }
+          ]
+        }
+      ]
+    }
+  ]
+}

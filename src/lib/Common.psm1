@@ -114,4 +114,63 @@ function Get-RipperRepoRoot {
     Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 }
 
-Export-ModuleMember -Function ConvertTo-SafeWindowsPathSegment, Get-RipperRepoRoot
+function Get-CueToolsPath {
+<#
+.SYNOPSIS
+    Locate the directory holding the installed CUETools binaries + DLLs.
+
+.DESCRIPTION
+    Why this is non-trivial: winget installs CUETools as a *portable*
+    package (no Program Files entry, no PATH change), so we have to scan
+    %LOCALAPPDATA%\Microsoft\WinGet\Packages\gchudov.CUETools_* for the
+    versioned subfolder (e.g. CUETools_2.2.6\). For users who installed
+    via the legacy MSI we also check Program Files.
+
+    Returned path is the folder containing CUETools.exe, the .NET DLLs
+    used for disc-id reading (CUETools.CDImage.dll, CUETools.Ripper.dll,
+    plugins\CUETools.Ripper.SCSI.dll), and the CLI rippers.
+
+.EXAMPLE
+    PS> Get-CueToolsPath
+    C:\Users\alice\AppData\Local\Microsoft\WinGet\Packages\gchudov.CUETools_Microsoft.Winget.Source_8wekyb3d8bbwe\CUETools_2.2.6
+
+.NOTES
+    Throws if CUETools cannot be found anywhere known. Run
+    setup/Install-Dependencies.ps1 to (re-)install via winget.
+#>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    # 1. winget portable install — newest versioned subfolder wins so a future
+    #    `winget upgrade` is picked up automatically.
+    $wingetRoot = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
+    if (Test-Path -LiteralPath $wingetRoot) {
+        $pkgDirs = Get-ChildItem -LiteralPath $wingetRoot -Directory `
+                       -Filter 'gchudov.CUETools*' -ErrorAction SilentlyContinue
+        foreach ($pkg in $pkgDirs) {
+            # Inside each package dir is exactly one CUETools_<version>\ folder.
+            $versioned = Get-ChildItem -LiteralPath $pkg.FullName -Directory `
+                            -Filter 'CUETools_*' -ErrorAction SilentlyContinue |
+                        Sort-Object Name -Descending |
+                        Select-Object -First 1
+            if ($versioned -and (Test-Path -LiteralPath (Join-Path $versioned.FullName 'CUETools.exe'))) {
+                return $versioned.FullName
+            }
+        }
+    }
+
+    # 2. Legacy MSI install paths (rare today but cheap to check).
+    foreach ($candidate in @(
+        (Join-Path $env:ProgramFiles        'CUE Tools'),
+        (Join-Path ${env:ProgramFiles(x86)} 'CUE Tools')
+    )) {
+        if ($candidate -and (Test-Path -LiteralPath (Join-Path $candidate 'CUETools.exe'))) {
+            return $candidate
+        }
+    }
+
+    throw "CUETools not found. Run setup/Install-Dependencies.ps1 to install it."
+}
+
+Export-ModuleMember -Function ConvertTo-SafeWindowsPathSegment, Get-RipperRepoRoot, Get-CueToolsPath

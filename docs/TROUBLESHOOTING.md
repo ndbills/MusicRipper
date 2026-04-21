@@ -32,6 +32,21 @@ Open PowerShell, run the command from the shortcut's "Target" field
 manually, and read the error. Most likely cause: PS7 isn't on `PATH` —
 re-run `./setup/Install-Dependencies.ps1`.
 
+### `Get-RipperDiscId` fails with "Could not open drive" or "0x80070000"
+CUETools' SCSI driver requires **Administrator** privileges to open
+an optical drive. The Desktop shortcut installed by
+`./setup/Install-Shortcut.ps1` already requests elevation. If you're
+running `Start-Ripper.ps1` from a non-elevated terminal, either
+re-launch PowerShell as Administrator or use:
+
+```powershell
+Start-Process pwsh -Verb RunAs -ArgumentList '-NoProfile','-File','C:\bin\MusicRipper\src\Start-Ripper.ps1'
+```
+
+If you upgraded from an early Phase-1 install and the shortcut isn't
+prompting for UAC, re-run `./setup/Install-Shortcut.ps1` to refresh
+the `.lnk` with the elevation flag.
+
 ## Tests
 
 ### `Invoke-Pester` not found
@@ -39,7 +54,32 @@ re-run `./setup/Install-Dependencies.ps1`.
 Install-Module Pester -MinimumVersion 5.0 -Scope CurrentUser -Force
 ```
 
----
+## Disc identification (Phase 2)
 
-*(Phases 2–7 will add disc-identification, metadata, rip, and sync
-failure modes here as they're encountered.)*
+### `Get-RipperDiscId` says "Could not open drive D: Access is denied"
+Three usual causes:
+1. **No disc inserted.** Insert an Audio CD and retry.
+2. **Drive held by another app.** Close CUERipper, Windows Media
+   Player, foobar2000, or anything else using the drive.
+3. **Lower-level Windows access policy.** Try running from an
+   elevated `pwsh` once to confirm; if that works, the drive
+   needs a normal-user run-once to register.
+
+### `CUETools not found` from `Get-CueToolsPath`
+Re-run `./setup/Install-Dependencies.ps1`. winget installs CUETools
+as a *portable* package under
+`%LOCALAPPDATA%\Microsoft\WinGet\Packages\gchudov.CUETools_*`,
+not Program Files \u2014 if `winget list gchudov.CUETools` returns
+nothing, the install never completed.
+
+### MusicBrainz lookup returns `Status: NoMatch`
+Real for any disc not in the MB database (rare for mainstream music,
+common for self-pressed CDs / box-set bonus discs / homebrew
+compilations). The pipeline will route these to `_ReviewQueue/`
+in Phase 5.
+
+### MusicBrainz lookup returns `Status: Offline`
+No internet, MusicBrainz is down (`https://status.musicbrainz.org`),
+or the rate limit kicked in. Tool retries on the next disc; the
+current disc still rips (Phase 5+) but goes to `_ReviewQueue/` with
+placeholder tags.
