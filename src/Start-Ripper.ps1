@@ -45,14 +45,16 @@ Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1')  -Force
 Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
 Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 
-# Dot-source the Phase 2 core scripts and the Phase 3 dialog so their
-# functions are in scope.
+# Dot-source the Phase 2/3/4 core scripts and dialogs so their functions
+# are in scope.
 . (Join-Path $repoRoot 'src\core\Get-DiscId.ps1')
 . (Join-Path $repoRoot 'src\core\Get-DiscMetadata.ps1')
+. (Join-Path $repoRoot 'src\core\Invoke-Rip.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-MetadataDialog.ps1')
+. (Join-Path $repoRoot 'src\ui\Show-RipProgress.ps1')
 
 $logPath = Start-RipperLog -Context 'start-ripper'
-Write-RipperLog INFO 'Start-Ripper' 'Phase 3 entry: config + disc-id + metadata + confirm dialog.'
+Write-RipperLog INFO 'Start-Ripper' 'Phase 4 entry: config + disc-id + metadata + confirm + rip.'
 
 # --- Helpers ---------------------------------------------------------------
 function Show-RipperInfo([string]$msg, [string]$title = 'MusicRipper', [string]$icon = 'Information') {
@@ -200,12 +202,89 @@ Write-RipperLog INFO 'Start-Ripper' "User chose: $($choice.Action)."
 switch ($choice.Action) {
     'Rip' {
         $m = $choice.Metadata
-        $summary  = "Phase 4 (rip engine) is not implemented yet.`n`n"
-        $summary += "Would have ripped:`n"
-        $summary += "  $($m.AlbumArtist) - $($m.Album)"
-        if ($m.Year) { $summary += " ($($m.Year))" }
-        $summary += "`n  $($m.TrackCount) track(s), Release MBID $($m.ReleaseMbid)`n"
-        Show-RipperInfo $summary 'MusicRipper (Phase 3 stub)' 'Information'
+
+        # Phase 4 rips land in <LibraryRoot>\_inbox\<AlbumArtist> - <Album>\.
+        # Phase 5's Move-ToLibrary will relocate from there to the Plex
+        # layout (or _ReviewQueue\) once rip quality is known. Keeping the
+        # staging area under LibraryRoot keeps everything on one volume so
+        # the move is a rename (fast), not a copy.
+        $inboxRoot = Join-Path $cfg.LibraryRoot '_inbox'
+        if (-not (Test-Path -LiteralPath $inboxRoot)) {
+            New-Item -ItemType Directory -Path $inboxRoot -Force | Out-Null
+        }
+
+        Write-RipperLog INFO 'Start-Ripper' `
+            "Starting rip: $($m.AlbumArtist) - $($m.Album) -> $inboxRoot"
+
+        try {
+            $result = Show-RipperRipProgress `
+                -DiscIdInfo $disc `
+                -Metadata $m `
+                -OutputRoot $inboxRoot `
+                -ContactNetwork $true
+        } catch {
+            Write-RipperLog ERROR 'Start-Ripper' "Rip threw: $($_.Exception.Message)"
+            Show-RipperInfo "Rip failed:`n`n  $($_.Exception.Message)`n`nSee log:`n  $logPath" `
+                'MusicRipper - Rip Failed' 'Error'
+            Invoke-RipperEject
+            Stop-RipperLog
+            return
+        }
+
+        if (-not $result) {
+            # Progress window closed before the rip started — rare but
+            # survivable. Treat like a cancel.
+            Write-RipperLog WARN 'Start-Ripper' 'Rip returned $null (window closed early).'
+            Invoke-RipperEject
+            break
+        }
+
+        Write-RipperLog INFO 'Start-Ripper' `
+            "Rip finished: Status=$($result.Status) FailedSectors=$($result.FailedSectors) Output=$($result.OutputDir)"
+
+        # Build summary text per the Invoke-RipperRip contract. We surface
+        # Status prominently because that's what Phase 5 routing will
+        # branch on (Verified/ProbablyGood -> library, Suspect/NotInDatabase
+        # -> _ReviewQueue).
+        switch ($result.Status) {
+            'Cancelled' {
+                Show-RipperInfo "Rip cancelled. Partial files were removed." `
+                    'MusicRipper' 'Information'
+            }
+            'Failed' {
+                $err = ($result.Errors -join "`n  ")
+                Show-RipperInfo "Rip failed.`n`n  $err`n`nSee log:`n  $logPath" `
+                    'MusicRipper - Rip Failed' 'Error'
+            }
+            default {
+                $ar    = $result.AccurateRip
+                $ctdb  = $result.Ctdb
+                $lines = @(
+                    "Status: $($result.Status)"
+                    ""
+                    "  $($m.AlbumArtist) - $($m.Album)"
+                    "  $($m.TrackCount) track(s) - $([int][Math]::Round($result.ElapsedSeconds / 60))m $([int]($result.ElapsedSeconds % 60))s"
+                    ""
+                    "AccurateRip: $($ar.Status)$(if ($null -ne $ar.MaxConfidence) { " (max confidence $($ar.MaxConfidence))" })"
+                    "CTDB:        $($ctdb.Status)$(if ($null -ne $ctdb.Confidence) { " (confidence $($ctdb.Confidence))" })"
+                    "Re-read sectors: $($result.FailedSectors)"
+                    ""
+                    "Output: $($result.OutputDir)"
+                )
+                if ($result.HtoaWarning) { $lines += @("", "Note: $($result.HtoaWarning)") }
+                if ($result.Errors -and $result.Errors.Count -gt 0) {
+                    $lines += @("", "Warnings:") + ($result.Errors | ForEach-Object { "  - $_" })
+                }
+                $icon = switch ($result.Status) {
+                    'Verified'      { 'Information' }
+                    'ProbablyGood'  { 'Information' }
+                    default         { 'Warning' }   # Suspect / NotInDatabase
+                }
+                Show-RipperInfo ($lines -join "`n") 'MusicRipper - Rip Complete' $icon
+            }
+        }
+
+        Invoke-RipperEject
     }
     'Review' {
         $m = $choice.Metadata
