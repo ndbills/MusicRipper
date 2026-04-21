@@ -185,7 +185,11 @@ function Get-RipperDiscId {
     finally {
         # Always release the drive — leaving it open blocks every other
         # CD app on the system until the PowerShell process exits.
-        $reader.Close()
-        $reader.Dispose()
+        # Pipe to Out-Null because some CUETools versions return non-void
+        # from Close()/Dispose() and would otherwise pollute our pipeline
+        # output (turning the function's return into an array and breaking
+        # downstream `$disc.DiscId` access under StrictMode).
+        $reader.Close()   | Out-Null
+        $reader.Dispose() | Out-Null
     }
 }
