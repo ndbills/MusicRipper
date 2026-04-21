@@ -375,10 +375,13 @@ function Show-RipperMetadataDialog {
 
     <!-- Row 3: action buttons -->
     <DockPanel Grid.Row="3" Margin="0,8,0,0" LastChildFill="True">
-      <Button x:Name="CancelButton" Content="Cancel"          DockPanel.Dock="Right" Padding="14,4" MinWidth="110" Margin="6,0,0,0"/>
-      <Button x:Name="ReviewButton" Content="Send to Review"  DockPanel.Dock="Right" Padding="14,4" MinWidth="130" Margin="6,0,0,0"/>
+      <Button x:Name="CancelButton" Content="Cancel"          DockPanel.Dock="Right" Padding="14,4" MinWidth="110" Margin="6,0,0,0"
+              ToolTip="Don't rip this disc. Ejects the CD and closes this window."/>
+      <Button x:Name="ReviewButton" Content="Send to Review"  DockPanel.Dock="Right" Padding="14,4" MinWidth="130" Margin="6,0,0,0"
+              ToolTip="Rip the disc into the review queue so you can fix the metadata later. Ejects when done."/>
       <Button x:Name="RipButton"    Content="Rip"             DockPanel.Dock="Right" Padding="14,4" MinWidth="110"
-              IsDefault="True" Background="#0a7" Foreground="White" FontWeight="Bold"/>
+              IsDefault="True" Background="#0a7" Foreground="White" FontWeight="Bold"
+              ToolTip="Rip the disc with the metadata shown above. Ejects when the rip finishes."/>
       <TextBlock x:Name="ActionHint" VerticalAlignment="Center" Foreground="#444" FontStyle="Italic"
                  TextWrapping="Wrap" Margin="0,0,12,0"/>
     </DockPanel>
