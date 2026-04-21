@@ -1,0 +1,3 @@
+# Phase 2+ scripts land here:
+#   Get-DiscId.ps1, Get-DiscMetadata.ps1, Invoke-Rip.ps1,
+#   Test-RipQuality.ps1, Write-Tags.ps1, Move-ToLibrary.ps1
