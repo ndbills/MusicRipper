@@ -362,10 +362,14 @@ function Show-RipperRipProgress {
             # 600 ms hold; shorter than a human blink-and-look cycle.
             $closeDelay = New-Object System.Windows.Threading.DispatcherTimer
             $closeDelay.Interval = [TimeSpan]::FromMilliseconds(600)
+            # GetNewClosure() captures $closeDelay + $window from the
+            # current scope so the inner Tick handler can reach them
+            # under StrictMode 3 (timer ticks otherwise fire in a fresh
+            # scope where these locals don't exist).
             $closeDelay.Add_Tick({
                 $closeDelay.Stop()
                 $window.Close()
-            })
+            }.GetNewClosure())
             $closeDelay.Start()
         }
     }

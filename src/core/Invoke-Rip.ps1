@@ -215,11 +215,11 @@ function Invoke-RipperRip {
     Write-RipperLog INFO 'Invoke-Rip' "Opening $driveChar`: for rip (offset=$($cfg.DriveOffset))."
 
     $reader = New-Object CUETools.Ripper.SCSI.CDDriveReader
-    # Drive tuning before Open() — these set fields the SCSI reader reads
-    # at Open time. Setting them after Open is too late.
-    $reader.DriveOffset       = [int]$cfg.DriveOffset
-    $reader.CorrectionQuality = 1   # 1 = Secure (read each block twice). Default.
-    $reader.DriveC2ErrorMode  = 0   # 0 = None. Most reliable on consumer drives.
+    # NOTE: CDDriveReader internally lazy-creates its SCSI device handle on
+    # Open(). Setting CorrectionQuality / DriveC2ErrorMode / DriveOffset
+    # *before* Open() throws NullReferenceException because their setters
+    # forward to that not-yet-created internal object. Open first, tune
+    # second.
 
     $startTime     = [DateTime]::UtcNow
     $errors        = @()
@@ -238,6 +238,11 @@ function Invoke-RipperRip {
         } catch {
             throw "Could not open drive $driveChar`: $($_.Exception.Message). Need Administrator + a disc inserted + no other CD app holding the drive."
         }
+
+        # Tune AFTER Open(): see note above.
+        $reader.DriveOffset       = [int]$cfg.DriveOffset
+        $reader.CorrectionQuality = 1   # 1 = Secure (read each block twice). Default.
+        $reader.DriveC2ErrorMode  = 0   # 0 = None. Most reliable on consumer drives.
 
         $toc       = $reader.TOC
         $pcm       = $reader.PCM
