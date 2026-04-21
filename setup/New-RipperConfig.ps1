@@ -44,7 +44,7 @@ $existing   = if (Test-Path -LiteralPath $configPath) { Import-RipperConfig } el
 function Read-WithDefault {
 <#
 .SYNOPSIS
-    Read-Host with a default value shown in brackets.
+    Read-Host with a default value shown in brackets. Press Enter to accept.
 #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -52,9 +52,26 @@ function Read-WithDefault {
         [Parameter(Mandatory)] [string]$Prompt,
         [string]$Default
     )
-    $shown = if ($Default) { "$Prompt [$Default]" } else { $Prompt }
+    $shown = if ($Default) { "$Prompt [$Default] (Enter = keep)" } else { $Prompt }
     $val = Read-Host $shown
     if ([string]::IsNullOrWhiteSpace($val)) { $Default } else { $val }
+}
+
+if ($existing) {
+    Write-Host ""
+    Write-Host "Existing config found at $configPath" -ForegroundColor Cyan
+    Write-Host "  LibraryRoot           : $($existing.LibraryRoot)"
+    Write-Host "  MusicBrainzUserAgent  : $($existing.MusicBrainzUserAgent)"
+    Write-Host "  OneDrivePath          : $($existing.OneDrivePath)"
+    Write-Host "  SynologyUnc           : $($existing.SynologyUnc)"
+    Write-Host "  DriveLetter / Offset  : $($existing.DriveLetter) / $($existing.DriveOffset)"
+    Write-Host ""
+    $ans = Read-Host "Press Enter to keep ALL existing values, or type 'e' to edit field-by-field"
+    if ([string]::IsNullOrWhiteSpace($ans)) {
+        Write-Host "No changes made." -ForegroundColor Green
+        Stop-RipperLog
+        return
+    }
 }
 
 # --- Library root (required) ----------------------------------------------

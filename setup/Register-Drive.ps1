@@ -44,6 +44,25 @@ Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1')  -Force
 Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
 
 Start-RipperLog -Context 'register-drive' | Out-Null
+
+# If a previous run already populated DriveLetter + DriveOffset, offer to keep
+# them rather than re-doing the live AccurateRip lookup (which may have failed
+# the first time, e.g. for an obscure drive that needed manual entry).
+$existingCfg = if (Test-Path -LiteralPath (Get-RipperConfigPath)) { Import-RipperConfig } else { $null }
+if ($existingCfg -and $existingCfg.DriveLetter -and $null -ne $existingCfg.DriveOffset) {
+    Write-Host ""
+    Write-Host "Drive already registered:" -ForegroundColor Cyan
+    Write-Host "  DriveLetter : $($existingCfg.DriveLetter)"
+    Write-Host "  DriveOffset : $($existingCfg.DriveOffset) samples"
+    Write-Host ""
+    $ans = Read-Host "Press Enter to keep, or type 'r' to re-detect"
+    if ([string]::IsNullOrWhiteSpace($ans)) {
+        Write-Host "No changes made." -ForegroundColor Green
+        Stop-RipperLog
+        return
+    }
+}
+
 Write-RipperLog INFO 'Register-Drive' 'Enumerating optical drives via Win32_CDROMDrive.'
 
 $drives = @(Get-CimInstance -ClassName Win32_CDROMDrive | Sort-Object Drive)
@@ -56,11 +75,20 @@ if ($drives.Count -eq 1) {
     $chosen = $drives[0]
 } else {
     Write-Host "Multiple optical drives found:" -ForegroundColor Cyan
+    # Pre-select the previously-saved drive if it's still present.
+    $defaultIdx = 0
+    if ($existingCfg -and $existingCfg.DriveLetter) {
+        for ($i = 0; $i -lt $drives.Count; $i++) {
+            if ($drives[$i].Drive -eq $existingCfg.DriveLetter) { $defaultIdx = $i; break }
+        }
+    }
     for ($i = 0; $i -lt $drives.Count; $i++) {
-        '{0,3}: {1}  ({2})' -f $i, $drives[$i].Drive, $drives[$i].Name | Write-Host
+        $marker = if ($i -eq $defaultIdx) { '*' } else { ' ' }
+        '{0} {1,3}: {2}  ({3})' -f $marker, $i, $drives[$i].Drive, $drives[$i].Name | Write-Host
     }
     do {
-        $sel = Read-Host "Select drive number [0-$($drives.Count - 1)]"
+        $sel = Read-Host "Select drive number [$defaultIdx] (Enter = keep)"
+        if ([string]::IsNullOrWhiteSpace($sel)) { $sel = "$defaultIdx" }
     } until ($sel -match '^\d+$' -and [int]$sel -lt $drives.Count)
     $chosen = $drives[[int]$sel]
 }
@@ -123,8 +151,11 @@ $offset = Find-AccurateRipOffset -DriveName $chosen.Name -CachedListPath $cached
 
 if ($null -eq $offset) {
     Write-Warning "No AccurateRip offset found for drive '$($chosen.Name)'."
-    $manual = Read-Host "Enter the offset in samples (or press Enter for 0 — AR verification will be unreliable)"
-    $offset = if ([string]::IsNullOrWhiteSpace($manual)) { 0 } else { [int]$manual }
+    # Offer the previously-saved offset (if any) as the default so a re-run
+    # doesn't force you to retype it. Otherwise default to 0 with a warning.
+    $defaultOffset = if ($existingCfg -and $null -ne $existingCfg.DriveOffset) { [int]$existingCfg.DriveOffset } else { 0 }
+    $manual = Read-Host "Enter the offset in samples [$defaultOffset] (Enter = keep; AR verification unreliable if 0)"
+    $offset = if ([string]::IsNullOrWhiteSpace($manual)) { $defaultOffset } else { [int]$manual }
 }
 
 Write-RipperLog INFO 'Register-Drive' "AccurateRip offset for $($chosen.Name) = $offset"
