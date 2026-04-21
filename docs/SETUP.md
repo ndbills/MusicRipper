@@ -25,7 +25,7 @@ cd C:\bin\MusicRipper
 This `winget install`s:
 
 - `Microsoft.PowerShell` — PS7 runtime.
-- `CUETools.CUETools` — rip engine, ships with `metaflac.exe`.
+- `gchudov.CUETools` — rip engine, ships with `metaflac.exe`.
 - `MusicBrainz.Picard` — manual re-tagging tool used when clearing the
   review queue.
 

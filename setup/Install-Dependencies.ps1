@@ -7,9 +7,14 @@
         First setup script. Run once per machine, elevated.
 
     Installs:
-        - Microsoft.PowerShell    (PS7 — the runtime everything else expects)
-        - CUETools.CUETools       (the rip engine + metaflac.exe)
-        - MusicBrainz.Picard      (manual re-tagging tool for _ReviewQueue)
+        - Microsoft.PowerShell  (PS7 — the runtime everything else expects)
+        - gchudov.CUETools      (the rip engine + metaflac.exe)
+        - MusicBrainz.Picard    (manual re-tagging tool for _ReviewQueue)
+
+    Note on the CUETools id: the publisher's winget package id is
+    `gchudov.CUETools` (the upstream maintainer's GitHub handle), NOT
+    `CUETools.CUETools` as the website-style name might suggest. Verified
+    via `winget search CUETools`.
 
 .EXAMPLE
     PS> ./setup/Install-Dependencies.ps1
@@ -33,7 +38,7 @@ if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
 
 $packages = @(
     'Microsoft.PowerShell',
-    'CUETools.CUETools',
+    'gchudov.CUETools',
     'MusicBrainz.Picard'
 )
 

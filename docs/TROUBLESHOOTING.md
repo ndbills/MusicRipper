@@ -8,6 +8,13 @@ Append entries as new failure modes show up in the wild.
 Install **App Installer** from the Microsoft Store, then re-run
 `./setup/Install-Dependencies.ps1`.
 
+### `Install-Dependencies.ps1` says "No package found matching input criteria"
+The winget id for a package may have changed upstream. Find the current
+id with `winget search <name>` and update the `$packages` list in
+`setup/Install-Dependencies.ps1`. Known historical gotcha:
+**CUETools** is published as `gchudov.CUETools` (the upstream
+maintainer's GitHub handle), not `CUETools.CUETools`.
+
 ### `Register-Drive.ps1` says "no AccurateRip offset found"
 The live AccurateRip page may have been unreachable AND the bundled
 fallback list (`data/driveoffsets.cached.json`) doesn't have your
