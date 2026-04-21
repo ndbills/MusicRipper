@@ -20,7 +20,7 @@ OneDrive and Synology NAS sync post-processors.
 | Phase | Title                                    | Status        |
 | ----- | ---------------------------------------- | ------------- |
 | 1     | Foundations & setup                      | ✅ complete    |
-| 2     | Disc identification & metadata           | ⏳ not started |
+| 2     | Disc identification & metadata           | ✅ complete    |
 | 3     | Confirmation UI                          | ⏳ not started |
 | 4     | Rip engine                               | ⏳ not started |
 | 5     | Quality gate, tagging, library layout    | ⏳ not started |

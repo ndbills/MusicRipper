@@ -162,3 +162,46 @@ VPN**. MusicRipper itself will manage the tunnel: bring it up before
   concern.
 
 ---
+
+## D-008 — Disc-id reading via CUETools .NET assemblies, not a CLI tool *(Phase 2)*
+
+**Choice:** `src/core/Get-DiscId.ps1` loads CUETools' .NET DLLs
+(`CUETools.CDImage.dll`, `CUETools.Ripper.dll`,
+`plugins/CUETools.Ripper.SCSI.dll`) via `Add-Type` and uses
+`CUETools.Ripper.SCSI.CDDriveReader` directly. Reads the TOC,
+pulls `MusicBrainzId` / `MusicBrainzTOC` / `TOCID` (CTDB) off the
+resulting `CDImageLayout`, then closes the drive.
+
+**Alternatives considered:**
+
+- **CUETools CLI to print a disc ID.** The plan's first choice. In
+  CUETools 2.2.6 the only CLI tool is
+  `CUETools.Ripper.Console.exe`, and it has no "print disc id"
+  mode \u2014 its only operating mode is to actually rip. There is
+  no `CUETools.eac.exe` in this build. Rejected because we'd have
+  to start a rip just to learn the disc id.
+- **Bundled libdiscid + P/Invoke.** The plan's stated fallback.
+  Means vendoring x64 + x86 native DLLs, writing a P/Invoke
+  signature, and managing native lifetimes. More moving parts
+  than option chosen, with no upside since CUETools is already
+  installed.
+- **Win32 IOCTL_CDROM_READ_TOC ourselves.** Reinventing a
+  well-known wheel; ugly P/Invoke surface; we'd then still need
+  to compute the MB disc id ourselves (Base64 of a SHA-1 over a
+  specific TOC layout).
+
+**Why the CUETools DLLs win:**
+
+- Zero new dependency \u2014 CUETools is already in
+  `Install-Dependencies.ps1`.
+- The exact same code path the CUETools GUI uses, so disc IDs
+  match what CUERipper would emit \u2014 useful when comparing
+  rips later.
+- Comes with the AccurateRip and CTDB IDs as side-effects, both
+  needed in Phases 4-5.
+- Trivial PowerShell wrapper (\~100 lines incl. comment-based help).
+
+**Risk:** if a future CUETools version reshuffles its API, we adapt.
+The relevant types have been stable for years; risk is low.
+
+---

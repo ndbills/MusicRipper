@@ -39,7 +39,32 @@ re-run `./setup/Install-Dependencies.ps1`.
 Install-Module Pester -MinimumVersion 5.0 -Scope CurrentUser -Force
 ```
 
----
+## Disc identification (Phase 2)
 
-*(Phases 2–7 will add disc-identification, metadata, rip, and sync
-failure modes here as they're encountered.)*
+### `Get-RipperDiscId` says "Could not open drive D: Access is denied"
+Three usual causes:
+1. **No disc inserted.** Insert an Audio CD and retry.
+2. **Drive held by another app.** Close CUERipper, Windows Media
+   Player, foobar2000, or anything else using the drive.
+3. **Lower-level Windows access policy.** Try running from an
+   elevated `pwsh` once to confirm; if that works, the drive
+   needs a normal-user run-once to register.
+
+### `CUETools not found` from `Get-CueToolsPath`
+Re-run `./setup/Install-Dependencies.ps1`. winget installs CUETools
+as a *portable* package under
+`%LOCALAPPDATA%\Microsoft\WinGet\Packages\gchudov.CUETools_*`,
+not Program Files \u2014 if `winget list gchudov.CUETools` returns
+nothing, the install never completed.
+
+### MusicBrainz lookup returns `Status: NoMatch`
+Real for any disc not in the MB database (rare for mainstream music,
+common for self-pressed CDs / box-set bonus discs / homebrew
+compilations). The pipeline will route these to `_ReviewQueue/`
+in Phase 5.
+
+### MusicBrainz lookup returns `Status: Offline`
+No internet, MusicBrainz is down (`https://status.musicbrainz.org`),
+or the rate limit kicked in. Tool retries on the next disc; the
+current disc still rips (Phase 5+) but goes to `_ReviewQueue/` with
+placeholder tags.
