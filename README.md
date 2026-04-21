@@ -22,7 +22,7 @@ OneDrive and Synology NAS sync post-processors.
 | 1     | Foundations & setup                      | ✅ complete    |
 | 2     | Disc identification & metadata           | ✅ complete    |
 | 3     | Confirmation UI                          | ✅ complete    |
-| 4     | Rip engine                               | ⏳ not started |
+| 4     | Rip engine                               | ✅ complete    |
 | 5     | Quality gate, tagging, library layout    | ⏳ not started |
 | 6     | Optional post-processors (OneDrive, NAS) | ⏳ not started |
 | 7     | Polish, packaging, parent-friendly UX    | ⏳ not started |
@@ -36,8 +36,11 @@ git clone <this-repo> C:\bin\MusicRipper ; cd C:\bin\MusicRipper
 ```
 
 After that, the Desktop shortcut **"Rip a CD"** is the entry point.
-(Today it identifies the disc, queries MusicBrainz, and pops the
-confirm dialog; the actual rip lands in Phase 4.)
+It identifies the disc, queries MusicBrainz, pops the confirm dialog,
+and (on **Rip**) performs a secure FLAC rip with live progress, an
+AccurateRip / CTDB verification pass, and an EAC-style CUE + log.
+Ripped albums stage to `<LibraryRoot>\_inbox\` until Phase 5 routes
+them to the library or `_ReviewQueue/`.
 
 ## Directory map
 
