@@ -302,12 +302,15 @@ function Show-RipperMetadataDialog {
     <!-- Row 0: cover + candidate picker -->
     <Grid Grid.Row="0" Margin="0,0,0,8">
       <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="160"/>
+        <ColumnDefinition Width="230"/>
         <ColumnDefinition Width="*"/>
       </Grid.ColumnDefinitions>
       <Border Grid.Column="0" BorderBrush="#888" BorderThickness="1" Background="#EEE"
-              Width="150" Height="150" HorizontalAlignment="Left">
-        <Image x:Name="CoverImage" Stretch="Uniform"/>
+              Width="220" Height="220" HorizontalAlignment="Left"
+              SnapsToDevicePixels="True" UseLayoutRounding="True">
+        <Image x:Name="CoverImage" Stretch="Uniform"
+               RenderOptions.BitmapScalingMode="HighQuality"
+               SnapsToDevicePixels="True" UseLayoutRounding="True"/>
       </Border>
       <Grid Grid.Column="1" Margin="12,0,0,0">
         <Grid.RowDefinitions>
