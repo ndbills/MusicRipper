@@ -230,6 +230,7 @@ function Show-RipperRipProgress {
         RipResult      = $null         # rip -> UI, set at end
         RipError       = $null         # rip -> UI if it threw
         RipDone        = $false        # rip -> UI: terminal state reached
+        UiError        = $null         # UI tick -> caller (after ShowDialog re-raises NRE)
         StartedAt      = [DateTime]::UtcNow
     })
 
@@ -308,6 +309,13 @@ function Show-RipperRipProgress {
     $timer.Interval = [TimeSpan]::FromMilliseconds(100)
 
     $tickHandler = {
+        # Diagnostic wrapper: WPF re-raises any unhandled scriptblock
+        # exception out of ShowDialog as the unhelpful "Exception calling
+        # 'ShowDialog' with '0' argument(s): 'You cannot call a method on
+        # a null-valued expression.'" — so we catch anything here and
+        # store it on $state for the caller to surface with a real
+        # ScriptStackTrace. (Manual-test-4.)
+        try {
         $p = $state.Progress
         if ($p) {
             $frac     = [double]$p.OverallFraction
@@ -383,10 +391,19 @@ function Show-RipperRipProgress {
             # under StrictMode 3 (timer ticks otherwise fire in a fresh
             # scope where these locals don't exist).
             $closeDelay.Add_Tick({
-                $closeDelay.Stop()
-                $window.Close()
+                try {
+                    $closeDelay.Stop()
+                    $window.Close()
+                } catch {
+                    $state.UiError = $_
+                }
             }.GetNewClosure())
             $closeDelay.Start()
+        }
+        } catch {
+            if (-not $state.UiError) { $state.UiError = $_ }
+            try { $timer.Stop() } catch { }
+            try { $window.Close() } catch { }
         }
     }
     $timer.Add_Tick($tickHandler)
@@ -446,6 +463,20 @@ function Show-RipperRipProgress {
             Write-RipperLog ERROR 'Show-RipProgress' "ScriptStackTrace:`n$($state.RipError.ScriptStackTrace)"
         }
         throw $state.RipError
+    }
+    if ($state.UiError) {
+        # A WPF tick handler threw; ShowDialog wraps that as the unhelpful
+        # NRE. Surface the real exception + stack here so we can see what
+        # the actual failure was. The rip itself may well have succeeded
+        # (FLACs on disk) — caller decides whether to keep RipResult.
+        Write-RipperLog ERROR 'Show-RipProgress' "UI tick threw: $($state.UiError.Exception.Message)"
+        if ($state.UiError.ScriptStackTrace) {
+            Write-RipperLog ERROR 'Show-RipProgress' "ScriptStackTrace:`n$($state.UiError.ScriptStackTrace)"
+        }
+        # If we have a usable rip result, return it anyway — losing it to
+        # a UI cosmetic bug is the worst possible outcome.
+        if ($state.RipResult) { return $state.RipResult }
+        throw $state.UiError
     }
     $state.RipResult
 }
