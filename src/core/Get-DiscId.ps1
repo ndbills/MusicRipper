@@ -142,7 +142,10 @@ function Get-RipperDiscId {
     $reader = New-Object CUETools.Ripper.SCSI.CDDriveReader
     try {
         try {
-            $reader.Open([char]$driveChar)
+            # Pipe to Out-Null: some CUETools versions return non-void from
+            # Open() (e.g. a status struct), which would leak straight into
+            # our function's output and break `$disc.DiscId` downstream.
+            $reader.Open([char]$driveChar) | Out-Null
         } catch {
             # The most common failure (no disc / tray open) bubbles up as
             # E_ACCESSDENIED — make the message useful instead of cryptic.

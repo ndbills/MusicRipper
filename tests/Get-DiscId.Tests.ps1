@@ -45,3 +45,44 @@ Describe 'Get-RipperDiscId function surface' {
             Should -Not -BeNullOrEmpty
     }
 }
+
+Describe 'Get-RipperDiscId end-to-end (requires inserted disc + admin)' {
+    BeforeAll {
+        # Skip cleanly when there's no audio CD or we lack elevation, so
+        # this file stays runnable on dev boxes and CI without a disc.
+        $script:canRun = $false
+        try {
+            Initialize-CueToolsAssemblies
+            $cfg = $null
+            try {
+                Import-Module (Join-Path (Split-Path -Parent $PSScriptRoot) 'src\lib\Config.psd1') -Force
+                $cfg = Import-RipperConfig
+            } catch { }
+            if ($cfg -and $cfg.DriveLetter) {
+                $r = New-Object CUETools.Ripper.SCSI.CDDriveReader
+                try {
+                    $r.Open([char]($cfg.DriveLetter[0])) | Out-Null
+                    if ($r.TOC -and $r.TOC.AudioTracks -gt 0) { $script:canRun = $true }
+                } catch { } finally {
+                    $r.Close()   | Out-Null
+                    $r.Dispose() | Out-Null
+                }
+            }
+        } catch { }
+    }
+
+    It 'returns exactly one object with the documented properties' -Skip:(-not $script:canRun) {
+        # Regression: bare $reader.Open() / .Close() / .Dispose() calls were
+        # leaking non-void return values into the function's output, turning
+        # the result into an array and breaking $disc.DiscId access.
+        $disc = Get-RipperDiscId
+        @($disc).Count                | Should -Be 1
+        $disc | Should -BeOfType ([pscustomobject])
+        $disc.PSObject.Properties.Name | Should -Contain 'DiscId'
+        $disc.PSObject.Properties.Name | Should -Contain 'AudioTracks'
+        $disc.PSObject.Properties.Name | Should -Contain 'Tracks'
+        $disc.DiscId                  | Should -Match '^[A-Za-z0-9._-]{20,40}$'
+        $disc.AudioTracks             | Should -BeGreaterThan 0
+        @($disc.Tracks).Count         | Should -Be $disc.TrackCount
+    }
+}
