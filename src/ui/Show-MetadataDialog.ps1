@@ -476,8 +476,9 @@ function Show-RipperMetadataDialog {
             } # else: leave previous value untouched, validated on Rip click
         }
         # Force any in-progress DataGrid edit to commit before we read rows.
-        [void]$controls.TracksGrid.CommitEdit('CellOrRowHeader', $true)
-        [void]$controls.TracksGrid.CommitEdit('Row',             $true)
+        # DataGridEditingUnit only has Cell and Row — commit cell first, then row.
+        [void]$controls.TracksGrid.CommitEdit('Cell', $true)
+        [void]$controls.TracksGrid.CommitEdit('Row',  $true)
     }
 
     # Status / disc-id strip --------------------------------------------------
