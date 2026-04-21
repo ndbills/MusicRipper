@@ -367,21 +367,22 @@ function Show-RipperRipProgress {
             $controls.ModeText.Text = "$($p.CorrectionMode) mode"
         }
 
-        # Check for completion (normal, error, or cancel).
-        if ($state.RipDone) {
+        # Check for completion (normal, error, or cancel). Use indexer
+        # access on $state — see closeDelay catch comment.
+        if ($state['RipDone']) {
             $timer.Stop()
             # Brief pause so the user sees "100%" for a beat before the
             # window vanishes on a fast rip.
-            if (-not $state.Cancel -and -not $state.RipError) {
+            if (-not $state['Cancel'] -and -not $state['RipError']) {
                 $controls.OverallBar.Value    = 1.0
                 $controls.OverallPctText.Text = '100%'
                 $controls.TrackBar.Value      = 1.0
                 $controls.TrackPctText.Text   = '100%'
                 $controls.CurrentTrackText.Text = 'Rip complete. Closing...'
-            } elseif ($state.Cancel) {
+            } elseif ($state['Cancel']) {
                 $controls.CurrentTrackText.Text = 'Cancelled.'
-            } elseif ($state.RipError) {
-                $controls.CurrentTrackText.Text = "Error: $($state.RipError.Exception.Message)"
+            } elseif ($state['RipError']) {
+                $controls.CurrentTrackText.Text = "Error: $($state['RipError'].Exception.Message)"
             }
             # 600 ms hold; shorter than a human blink-and-look cycle.
             $closeDelay = New-Object System.Windows.Threading.DispatcherTimer
@@ -395,13 +396,25 @@ function Show-RipperRipProgress {
                     $closeDelay.Stop()
                     $window.Close()
                 } catch {
-                    $state.UiError = $_
+                    # Indexer syntax — dot-property assignment on a
+                    # synchronized hashtable from a dispatcher tick
+                    # context fails under StrictMode 3 ("property X
+                    # cannot be found"). Indexer bypasses that adapter.
+                    $state['UiError'] = $_
+                    try { [System.IO.File]::AppendAllText(
+                        (Join-Path $env:TEMP 'musicripper-ui-error.log'),
+                        "[closeDelay tick] $($_.Exception.Message)`r`n$($_.ScriptStackTrace)`r`n`r`n"
+                    ) } catch { }
                 }
             }.GetNewClosure())
             $closeDelay.Start()
         }
         } catch {
-            if (-not $state.UiError) { $state.UiError = $_ }
+            if (-not $state['UiError']) { $state['UiError'] = $_ }
+            try { [System.IO.File]::AppendAllText(
+                (Join-Path $env:TEMP 'musicripper-ui-error.log'),
+                "[main tick] $($_.Exception.Message)`r`n$($_.ScriptStackTrace)`r`n`r`n"
+            ) } catch { }
             try { $timer.Stop() } catch { }
             try { $window.Close() } catch { }
         }
@@ -457,26 +470,26 @@ function Show-RipperRipProgress {
     try { $ps.Dispose() } catch { }
     try { $rs.Close();   $rs.Dispose() } catch { }
 
-    if ($state.RipError) {
-        Write-RipperLog ERROR 'Show-RipProgress' "Rip threw: $($state.RipError.Exception.Message)"
-        if ($state.RipError.ScriptStackTrace) {
-            Write-RipperLog ERROR 'Show-RipProgress' "ScriptStackTrace:`n$($state.RipError.ScriptStackTrace)"
+    if ($state['RipError']) {
+        Write-RipperLog ERROR 'Show-RipProgress' "Rip threw: $($state['RipError'].Exception.Message)"
+        if ($state['RipError'].ScriptStackTrace) {
+            Write-RipperLog ERROR 'Show-RipProgress' "ScriptStackTrace:`n$($state['RipError'].ScriptStackTrace)"
         }
-        throw $state.RipError
+        throw $state['RipError']
     }
-    if ($state.UiError) {
+    if ($state['UiError']) {
         # A WPF tick handler threw; ShowDialog wraps that as the unhelpful
         # NRE. Surface the real exception + stack here so we can see what
         # the actual failure was. The rip itself may well have succeeded
         # (FLACs on disk) — caller decides whether to keep RipResult.
-        Write-RipperLog ERROR 'Show-RipProgress' "UI tick threw: $($state.UiError.Exception.Message)"
-        if ($state.UiError.ScriptStackTrace) {
-            Write-RipperLog ERROR 'Show-RipProgress' "ScriptStackTrace:`n$($state.UiError.ScriptStackTrace)"
+        Write-RipperLog ERROR 'Show-RipProgress' "UI tick threw: $($state['UiError'].Exception.Message)"
+        if ($state['UiError'].ScriptStackTrace) {
+            Write-RipperLog ERROR 'Show-RipProgress' "ScriptStackTrace:`n$($state['UiError'].ScriptStackTrace)"
         }
         # If we have a usable rip result, return it anyway — losing it to
         # a UI cosmetic bug is the worst possible outcome.
-        if ($state.RipResult) { return $state.RipResult }
-        throw $state.UiError
+        if ($state['RipResult']) { return $state['RipResult'] }
+        throw $state['UiError']
     }
-    $state.RipResult
+    $state['RipResult']
 }
