@@ -35,4 +35,13 @@ Describe 'Get-RipperDiscId function surface' {
     It 'is defined after dot-sourcing Get-DiscId.ps1' {
         Get-Command Get-RipperDiscId -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
     }
+
+    It 'Initialize-CueToolsAssemblies loads the DLLs without throwing' {
+        # Regression: a parser bug had Join-Path consuming trailing commas
+        # inside an @() array, causing AdditionalChildPath array→string
+        # conversion errors. This test exercises the real load path.
+        { Initialize-CueToolsAssemblies } | Should -Not -Throw
+        [type]::GetType('CUETools.CDImage.CDImageLayout, CUETools.CDImage') |
+            Should -Not -BeNullOrEmpty
+    }
 }
