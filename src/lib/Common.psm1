@@ -162,8 +162,8 @@ function Get-CueToolsPath {
 
     # 2. Legacy MSI install paths (rare today but cheap to check).
     foreach ($candidate in @(
-        Join-Path $env:ProgramFiles        'CUE Tools',
-        Join-Path ${env:ProgramFiles(x86)} 'CUE Tools'
+        (Join-Path $env:ProgramFiles        'CUE Tools'),
+        (Join-Path ${env:ProgramFiles(x86)} 'CUE Tools')
     )) {
         if ($candidate -and (Test-Path -LiteralPath (Join-Path $candidate 'CUETools.exe'))) {
             return $candidate

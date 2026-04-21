@@ -59,9 +59,9 @@ function Initialize-CueToolsAssemblies {
 
     $cueDir = Get-CueToolsPath
     $dlls = @(
-        Join-Path $cueDir 'CUETools.CDImage.dll',
-        Join-Path $cueDir 'CUETools.Ripper.dll',
-        Join-Path $cueDir 'plugins\CUETools.Ripper.SCSI.dll'
+        (Join-Path $cueDir 'CUETools.CDImage.dll'),
+        (Join-Path $cueDir 'CUETools.Ripper.dll'),
+        (Join-Path $cueDir 'plugins\CUETools.Ripper.SCSI.dll')
     )
     foreach ($dll in $dlls) {
         if (-not (Test-Path -LiteralPath $dll)) {
