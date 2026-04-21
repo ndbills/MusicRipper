@@ -32,6 +32,21 @@ Open PowerShell, run the command from the shortcut's "Target" field
 manually, and read the error. Most likely cause: PS7 isn't on `PATH` —
 re-run `./setup/Install-Dependencies.ps1`.
 
+### `Get-RipperDiscId` fails with "Could not open drive" or "0x80070000"
+CUETools' SCSI driver requires **Administrator** privileges to open
+an optical drive. The Desktop shortcut installed by
+`./setup/Install-Shortcut.ps1` already requests elevation. If you're
+running `Start-Ripper.ps1` from a non-elevated terminal, either
+re-launch PowerShell as Administrator or use:
+
+```powershell
+Start-Process pwsh -Verb RunAs -ArgumentList '-NoProfile','-File','C:\bin\MusicRipper\src\Start-Ripper.ps1'
+```
+
+If you upgraded from an early Phase-1 install and the shortcut isn't
+prompting for UAC, re-run `./setup/Install-Shortcut.ps1` to refresh
+the `.lnk` with the elevation flag.
+
 ## Tests
 
 ### `Invoke-Pester` not found
