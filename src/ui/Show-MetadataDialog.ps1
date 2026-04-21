@@ -393,6 +393,15 @@ function Show-RipperMetadataDialog {
 
     if (-not $OnResearch) { $controls.ResearchButton.Visibility = 'Collapsed' }
 
+    # Capture our own helper functions as scriptblocks so the WPF event
+    # handlers (which run in a child scope) can invoke them via `& $sb`.
+    # `.GetNewClosure()` on the handlers themselves only captures *variables*
+    # — functions defined in this script's scope aren't visible from inside
+    # an Add_Click handler unless we bind them as locals first.
+    $convertTo   = ${function:ConvertTo-MetadataViewModel}
+    $convertFrom = ${function:ConvertFrom-MetadataViewModel}
+    $formatLabel = ${function:Format-MetadataCandidateLabel}
+
     # State held in script: locals so closures can capture by reference.
     $state = [pscustomobject]@{
         Metadata    = $Metadata
@@ -405,7 +414,7 @@ function Show-RipperMetadataDialog {
     $rebuildViewModels = {
         $state.ViewModels = @(
             foreach ($c in @($state.Metadata.Candidates)) {
-                ConvertTo-MetadataViewModel -Candidate $c
+                & $convertTo -Candidate $c
             }
         )
     }
@@ -445,7 +454,7 @@ function Show-RipperMetadataDialog {
     $populateCombo = {
         $controls.CandidateCombo.Items.Clear()
         foreach ($c in @($state.Metadata.Candidates)) {
-            [void]$controls.CandidateCombo.Items.Add((Format-MetadataCandidateLabel -Candidate $c))
+            [void]$controls.CandidateCombo.Items.Add((& $formatLabel -Candidate $c))
         }
         # Pick the BestMatch as the initial selection if we can find it.
         $idx = 0
@@ -560,7 +569,7 @@ function Show-RipperMetadataDialog {
         }
         $state.Result = [pscustomobject]@{
             Action   = 'Rip'
-            Metadata = ConvertFrom-MetadataViewModel -ViewModel $state.CurrentVm
+            Metadata = & $convertFrom -ViewModel $state.CurrentVm
         }
         $window.DialogResult = $true
         $window.Close()
@@ -570,7 +579,7 @@ function Show-RipperMetadataDialog {
         & $applyEditsToCurrentVm
         $state.Result = [pscustomobject]@{
             Action   = 'Review'
-            Metadata = ConvertFrom-MetadataViewModel -ViewModel $state.CurrentVm
+            Metadata = & $convertFrom -ViewModel $state.CurrentVm
         }
         $window.DialogResult = $true
         $window.Close()
