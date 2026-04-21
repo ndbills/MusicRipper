@@ -1,0 +1,28 @@
+{
+  "//SchemaVersion":           "Bump when fields change shape; loaders use this to migrate.",
+  "SchemaVersion": 1,
+
+  "//LibraryRoot":             "Absolute path to the music library root. Album folders land at LibraryRoot/<Album Artist>/<Album> (Year)/.",
+  "LibraryRoot": "D:\\Music",
+
+  "//DriveLetter":             "Optical drive letter, e.g. 'D:'. Filled by setup/Register-Drive.ps1.",
+  "DriveLetter": null,
+
+  "//DriveOffset":             "AccurateRip read offset in samples for this drive. Filled by setup/Register-Drive.ps1.",
+  "DriveOffset": null,
+
+  "//MusicBrainzUserAgent":    "Required by MusicBrainz ToS. Format: 'AppName/Version ( contact-email )'. Set by New-RipperConfig.ps1.",
+  "MusicBrainzUserAgent": "MusicRipper/0.1 ( unknown@example.com )",
+
+  "//OneDrivePath":            "Optional: absolute path inside OneDrive to mirror the library to. null = disabled.",
+  "OneDrivePath": null,
+
+  "//SynologyUnc":              "Optional: UNC path of NAS share (e.g. \\\\nas\\music). null = disabled.",
+  "SynologyUnc": null,
+
+  "//SynologySyncReviewQueue": "If true, NAS sync also copies _ReviewQueue/. Default false to keep scratch work off the family library.",
+  "SynologySyncReviewQueue": false,
+
+  "//HasSynologyCredential":   "Flag only — true means a DPAPI-protected PSCredential is on disk in credentials.clixml.",
+  "HasSynologyCredential": false
+}

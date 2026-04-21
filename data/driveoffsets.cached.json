@@ -1,0 +1,27 @@
+{
+  "_comment": "Cached fallback list of common optical drive AccurateRip read offsets. Used by setup/Register-Drive.ps1 when the AccurateRip database is unreachable. Source: http://www.accuraterip.com/driveoffsets.htm. Match is by case-insensitive substring of the Win32_CDROMDrive.Name field. Offsets are in samples; positive means the drive reads ahead.",
+  "_schemaVersion": 1,
+  "_fetchedFrom": "http://www.accuraterip.com/driveoffsets.htm",
+  "_fetchedAt": null,
+  "drives": [
+    { "match": "PIONEER BD-RW   BDR-209",  "offset": 6 },
+    { "match": "PIONEER BD-RW   BDR-2",    "offset": 6 },
+    { "match": "PIONEER DVD-RW  DVR-",     "offset": 48 },
+    { "match": "ASUS DRW-24",               "offset": 6 },
+    { "match": "ASUS BW-16D1HT",            "offset": 6 },
+    { "match": "LITE-ON DVDRW SOHW-",       "offset": 12 },
+    { "match": "LITE-ON DVDRW LH-",         "offset": 6 },
+    { "match": "HL-DT-ST DVDRAM GH",        "offset": 6 },
+    { "match": "HL-DT-ST BD-RE WH",         "offset": 6 },
+    { "match": "HL-DT-ST DVDRRW GSA-",      "offset": 667 },
+    { "match": "Optiarc DVD RW AD-",        "offset": 48 },
+    { "match": "Samsung SH-",               "offset": 6 },
+    { "match": "Samsung SE-",               "offset": 6 },
+    { "match": "TSSTcorp CDDVDW SH-",       "offset": 6 },
+    { "match": "TSSTcorp CDDVDW SE-",       "offset": 6 },
+    { "match": "MATSHITA UJ-",              "offset": 102 },
+    { "match": "MATSHITA DVD-RAM UJ-",      "offset": 102 },
+    { "match": "PLEXTOR DVDR PX-",          "offset": 30 },
+    { "match": "PLEXTOR CD-R PX-",          "offset": 30 }
+  ]
+}

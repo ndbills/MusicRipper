@@ -1,0 +1,47 @@
+# =============================================================================
+# cuetools.profile.txt
+#
+# Pinned CUETools rip settings for MusicRipper. Read by src/core/Invoke-Rip.ps1
+# (Phase 4) and translated into command-line flags / a baked CUERipper profile.
+# Each setting documented inline so we know WHY, not just WHAT.
+#
+# Reference: http://cue.tools/wiki/CUETools
+# =============================================================================
+
+# Output codec. FLAC level 8 = max compression for archival; decode speed is
+# irrelevant for a music library. Lossless either way.
+codec = flac
+flac_compression_level = 8
+
+# Per-track FLACs (not single-file image). Matters for Plex / Navidrome /
+# Jellyfin which expect one file per track.
+output_style = per_track
+
+# Gap handling: append index-00 (pregap) audio to the END of the previous track.
+# This is the EAC "Append to previous track (noncompliant)" mode. We pick this
+# (over "prepend to next") because:
+#   - It preserves all 100% of the disc's audio.
+#   - Combined with the generated CUE sheet, the rip is bit-exactly
+#     reconstructable back to the original disc image for re-burning.
+#   - It's the de-facto standard among the CUETools / hydrogenaud.io community.
+gap_handling = append_to_previous
+
+# Generate an EAC-style CUE sheet alongside the FLACs (references the per-track
+# files). This is what makes the rip reconstructable.
+emit_cuesheet = true
+cuesheet_style = eac
+
+# Generate an AccurateRip + CUETools Database (CTDB) verification log. This is
+# the proof-of-quality consumed by src/core/Test-RipQuality.ps1.
+emit_log         = true
+verify_accuraterip = true
+verify_ctdb        = true
+
+# Embed front cover art into each FLAC as APIC after the rip (done by
+# Write-Tags.ps1 via metaflac, not the ripper itself). Plex uses the embedded
+# art for "Now Playing"; the album-folder cover.jpg drives the album grid.
+embed_cover_art = true
+
+# Eject the disc when the rip is done — small UX win for the parent batch case.
+# Start-Ripper.ps1 actually does the eject so this is a no-op for now.
+eject_on_complete = false
