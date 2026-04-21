@@ -112,7 +112,7 @@ function Show-RipperRipProgress {
         WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize"
         FontFamily="Segoe UI" FontSize="13">
-  <Grid Margin="16">
+  <Grid Margin="16" Grid.IsSharedSizeScope="True">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>  <!-- album headline -->
       <RowDefinition Height="Auto"/>  <!-- current track -->
@@ -137,22 +137,29 @@ function Show-RipperRipProgress {
                Text="Starting up..."/>
 
     <!-- Row 2: per-track bar -->
+    <!-- Row 2: per-track bar.
+         Same 3-column layout as the overall row below so the bars and
+         the percentage column line up exactly. SharedSizeGroup keeps
+         the label column the same width regardless of which label is
+         longer. -->
     <Grid Grid.Row="2" Margin="0,2,0,6">
       <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="Auto" SharedSizeGroup="BarLabel"/>
         <ColumnDefinition Width="*"/>
-        <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="Auto" SharedSizeGroup="BarPct"/>
       </Grid.ColumnDefinitions>
-      <ProgressBar Grid.Column="0" x:Name="TrackBar"   Height="14" Minimum="0" Maximum="1" Value="0"/>
-      <TextBlock   Grid.Column="1" x:Name="TrackPctText" Margin="8,0,0,0" VerticalAlignment="Center"
-                   MinWidth="42" TextAlignment="Right" Text="  0%"/>
+      <TextBlock   Grid.Column="0" Text="Track"   VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#555"/>
+      <ProgressBar Grid.Column="1" x:Name="TrackBar"   Height="14" Minimum="0" Maximum="1" Value="0"/>
+      <TextBlock   Grid.Column="2" x:Name="TrackPctText" Margin="8,0,0,0" VerticalAlignment="Center"
+                   MinWidth="46" TextAlignment="Right" Text="  0%"/>
     </Grid>
 
     <!-- Row 3: overall bar -->
     <Grid Grid.Row="3" Margin="0,0,0,10">
       <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="Auto" SharedSizeGroup="BarLabel"/>
         <ColumnDefinition Width="*"/>
-        <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="Auto" SharedSizeGroup="BarPct"/>
       </Grid.ColumnDefinitions>
       <TextBlock   Grid.Column="0" Text="Overall" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#555"/>
       <ProgressBar Grid.Column="1" x:Name="OverallBar" Height="18" Minimum="0" Maximum="1" Value="0"/>
