@@ -139,8 +139,13 @@ function Stop-RipperLog {
     [CmdletBinding()]
     param()
     if ($script:LogPath) {
-        "=== Session ended $(Get-Date -Format o) ===" |
-            Add-Content -LiteralPath $script:LogPath -Encoding UTF8
+        # Test-Path because tests (and rare prod cases like a folder being
+        # moved out from under us) may have removed the file already; we
+        # still want to clear the in-memory state without throwing.
+        if (Test-Path -LiteralPath $script:LogPath) {
+            "=== Session ended $(Get-Date -Format o) ===" |
+                Add-Content -LiteralPath $script:LogPath -Encoding UTF8
+        }
         $script:LogPath    = $null
         $script:LogContext = $null
     }
@@ -159,4 +164,64 @@ function Get-RipperLogPath {
     $script:LogPath
 }
 
-Export-ModuleMember -Function Start-RipperLog, Write-RipperLog, Stop-RipperLog, Get-RipperLogPath
+function Copy-RipperLog {
+<#
+.SYNOPSIS
+    Snapshot the active session log into an album/destination folder.
+
+.DESCRIPTION
+    Copies the current `$script:LogPath` content to
+    `<Destination>\<FileName>` so the per-album folder carries a copy
+    of the run's structured log. The session log under %LOCALAPPDATA%
+    keeps growing; this is just a point-in-time snapshot.
+
+    Best-effort: if no session is active, the source file is missing,
+    or the destination is unwritable, this writes a WARN line and
+    returns `$null` instead of throwing. Logs follow rips, but a
+    failed log copy must NEVER block the move-to-library step that
+    just spent 10+ minutes producing the audio.
+
+.PARAMETER Destination
+    Target folder. Must already exist.
+
+.PARAMETER FileName
+    Leaf name to write inside `Destination`. Defaults to
+    `ripper-session.log` so it doesn't collide with the CUETools-style
+    `<Album>.log` rip log that Invoke-Rip already places in the folder.
+
+.EXAMPLE
+    PS> Copy-RipperLog -Destination 'C:\Library\Artist\Album (2024)'
+#>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Destination,
+
+        [string]$FileName = 'ripper-session.log'
+    )
+
+    if (-not $script:LogPath) {
+        Write-Warning "Copy-RipperLog: no active session log to copy."
+        return $null
+    }
+    if (-not (Test-Path -LiteralPath $script:LogPath)) {
+        Write-Warning "Copy-RipperLog: source log not found: $script:LogPath"
+        return $null
+    }
+    if (-not (Test-Path -LiteralPath $Destination -PathType Container)) {
+        Write-Warning "Copy-RipperLog: destination folder not found: $Destination"
+        return $null
+    }
+
+    $target = Join-Path $Destination $FileName
+    try {
+        Copy-Item -LiteralPath $script:LogPath -Destination $target -Force
+        return $target
+    } catch {
+        Write-Warning "Copy-RipperLog: copy failed: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+Export-ModuleMember -Function Start-RipperLog, Write-RipperLog, Stop-RipperLog, Get-RipperLogPath, Copy-RipperLog

@@ -5,7 +5,7 @@
     Author            = 'MusicRipper'
     Description       = 'Structured per-session log file writer for MusicRipper.'
     PowerShellVersion = '7.0'
-    FunctionsToExport = @('Start-RipperLog', 'Write-RipperLog', 'Stop-RipperLog', 'Get-RipperLogPath')
+    FunctionsToExport = @('Start-RipperLog','Write-RipperLog','Stop-RipperLog','Get-RipperLogPath','Copy-RipperLog')
     CmdletsToExport   = @()
     AliasesToExport   = @()
     VariablesToExport = @()

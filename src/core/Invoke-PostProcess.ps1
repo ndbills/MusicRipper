@@ -86,10 +86,21 @@ function Invoke-RipperPostProcess {
             -DiscId       $DiscId | Out-Null
     }
 
+    # Drop a copy of the structured session log next to the album so
+    # whoever rips can inspect what happened without digging through
+    # %LOCALAPPDATA%\MusicRipper\logs. Especially valuable for the review
+    # queue, where a human will be triaging the rip after the fact.
+    # Best-effort — a failed copy must not undo the move.
+    $sessionLogCopy = Copy-RipperLog -Destination $move.Target
+    if ($sessionLogCopy) {
+        Write-RipperLog INFO 'PostProcess' "Snapshot of session log -> $sessionLogCopy"
+    }
+
     return @{
-        Quality       = $quality
-        Move          = $move
-        Target        = $move.Target
-        IsReviewQueue = $move.IsReviewQueue
+        Quality        = $quality
+        Move           = $move
+        Target         = $move.Target
+        IsReviewQueue  = $move.IsReviewQueue
+        SessionLogCopy = $sessionLogCopy
     }
 }
