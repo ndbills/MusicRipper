@@ -338,11 +338,17 @@ function Invoke-RipperRip {
         }
 
         # --- Build filenames + tags ----------------------------------------
+        # Trust the metadata's IsCompilation flag. Get-DiscMetadata sets it
+        # only when MusicBrainz says so (release-group secondary-type
+        # 'Compilation' OR album-artist is the Various Artists MBID), and
+        # the Phase-3 dialog lets the user override it. The previous
+        # heuristic (any track-artist != album-artist => compilation)
+        # mis-fired on classical/sacred releases that legitimately credit
+        # composers per track (e.g. 'Lowell Mason' on a Mormon Tabernacle
+        # Choir disc), pulling them under /Various Artists/ in Plex.
         $isCompilation = $false
-        $albumArtist   = [string]$Metadata.AlbumArtist
-        foreach ($t in $Metadata.Tracks) {
-            $artist = [string]$t.Artist
-            if ($artist -and $artist -ne $albumArtist) { $isCompilation = $true; break }
+        if ($Metadata.PSObject.Properties['IsCompilation']) {
+            $isCompilation = [bool]$Metadata.IsCompilation
         }
 
         $flacNames = New-Object 'System.String[]' $trackCount
