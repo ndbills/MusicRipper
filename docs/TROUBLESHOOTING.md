@@ -153,3 +153,31 @@ manually deleted), use the manual tool:
 
 The MusicBrainz disc id is in the first few lines of the rip log
 inside the orphan folder, and on `https://musicbrainz.org/cdtoc/<id>`.
+
+### "An older rip is missing tags Picard would set (sort names, ASIN, etc.)"
+The Phase-5 tag set has grown over time. Older rips were tagged
+against an earlier schema and are missing fields like `ALBUMARTISTSORT`,
+`ORIGINALDATE`, `RELEASESTATUS`, `LABEL`, etc. To bring an existing
+album up to the current schema without re-ripping the disc:
+
+```powershell
+./src/tools/Update-AlbumTags.ps1 'E:\digitize\MusicRipper\<artist>\<album>'
+```
+
+Lookup ladder (first hit wins, all rate-limited per MusicBrainz's
+1 req/sec policy):
+
+1. `-ReleaseMbid <mbid>` argument (explicit override)
+2. `MUSICBRAINZ_ALBUMID` tag on track 1 (preferred)
+3. `MUSICBRAINZ_DISCID` tag on track 1
+4. Text search on `ALBUMARTIST` + `ALBUM` (best-effort fallback)
+
+Audio is never re-encoded — `metaflac` edits in place against the
+padding the encoder reserved at rip time. Cover art is preserved by
+default; pass `-RefreshCoverArt` to also re-pull from Cover Art
+Archive. Pass `-SkipReplayGain` if you don't need the analysis pass
+to re-run.
+
+If the tool refuses with a track-count mismatch, that usually means a
+multi-disc release whose `MUSICBRAINZ_DISCID` tag is missing or wrong.
+Re-run with an explicit `-ReleaseMbid` pointing at the correct medium.

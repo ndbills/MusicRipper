@@ -63,6 +63,7 @@ the first thing to update.
 | `src/tools/Move-FromReviewQueue.ps1` | 7   | Promote a fixed-up review-queue album into the library. |
 | `src/tools/Complete-OrphanedRip.ps1` | 5   | Manual finish for an orphaned rip folder (sidecar or `-DiscId`). |
 | `src/tools/Show-FlacTags.ps1`      | 5     | Dump Vorbis comments + PICTURE summary for a file/folder. |
+| `src/tools/Update-AlbumTags.ps1`   | 5     | Re-tag an existing album in place; looks up MB by ALBUMID/DISCID/text. |
 | `Install-MusicRipper.ps1` (root)   | 7     | One-shot self-installer.                               |
 
 ## State on disk
