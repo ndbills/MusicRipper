@@ -137,7 +137,12 @@ function ConvertFrom-MusicBrainzDiscIdResponse {
         $totalDiscs     = if ($rel.media) { @($rel.media).Count } else { 1 }
         if ($rel.media) {
             foreach ($m in $rel.media) {
-                if ($m.discs) {
+                # `discs` is only present when the release was fetched via
+                # /discid/ (or /release/?inc=discids). The plain
+                # /release/{mbid}?inc=artists+recordings+release-groups+labels
+                # response Update-AlbumTags uses doesn't include it, so guard
+                # under strict mode.
+                if ($m.PSObject.Properties['discs'] -and $m.discs) {
                     foreach ($d in $m.discs) {
                         if ($d.id -eq $DiscId) {
                             $matchingMedium = $m
