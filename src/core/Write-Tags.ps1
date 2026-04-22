@@ -162,21 +162,19 @@ function New-RipperFlacTagSet {
     $tags = New-Object 'System.Collections.Generic.List[string]'
     $tags.Add("ALBUMARTIST=$albumArtist")
     # Multi-value ALBUMARTISTS (Picard parity): one tag line per credited
-    # album artist, no joinphrases. Skipped on single-artist albums where
-    # it would be redundant with ALBUMARTIST.
+    # album artist, no joinphrases. Picard always writes this even on
+    # single-artist albums, so we do too.
     if ($Metadata.PSObject.Properties['AlbumArtists'] -and $Metadata.AlbumArtists) {
-        $aa = @($Metadata.AlbumArtists) | Where-Object { $_ }
-        if (@($aa).Count -gt 1) {
-            foreach ($a in $aa) { $tags.Add("ALBUMARTISTS=$a") }
+        foreach ($a in @($Metadata.AlbumArtists) | Where-Object { $_ }) {
+            $tags.Add("ALBUMARTISTS=$a")
         }
     }
     $tags.Add("ARTIST=$trackArtist")
     # Multi-value ARTISTS (Picard parity): one tag line per credited track
-    # artist. Same single-artist suppression as ALBUMARTISTS.
+    # artist. Always emitted when present (Picard parity).
     if ($tm.PSObject.Properties['Artists'] -and $tm.Artists) {
-        $ta = @($tm.Artists) | Where-Object { $_ }
-        if (@($ta).Count -gt 1) {
-            foreach ($a in $ta) { $tags.Add("ARTISTS=$a") }
+        foreach ($a in @($tm.Artists) | Where-Object { $_ }) {
+            $tags.Add("ARTISTS=$a")
         }
     }
     $tags.Add("ALBUM=$($Metadata.Album)")
