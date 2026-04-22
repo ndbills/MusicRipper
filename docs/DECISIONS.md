@@ -287,3 +287,54 @@ drop one in manually; CI / fresh clones skip the integration tests
 cleanly). Five consecutive clean suite runs confirmed stability.
 
 ---
+
+---
+
+## D-011 — Metadata + cover-art are pluggable provider chains *(Phase 5.2)*
+
+**Choice:** Both metadata lookup and cover-art lookup go through ordered
+provider chains, not a single hard-coded source. Default chains:
+- `MetadataProviders`: `["MusicBrainz", "CuetoolsDb"]` — when both
+  return matches, the orchestrator synthesizes a "Merged (MB + CTDB)"
+  candidate (MB wins on conflict, CTDB fills nulls including missing
+  track titles) and prepends it to the dropdown.
+- `CoverArtProviders`: `["CoverArtArchive", "iTunesSearch", "Deezer"]`
+  — first non-empty bytes win; chain stops on first hit, so common
+  cases never touch iTunes/Deezer.
+
+**Why now:** A real Various-Artists compilation we own lives in CTDB but
+not MusicBrainz, so a single-source design fails it entirely. Even
+when MB has a release, CTDB sometimes carries fields MB lacks
+(local-language titles, regional release dates).
+
+**Alternatives considered:**
+
+- **Primary + single fallback:** Simpler but inflexible — adding a
+  third source means another code change. The chain pattern lets a
+  user reorder providers in `config.json` without touching code.
+- **Parallel queries with quorum scoring:** Would let us auto-pick
+  the most-agreed-upon answer, but it overweights popular discs and
+  is a significant complication. Defer until we hit a case where the
+  current "MB wins, others fill" rule is wrong.
+
+**Provider contract:** Every metadata provider returns
+`@{ Source; Status; BestMatch; Candidates; Diagnostic }`. Every
+cover-art provider returns `@{ Source; Bytes; Url; Diagnostic }`.
+Provider files live at `src/core/metadata/Get-MetadataFromXxx.ps1`
+and `src/core/coverart/Get-CoverArtFromXxx.ps1`.
+
+**Deferred to a later round (intentionally NOT v1):**
+
+- **Discogs** — needs a personal access token; great for vinyl but
+  outside the "no manual setup" UX goal for parents.
+- **fanart.tv** — needs a project key, and its sweet spot is artist
+  backgrounds, not per-album covers.
+- **GnuDB / freedb** — last-mile-relevant for very old / regional
+  discs but the protocol is essentially abandoned and the database
+  is stale.
+- **Apple Music / Last.fm / Spotify / Amazon** — require API keys or
+  paid tiers; iTunes Search already covers Apple's catalog without
+  auth for our purposes.
+
+Revisit after Phase 6 if rip-failure-by-no-metadata becomes a real
+pattern in the field.

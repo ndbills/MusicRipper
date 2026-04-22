@@ -140,6 +140,18 @@ function New-RipperConfigObject {
         # True iff a PSCredential is on disk in credentials.clixml (DPAPI).
         # Flag only — never store the cleartext or even the username here.
         HasSynologyCredential   = $false
+
+        # Phase 5.2: ordered metadata-provider chain. MusicBrainz is the
+        # canonical curated source; CTDB carries community-submitted
+        # metadata for releases MB has never indexed. The orchestrator
+        # synthesizes a "Merged (MB + CTDB)" candidate when both return
+        # matches (MB wins on conflict, CTDB fills nulls).
+        MetadataProviders       = @('MusicBrainz', 'CuetoolsDb')
+
+        # Phase 5.2: ordered cover-art provider chain. First non-empty
+        # bytes win. CAA needs an MB ReleaseMbid; iTunes/Deezer fall back
+        # to artist+album text search. All three are free / no auth.
+        CoverArtProviders       = @('CoverArtArchive', 'iTunesSearch', 'Deezer')
     }
 }
 
