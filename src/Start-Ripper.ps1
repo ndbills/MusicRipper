@@ -57,6 +57,7 @@ Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 . (Join-Path $repoRoot 'src\core\Move-ToLibrary.ps1')
 . (Join-Path $repoRoot 'src\core\New-ReviewQueueArtifacts.ps1')
 . (Join-Path $repoRoot 'src\core\Invoke-PostProcess.ps1')
+. (Join-Path $repoRoot 'src\core\Resume.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-MetadataDialog.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-RipProgress.ps1')
 
@@ -193,6 +194,50 @@ if (-not $deps.Ok) {
     return
 }
 
+# --- Resume orphaned rips --------------------------------------------------
+# Any folder under <LibraryRoot>\_inbox\ that still has _ripper-state.json
+# is a rip whose post-process never finished (crash, power loss, manual exit
+# between Invoke-Rip and Invoke-RipperPostProcess). Offer to finish them now
+# before touching the drive — running the disc-id step would be wasted work
+# if the user wants to bail out and recover by hand instead.
+$orphans = @(Find-RipperOrphanedRips -LibraryRoot $cfg.LibraryRoot)
+if ($orphans.Count -gt 0) {
+    $names = ($orphans | ForEach-Object { "  - $(Split-Path -Leaf $_.Folder)" }) -join "`n"
+    Write-RipperLog INFO 'Start-Ripper' "Found $($orphans.Count) orphaned rip(s)."
+
+    Add-Type -AssemblyName System.Windows.Forms | Out-Null
+    $rc = [System.Windows.Forms.MessageBox]::Show(
+        "MusicRipper found $($orphans.Count) unfinished rip(s) in your inbox:`n`n$names`n`nFinish them now? (Tag, ReplayGain, and move to your library / review queue.)`n`nYes = process them all`nNo  = skip and continue with today's disc`nCancel = quit",
+        'MusicRipper - Resume Unfinished Rips',
+        [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
+        [System.Windows.Forms.MessageBoxIcon]::Question)
+
+    if ($rc -eq [System.Windows.Forms.DialogResult]::Cancel) {
+        Write-RipperLog INFO 'Start-Ripper' 'User cancelled at orphan-resume prompt.'
+        Stop-RipperLog
+        return
+    }
+    if ($rc -eq [System.Windows.Forms.DialogResult]::Yes) {
+        $resumeFails = @()
+        foreach ($orphan in $orphans) {
+            try {
+                $rpp = Resume-RipperOrphan -RipFolder $orphan.Folder -LibraryRoot $cfg.LibraryRoot
+                Write-RipperLog INFO 'Start-Ripper' "Resumed orphan -> $($rpp.Target)"
+            } catch {
+                Write-RipperLog ERROR 'Start-Ripper' "Resume failed for $($orphan.Folder): $($_.Exception.Message)"
+                $resumeFails += [pscustomobject]@{ Folder = $orphan.Folder; Error = $_.Exception.Message }
+            }
+        }
+        if ($resumeFails.Count -gt 0) {
+            $failList = ($resumeFails | ForEach-Object { "  - $(Split-Path -Leaf $_.Folder): $($_.Error)" }) -join "`n"
+            Show-RipperInfo "Some orphan rips could not be finished:`n`n$failList`n`nThe sidecars are still in place — try again next launch, or use src\tools\Complete-OrphanedRip.ps1." `
+                'MusicRipper - Resume Issues' 'Warning'
+        }
+    } else {
+        Write-RipperLog INFO 'Start-Ripper' 'User chose to skip orphan resume.'
+    }
+}
+
 # --- Read disc -------------------------------------------------------------
 # If the tray was left open, close it first so the user doesn't get an
 # immediate "no disc" error. After a close, the drive needs a beat to spin
@@ -302,6 +347,21 @@ switch ($choice.Action) {
         $phase5Target  = $null
         $phase5Quality = $null
         if ($result.Status -ne 'Cancelled' -and $result.Status -ne 'Failed') {
+            # Drop a sidecar BEFORE running post-process so a crash mid-tag
+            # leaves the next launch enough breadcrumbs to finish the job.
+            try {
+                $coverLeaf = if ($result.CoverArtFile) { Split-Path -Leaf $result.CoverArtFile } else { $null }
+                Write-RipperRipState `
+                    -RipFolder        $result.OutputDir `
+                    -DiscId           $disc.DiscId `
+                    -Metadata         $m `
+                    -LogFileName      (Split-Path -Leaf $result.LogFile) `
+                    -CoverArtFileName $coverLeaf | Out-Null
+            } catch {
+                # Sidecar is best-effort; a write failure shouldn't block
+                # post-process. Log and continue.
+                Write-RipperLog WARN 'Start-Ripper' "Sidecar write failed: $($_.Exception.Message)"
+            }
             try {
                 $pp = Invoke-RipperPostProcess `
                     -RipFolder    $result.OutputDir `
@@ -312,6 +372,10 @@ switch ($choice.Action) {
                     -CoverArtFile $result.CoverArtFile
                 $phase5Quality = $pp.Quality
                 $phase5Target  = $pp.Target
+                # Happy path: clear the sidecar from the post-move folder.
+                try { Remove-RipperRipState -RipFolder $pp.Target } catch {
+                    Write-RipperLog WARN 'Start-Ripper' "Sidecar cleanup failed: $($_.Exception.Message)"
+                }
             } catch {
                 Write-RipperLog ERROR 'Start-Ripper' "Phase 5 pipeline failed: $($_.Exception.Message)"
                 Show-RipperInfo "Rip succeeded but post-processing failed:`n`n  $($_.Exception.Message)`n`nThe raw rip is still at:`n  $($result.OutputDir)`n`nSee log:`n  $logPath" `
