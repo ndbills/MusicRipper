@@ -199,7 +199,11 @@ function Get-RipperDiscMetadata {
             Write-RipperLog WARN 'Get-DiscMetadata' "Config load failed; using default provider list. ($($_.Exception.Message))"
         }
         if (-not $Providers -or $Providers.Count -eq 0) {
-            $Providers = @('MusicBrainz')
+            # Fallback when no config field is present (e.g. a config.json
+            # written before Phase 5.2). Mirror the template default so a
+            # missing key behaves the same as the documented out-of-the-box
+            # config — otherwise pre-5.2 users silently lose CTDB.
+            $Providers = @('MusicBrainz', 'CuetoolsDb')
         }
     }
 
