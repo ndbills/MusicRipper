@@ -226,8 +226,26 @@ function New-RipperFlacTagSet {
 
     $tags.Add("MUSICBRAINZ_DISCID=$DiscId")
     if ($Metadata.PSObject.Properties['ReleaseMbid']      -and $Metadata.ReleaseMbid)      { $tags.Add("MUSICBRAINZ_ALBUMID=$($Metadata.ReleaseMbid)") }
-    if ($Metadata.PSObject.Properties['AlbumArtistMbid']  -and $Metadata.AlbumArtistMbid)  { $tags.Add("MUSICBRAINZ_ALBUMARTISTID=$($Metadata.AlbumArtistMbid)") }
-    if ($tm.PSObject.Properties['ArtistMbid']             -and $tm.ArtistMbid)             { $tags.Add("MUSICBRAINZ_ARTISTID=$($tm.ArtistMbid)") }
+    # Multi-value MUSICBRAINZ_ALBUMARTISTID / MUSICBRAINZ_ARTISTID: Picard
+    # writes one tag line per credited artist (the UI just joins them with
+    # '; ' for display). Accept either a string[] (current shape) or a
+    # legacy slash-joined string for backwards compatibility.
+    if ($Metadata.PSObject.Properties['AlbumArtistMbid']  -and $Metadata.AlbumArtistMbid) {
+        $aaIds = if ($Metadata.AlbumArtistMbid -is [string]) {
+            @($Metadata.AlbumArtistMbid -split '/' | Where-Object { $_ })
+        } else {
+            @($Metadata.AlbumArtistMbid | Where-Object { $_ })
+        }
+        foreach ($id in $aaIds) { $tags.Add("MUSICBRAINZ_ALBUMARTISTID=$id") }
+    }
+    if ($tm.PSObject.Properties['ArtistMbid']             -and $tm.ArtistMbid) {
+        $aIds = if ($tm.ArtistMbid -is [string]) {
+            @($tm.ArtistMbid -split '/' | Where-Object { $_ })
+        } else {
+            @($tm.ArtistMbid | Where-Object { $_ })
+        }
+        foreach ($id in $aIds) { $tags.Add("MUSICBRAINZ_ARTISTID=$id") }
+    }
     if ($tm.PSObject.Properties['RecordingMbid']          -and $tm.RecordingMbid)          { $tags.Add("MUSICBRAINZ_TRACKID=$($tm.RecordingMbid)") }
     # Picard's MUSICBRAINZ_RELEASETRACKID == Picard's "MusicBrainz Track Id"
     # (the per-release track entity, distinct from the cross-release

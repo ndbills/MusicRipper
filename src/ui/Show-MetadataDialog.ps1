@@ -185,10 +185,15 @@ function ConvertFrom-MetadataViewModel {
         $artistSort = $null
         $artists = $null
         $releaseTrackMbid = $null
+        # Prefer the source's ArtistMbid (may be a string[] for multi-artist
+        # credits). Fall back to the row's flat string only if the source
+        # didn't carry it (legacy candidates).
+        $artistMbid = [string]$row.ArtistMbid
         if ($srcT) {
             if ($srcT.PSObject.Properties['ArtistSort'])       { $artistSort       = [string]$srcT.ArtistSort }
             if ($srcT.PSObject.Properties['Artists'])          { $artists          = $srcT.Artists }
             if ($srcT.PSObject.Properties['ReleaseTrackMbid']) { $releaseTrackMbid = [string]$srcT.ReleaseTrackMbid }
+            if ($srcT.PSObject.Properties['ArtistMbid'] -and $srcT.ArtistMbid) { $artistMbid = $srcT.ArtistMbid }
         }
         [pscustomobject]@{
             Number           = [int]$row.Number
@@ -196,7 +201,7 @@ function ConvertFrom-MetadataViewModel {
             Artist           = [string]$row.Artist
             Artists          = $artists
             ArtistSort       = $artistSort
-            ArtistMbid       = [string]$row.ArtistMbid
+            ArtistMbid       = $artistMbid
             RecordingMbid    = [string]$row.RecordingMbid
             ReleaseTrackMbid = $releaseTrackMbid
             LengthMs         = [int]$row.LengthMs

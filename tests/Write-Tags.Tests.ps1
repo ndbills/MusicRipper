@@ -182,7 +182,21 @@ Describe 'New-RipperFlacTagSet' {
             $tags | Should -Contain 'CATALOGNUMBER=PCS 7088'
             $tags | Should -Contain 'BARCODE=094638246817'
             $tags | Should -Contain 'ASIN=B0025KVLU8'
-            $tags | Should -Contain 'MUSICBRAINZ_ALBUMARTISTID=mbid-1/mbid-2'
+            # Legacy slash-joined AlbumArtistMbid string still expands to one
+            # MUSICBRAINZ_ALBUMARTISTID= line per id (Picard parity for
+            # multi-credit releases).
+            $tags | Should -Contain 'MUSICBRAINZ_ALBUMARTISTID=mbid-1'
+            $tags | Should -Contain 'MUSICBRAINZ_ALBUMARTISTID=mbid-2'
+        }
+
+        It 'splits multi-value AlbumArtistMbid string[] into one tag line per id (Picard parity)' {
+            $md = New-RichMetadata
+            $md.AlbumArtistMbid = @('mbid-a','mbid-b','mbid-c')
+            $tags = New-RipperFlacTagSet -Metadata $md -TrackIndex 0 -DiscId 'd' -IsCompilation $false
+            $tags | Should -Contain 'MUSICBRAINZ_ALBUMARTISTID=mbid-a'
+            $tags | Should -Contain 'MUSICBRAINZ_ALBUMARTISTID=mbid-b'
+            $tags | Should -Contain 'MUSICBRAINZ_ALBUMARTISTID=mbid-c'
+            ($tags | Where-Object { $_ -like 'MUSICBRAINZ_ALBUMARTISTID=*' }).Count | Should -Be 3
         }
 
         It 'ARTISTSORT falls back to AlbumArtistSort when track has no ArtistSort' {

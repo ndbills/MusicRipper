@@ -191,13 +191,15 @@ function ConvertFrom-MusicBrainzDiscIdResponse {
             }
             "$sn$($_.joinphrase)"
         }) -join ''
-        # Picard joins multi-artist MBIDs with '/' (e.g. collab releases).
+        # Per-credit album-artist MBIDs (Picard parity). Stored as a
+        # string[] so callers emit one MUSICBRAINZ_ALBUMARTISTID= line
+        # per credited artist, matching Picard's behavior. Falls back to
+        # an empty array when MB returned no artist objects.
         $albumArtistMbid = if ($rel.'artist-credit') {
-            (@($rel.'artist-credit') | ForEach-Object {
+            @($rel.'artist-credit' | ForEach-Object {
                 if ($_.artist) { [string]$_.artist.id } else { $null }
-            } | Where-Object { $_ }) -join '/'
-        } else { $null }
-        if (-not $albumArtistMbid) { $albumArtistMbid = $null }
+            } | Where-Object { $_ })
+        } else { @() }
 
         # Year: first 4 chars of release.date if present.
         $year = $null
@@ -277,13 +279,12 @@ function ConvertFrom-MusicBrainzDiscIdResponse {
                     }
                     "$sn$($_.joinphrase)"
                 }) -join ''
-                # Slash-joined for multi-artist tracks (Picard convention).
+                # Per-credit track-artist MBIDs (Picard parity).
                 $trackArtistMbid = if ($t.'artist-credit') {
-                    (@($t.'artist-credit') | ForEach-Object {
+                    @($t.'artist-credit' | ForEach-Object {
                         if ($_.artist) { [string]$_.artist.id } else { $null }
-                    } | Where-Object { $_ }) -join '/'
-                } else { $null }
-                if (-not $trackArtistMbid) { $trackArtistMbid = $null }
+                    } | Where-Object { $_ })
+                } else { @() }
                 # Length: prefer track.length (medium-specific); fall back to
                 # recording.length (canonical, may differ slightly).
                 $lengthMs = if ($t.length) { [int]$t.length }
