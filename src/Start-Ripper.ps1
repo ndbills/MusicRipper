@@ -1,14 +1,16 @@
 <#
 .SYNOPSIS
-    Entry point parents click. Phases 1-3: config check, disc-id read,
-    MusicBrainz lookup, confirmation dialog.
+    Entry point parents click. Phases 1-5: config check, disc-id read,
+    MusicBrainz lookup, confirmation dialog, secure rip, quality gate,
+    tag + ReplayGain, library/_ReviewQueue placement.
 
 .DESCRIPTION
     Pipeline position:
-        Top of the daily-flow sequence. In later phases this will:
-            ... -> Show-MetadataDialog -> Invoke-Rip (Phase 4) ->
-            Test-RipQuality -> Write-Tags -> Move-ToLibrary ->
-            post-processors -> eject.
+        Top of the daily-flow sequence:
+            ... -> Show-MetadataDialog -> Invoke-Rip ->
+            Test-RipQuality -> Write-Tags (library only) ->
+            Move-ToLibrary -> Write-RipperReviewTxt +
+            New-RipperReviewImage (review queue only) -> eject.
 
     Current behavior:
         - Loads config; aborts gracefully if missing.
@@ -45,16 +47,20 @@ Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1')  -Force
 Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
 Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 
-# Dot-source the Phase 2/3/4 core scripts and dialogs so their functions
+# Dot-source the Phase 2/3/4/5 core scripts and dialogs so their functions
 # are in scope.
 . (Join-Path $repoRoot 'src\core\Get-DiscId.ps1')
 . (Join-Path $repoRoot 'src\core\Get-DiscMetadata.ps1')
 . (Join-Path $repoRoot 'src\core\Invoke-Rip.ps1')
+. (Join-Path $repoRoot 'src\core\Test-RipQuality.ps1')
+. (Join-Path $repoRoot 'src\core\Write-Tags.ps1')
+. (Join-Path $repoRoot 'src\core\Move-ToLibrary.ps1')
+. (Join-Path $repoRoot 'src\core\New-ReviewQueueArtifacts.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-MetadataDialog.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-RipProgress.ps1')
 
 $logPath = Start-RipperLog -Context 'start-ripper'
-Write-RipperLog INFO 'Start-Ripper' 'Phase 4 entry: config + disc-id + metadata + confirm + rip.'
+Write-RipperLog INFO 'Start-Ripper' 'Phase 5 entry: config + disc-id + metadata + confirm + rip + quality/tag/move.'
 
 # --- Helpers ---------------------------------------------------------------
 function Show-RipperInfo([string]$msg, [string]$title = 'MusicRipper', [string]$icon = 'Information') {
@@ -242,6 +248,66 @@ switch ($choice.Action) {
         Write-RipperLog INFO 'Start-Ripper' `
             "Rip finished: Status=$($result.Status) FailedSectors=$($result.FailedSectors) Output=$($result.OutputDir)"
 
+        # --- Phase 5: quality gate -> tag -> move -> review artifacts -----
+        # Only run the post-rip pipeline on rips that actually produced
+        # output. Cancelled/Failed rips fall through to the user dialog
+        # without further processing.
+        $phase5Target  = $null
+        $phase5Quality = $null
+        if ($result.Status -ne 'Cancelled' -and $result.Status -ne 'Failed') {
+            try {
+                $phase5Quality = Test-RipQuality -LogPath $result.LogFile
+                Write-RipperLog INFO 'Start-Ripper' `
+                    "Quality gate: $($phase5Quality.Status) -> $($phase5Quality.Destination) (prefix='$($phase5Quality.RoutingPrefix)')"
+
+                # Tag only library-bound rips. Review-queue items keep their
+                # raw, untagged state so a human in Picard sees exactly what
+                # came off the disc.
+                if ($phase5Quality.Destination -eq 'Library') {
+                    $tagArgs = @{
+                        RipFolder = $result.OutputDir
+                        Metadata  = $m
+                        DiscId    = $disc.DiscId
+                    }
+                    if ($result.CoverArtFile -and (Test-Path -LiteralPath $result.CoverArtFile)) {
+                        $tagArgs.CoverArtBytes = [System.IO.File]::ReadAllBytes($result.CoverArtFile)
+                    }
+                    Invoke-RipperWriteTags @tagArgs | Out-Null
+                }
+
+                $move = Move-RipToLibrary `
+                    -RipFolder   $result.OutputDir `
+                    -LibraryRoot $cfg.LibraryRoot `
+                    -Metadata    $m `
+                    -Quality     $phase5Quality `
+                    -DiscId      $disc.DiscId
+                $phase5Target = $move.Target
+                Write-RipperLog INFO 'Start-Ripper' `
+                    "Moved to: $($move.Target) (review=$($move.IsReviewQueue), files=$($move.FilesMoved))"
+
+                if ($move.IsReviewQueue) {
+                    $logFileName = Split-Path -Leaf $result.LogFile
+                    Write-RipperReviewTxt `
+                        -ReviewFolder $move.Target `
+                        -Quality      $phase5Quality `
+                        -Metadata     $m `
+                        -DiscId       $disc.DiscId `
+                        -LogFileName  $logFileName | Out-Null
+                    New-RipperReviewImage `
+                        -ReviewFolder $move.Target `
+                        -Metadata     $m `
+                        -DiscId       $disc.DiscId | Out-Null
+                }
+            } catch {
+                Write-RipperLog ERROR 'Start-Ripper' "Phase 5 pipeline failed: $($_.Exception.Message)"
+                Show-RipperInfo "Rip succeeded but post-processing failed:`n`n  $($_.Exception.Message)`n`nThe raw rip is still at:`n  $($result.OutputDir)`n`nSee log:`n  $logPath" `
+                    'MusicRipper - Post-Processing Failed' 'Warning'
+                Invoke-RipperEject
+                Stop-RipperLog
+                return
+            }
+        }
+
         # Build summary text per the Invoke-RipperRip contract. We surface
         # Status prominently because that's what Phase 5 routing will
         # branch on (Verified/ProbablyGood -> library, Suspect/NotInDatabase
@@ -259,6 +325,12 @@ switch ($choice.Action) {
             default {
                 $ar    = $result.AccurateRip
                 $ctdb  = $result.Ctdb
+                $destLine = if ($phase5Target) {
+                    $kind = if ($phase5Quality -and $phase5Quality.Destination -eq 'ReviewQueue') { 'Review queue' } else { 'Library' }
+                    "${kind}: $phase5Target"
+                } else {
+                    "Output: $($result.OutputDir)"
+                }
                 $lines = @(
                     "Status: $($result.Status)"
                     ""
@@ -269,7 +341,7 @@ switch ($choice.Action) {
                     "CTDB:        $($ctdb.Status)$(if ($null -ne $ctdb.MinConfidence) { " (confidence $($ctdb.MinConfidence))" })"
                     "Re-read sectors: $($result.FailedSectors)"
                     ""
-                    "Output: $($result.OutputDir)"
+                    $destLine
                 )
                 if ($result.HtoaWarning) { $lines += @("", "Note: $($result.HtoaWarning)") }
                 if ($result.Errors -and $result.Errors.Count -gt 0) {

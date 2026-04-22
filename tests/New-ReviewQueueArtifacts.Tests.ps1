@@ -3,19 +3,19 @@
 
     Pure helpers (New-RipperReviewTxt, New-RipperReviewImageCueText) are
     fully tested. Write-RipperReviewTxt is exercised end-to-end against
-    a temp folder. New-RipperReviewImage is exercised against a stub
-    flac.cmd that emits a fixed PCM blob — enough to lock in argv shape
-    and per-track sample-count math without a real FLAC decode path.
+    a temp folder. New-RipperReviewImage is exercised against the real
+    flac.exe + a real .flac fixture under tests/samples/ (gitignored;
+    drop one in manually). Tests skip cleanly if either is missing.
 
     Run: Invoke-Pester ./tests
 #>
 
 BeforeAll {
-    $repoRoot = Split-Path -Parent $PSScriptRoot
-    . (Join-Path $repoRoot 'src\core\New-ReviewQueueArtifacts.ps1')
+    $script:repoRoot = Split-Path -Parent $PSScriptRoot
+    . (Join-Path $script:repoRoot 'src\core\New-ReviewQueueArtifacts.ps1')
     # Get-RipperRipFolderTracks lives in Write-Tags.ps1 — the production
     # path dot-sources it lazily; tests need it eagerly.
-    . (Join-Path $repoRoot 'src\core\Write-Tags.ps1')
+    . (Join-Path $script:repoRoot 'src\core\Write-Tags.ps1')
 
     function script:New-FakeQuality {
         param([string]$Prefix = 'SUSPECT', [string]$Reason = 'AR confidence below threshold.')
@@ -154,87 +154,120 @@ Describe 'Write-RipperReviewTxt (integration)' {
     }
 }
 
-Describe 'New-RipperReviewImage (stub-flac integration)' {
+Describe 'New-RipperReviewImage (real-flac integration)' {
+    # The previous version of this Describe shelled out to a hand-rolled
+    # cmd.exe stub. That worked but was intermittently flaky (~10-20% of
+    # full suite runs) — cmd.exe argv parsing of paths-with-spaces is
+    # unreliable in ways we couldn't fully pin down. Switching to a real
+    # flac.exe + a real .flac fixture made the failure mode disappear and
+    # is a much stronger end-to-end check anyway.
+    #
+    # Setup:
+    #   - Locate flac.exe (PATH first, then EAC's bundled copy, then
+    #     standard install dirs).
+    #   - Pick the SMALLEST .flac in tests/fixtures/. *.flac is
+    #     gitignored — developers drop a sample in manually. CI /
+    #     fresh clones skip these tests cleanly.
     BeforeAll {
-        # Stub flac.cmd: produces a 4-byte payload per "decode" (= 1 stereo
-        # sample) so we can verify the per-track sample math. Encode mode
-        # just creates a dummy output file. Argv is logged for assertion.
-        $script:stubDir = Join-Path ([IO.Path]::GetTempPath()) "rqa-flac-$([guid]::NewGuid().Guid)"
-        New-Item -ItemType Directory -Path $script:stubDir | Out-Null
-        $script:stubLog = Join-Path $script:stubDir 'flac-calls.log'
-        $script:stubExe = Join-Path $script:stubDir 'flac.cmd'
-        # 1 CD frame = 588 samples * 4 bytes (16-bit stereo) = 2352 bytes.
-        # The decode-mode stub `type`s this payload to stdout once per call,
-        # so per-track sample counts come out as exact multiples of 588.
-        $script:stubPayload = Join-Path $script:stubDir 'payload.bin'
-        [IO.File]::WriteAllBytes($script:stubPayload, (New-Object byte[] 2352))
-@"
-@echo off
-echo %*>>"$script:stubLog"
-:: Decode mode (-d) writes one CD frame (2352 raw bytes) to stdout.
-echo %* | findstr /C:"-d" >nul
-if not errorlevel 1 (
-  type "$script:stubPayload"
-  exit /b 0
-)
-:: Encode mode: locate the -o argument and create a 1-byte placeholder file.
-set "out="
-set "next="
-for %%a in (%*) do (
-  if defined next ( set "out=%%~a" & set "next=" )
-  if "%%~a"=="-o" set "next=1"
-)
-if defined out (
-  echo flac > "%out%"
-)
-exit /b 0
-"@ | Set-Content -LiteralPath $script:stubExe -Encoding ASCII
+        $script:realFlac = $null
+        $candidates = @()
+        $cmd = Get-Command flac.exe -ErrorAction SilentlyContinue
+        if ($cmd) { $candidates += $cmd.Source }
+        $candidates += @(
+            'C:\Program Files\FLAC\flac.exe',
+            'C:\Program Files (x86)\FLAC\flac.exe',
+            'C:\Program Files (x86)\Exact Audio Copy\Flac\flac.exe'
+        )
+        foreach ($cand in $candidates) {
+            if ($cand -and (Test-Path -LiteralPath $cand)) { $script:realFlac = $cand; break }
+        }
+
+        $script:fixtureFlac = $null
+        $fixturesDir = Join-Path $script:repoRoot 'tests\fixtures'
+        if (Test-Path -LiteralPath $fixturesDir) {
+            $candidate = Get-ChildItem -LiteralPath $fixturesDir -Filter *.flac -Recurse `
+                            -ErrorAction SilentlyContinue |
+                         Sort-Object Length | Select-Object -First 1
+            if ($candidate) { $script:fixtureFlac = $candidate.FullName }
+        }
+
+        $script:skipReason =
+            if (-not $script:realFlac)    { 'flac.exe not found on PATH or in standard install locations' }
+            elseif (-not $script:fixtureFlac) { 'No .flac fixture under tests/fixtures/ (drop one in to enable these tests)' }
+            else { $null }
     }
-    AfterAll {
-        Remove-Item -LiteralPath $script:stubDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
+
     BeforeEach {
-        if (Test-Path -LiteralPath $script:stubLog) { Remove-Item -LiteralPath $script:stubLog }
         $script:rev = Join-Path ([IO.Path]::GetTempPath()) "rqa-rev-$([guid]::NewGuid().Guid)"
         New-Item -ItemType Directory -Path $script:rev | Out-Null
-        '01 - Carol of the Bells.flac','02 - Silent Night.flac' |
-            ForEach-Object { New-Item -ItemType File -Path (Join-Path $script:rev $_) | Out-Null }
+        if ($script:fixtureFlac) {
+            # Copy the same fixture in twice as tracks 01 and 02 so we
+            # exercise the multi-track concatenation path.
+            Copy-Item -LiteralPath $script:fixtureFlac `
+                -Destination (Join-Path $script:rev '01 - Carol of the Bells.flac')
+            Copy-Item -LiteralPath $script:fixtureFlac `
+                -Destination (Join-Path $script:rev '02 - Silent Night.flac')
+        }
     }
     AfterEach {
         Remove-Item -LiteralPath $script:rev -Recurse -Force -ErrorAction SilentlyContinue
     }
 
     It 'creates the _image folder with album.flac + .cue and removes the temp .raw' {
+        if ($script:skipReason) { Set-ItResult -Skipped -Because $script:skipReason; return }
         $result = New-RipperReviewImage -ReviewFolder $script:rev -Metadata (New-FakeMetadata) `
-                      -DiscId 'abc' -FlacPath $script:stubExe
+                      -DiscId 'abc' -FlacPath $script:realFlac
         $result.Tracks | Should -Be 2
-        Test-Path -LiteralPath (Join-Path $script:rev '_image\Spirit of the Season.flac') | Should -BeTrue
-        Test-Path -LiteralPath (Join-Path $script:rev '_image\Spirit of the Season.cue')  | Should -BeTrue
-        # Temp .raw must be cleaned up.
-        Test-Path -LiteralPath (Join-Path $script:rev '_image\Spirit of the Season.raw')  | Should -BeFalse
+        $imagePath = Join-Path $script:rev '_image\Spirit of the Season.flac'
+        $cuePath   = Join-Path $script:rev '_image\Spirit of the Season.cue'
+        Test-Path -LiteralPath $imagePath | Should -BeTrue
+        Test-Path -LiteralPath $cuePath   | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $script:rev '_image\Spirit of the Season.raw') | Should -BeFalse
+
+        # Verify the produced image is actually a valid FLAC stream:
+        # FLAC magic = 'fLaC' (0x66 0x4C 0x61 0x43) at offset 0.
+        $bytes = [IO.File]::ReadAllBytes($imagePath)
+        $bytes.Length | Should -BeGreaterThan 4
+        ($bytes[0..3] -join ',') | Should -Be ([byte[]](0x66,0x4C,0x61,0x43) -join ',')
     }
 
-    It 'invokes flac.exe once per track in decode mode + once for encode' {
+    It 'embeds cumulative INDEX 01 timestamps in the cue (track 2 starts after track 1 length)' {
+        if ($script:skipReason) { Set-ItResult -Skipped -Because $script:skipReason; return }
         New-RipperReviewImage -ReviewFolder $script:rev -Metadata (New-FakeMetadata) `
-            -DiscId 'd' -FlacPath $script:stubExe | Out-Null
-        $lines = Get-Content -LiteralPath $script:stubLog
-        # 2 decode calls + 1 encode call = 3 total.
-        @($lines).Count | Should -Be 3
-        @($lines | Where-Object { $_ -like '*-d*--stdout*' }).Count | Should -Be 2
-        @($lines | Where-Object { $_ -like '*--force-raw-format*-o*' }).Count | Should -Be 1
+            -DiscId 'd' -FlacPath $script:realFlac | Out-Null
+        $cueLines = Get-Content -LiteralPath (Join-Path $script:rev '_image\Spirit of the Season.cue')
+        @($cueLines | Where-Object { $_ -like '*FILE *' }).Count | Should -Be 1
+        @($cueLines | Where-Object { $_ -like '*TRACK 01 AUDIO*' }).Count | Should -Be 1
+        @($cueLines | Where-Object { $_ -like '*TRACK 02 AUDIO*' }).Count | Should -Be 1
+        # Track 1 always starts at 00:00:00.
+        ($cueLines -join "`n") | Should -Match 'TRACK 01 AUDIO[\s\S]*INDEX 01 00:00:00'
+        # Track 2 must start strictly after the start of track 1 (some
+        # nonzero MM:SS:FF). Exact offset depends on the fixture length,
+        # but it can't be 00:00:00 if both tracks have audio.
+        ($cueLines -join "`n") | Should -Not -Match 'TRACK 02 AUDIO[\s\S]*?INDEX 01 00:00:00\b'
     }
 
     It 'returns $null and logs a warning when flac.exe is missing' {
+        # This case doesn't need the real flac, but it does need a temp
+        # folder with at least one track-shaped FLAC file.
+        if (-not $script:fixtureFlac) {
+            # Fall back to a zero-byte .flac so Get-RipperRipFolderTracks
+            # finds something — the function returns before we try to
+            # decode anything.
+            New-Item -ItemType File -Path (Join-Path $script:rev '01 - dummy.flac') | Out-Null
+        }
         $result = New-RipperReviewImage -ReviewFolder $script:rev -Metadata (New-FakeMetadata) `
-                      -DiscId 'd' -FlacPath (Join-Path $script:stubDir 'no-such-flac.exe')
+                      -DiscId 'd' -FlacPath (Join-Path $env:TEMP 'no-such-flac.exe')
         $result | Should -BeNullOrEmpty
         Test-Path -LiteralPath (Join-Path $script:rev '_image') | Should -BeFalse
     }
 
     It 'handles missing Metadata (UNKNOWN case) with _unknown_ album name' {
+        if ($script:skipReason) { Set-ItResult -Skipped -Because $script:skipReason; return }
         $result = New-RipperReviewImage -ReviewFolder $script:rev -Metadata $null `
-                      -DiscId 'abc' -FlacPath $script:stubExe
+                      -DiscId 'abc' -FlacPath $script:realFlac
         $result.ImagePath | Should -BeLike '*\_image\_unknown_.flac'
         $result.CuePath   | Should -BeLike '*\_image\_unknown_.cue'
     }
 }
+

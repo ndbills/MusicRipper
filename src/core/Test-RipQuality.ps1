@@ -254,6 +254,7 @@ function Test-RipQuality {
             OriginalStatus = 'Unknown'
             Destination    = $routing.Destination
             QueuePrefix    = $routing.QueuePrefix
+            RoutingPrefix  = if ($routing.QueuePrefix) { [string]$routing.QueuePrefix } else { '' }
             Reason         = 'Rip log file not found on disk'
             Summary        = $null
             LogPath        = $LogPath
@@ -275,11 +276,13 @@ function Test-RipQuality {
     }
 
     $routing = Get-RipperQualityRouting -Status $finalStatus
+    $routingPrefix = if ($routing.QueuePrefix) { [string]$routing.QueuePrefix } else { '' }
     [pscustomobject]@{
         Status         = $finalStatus
         OriginalStatus = $original
         Destination    = $routing.Destination
         QueuePrefix    = $routing.QueuePrefix
+        RoutingPrefix  = $routingPrefix
         Reason         = $routing.Reason
         Summary        = $summary
         LogPath        = $LogPath

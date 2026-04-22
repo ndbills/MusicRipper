@@ -332,10 +332,20 @@ function New-RipperReviewImage {
         $previousRawSize = $newSize
     }
 
-    & $FlacPath --silent --force-raw-format --sign=signed --endian=little `
-        --channels=2 --bps=16 --sample-rate=44100 -o $imagePath $rawPath
-    if ($LASTEXITCODE -ne 0) {
-        throw "flac.exe encode failed (exit $LASTEXITCODE)."
+    # Encode the concatenated raw PCM into the final image FLAC. Routed
+    # through cmd.exe (not the call operator) for two reasons:
+    #   1. $FlacPath may be a .cmd shim in tests; `&` on a .cmd leaks
+    #      stdout into our return pipeline, contaminating the
+    #      pscustomobject this function emits.
+    #   2. Start-Process -FilePath on a .cmd doesn't reliably quote
+    #      arguments containing spaces (album names like "Spirit of the
+    #      Season"). Passing the full command line through cmd.exe /c
+    #      lets us control quoting explicitly.
+    $encodeCmdLine = "/d /c `"`"$FlacPath`" --silent --force-raw-format --sign=signed --endian=little --channels=2 --bps=16 --sample-rate=44100 -o `"$imagePath`" `"$rawPath`"`""
+    $encodeProc    = Start-Process -FilePath cmd.exe -ArgumentList $encodeCmdLine `
+        -NoNewWindow -Wait -PassThru
+    if ($encodeProc.ExitCode -ne 0) {
+        throw "flac.exe encode failed (exit $($encodeProc.ExitCode))."
     }
     Remove-Item -LiteralPath $rawPath -Force
 
