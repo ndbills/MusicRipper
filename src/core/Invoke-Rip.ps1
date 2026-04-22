@@ -346,16 +346,22 @@ function Invoke-RipperRip {
         }
 
         $flacNames = New-Object 'System.String[]' $trackCount
+        $discNumber = 1
+        $totalDiscs = 1
+        if ($Metadata.PSObject.Properties['DiscNumber'] -and $Metadata.DiscNumber) {
+            $discNumber = [int]$Metadata.DiscNumber
+        }
+        if ($Metadata.PSObject.Properties['TotalDiscs'] -and $Metadata.TotalDiscs) {
+            $totalDiscs = [int]$Metadata.TotalDiscs
+        }
         for ($i = 0; $i -lt $trackCount; $i++) {
             $tm = $Metadata.Tracks[$i]
             $params = @{
                 TrackNumber  = [int]$tm.Number
                 Title        = [string]$tm.Title
                 TotalTracks  = $trackCount
-            }
-            if ($isCompilation) {
-                $params.Artist        = [string]$tm.Artist
-                $params.IsCompilation = $true
+                DiscNumber   = $discNumber
+                TotalDiscs   = $totalDiscs
             }
             $flacNames[$i] = New-RipperTrackFileName @params
         }

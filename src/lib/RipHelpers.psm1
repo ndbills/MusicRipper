@@ -57,7 +57,8 @@ function New-RipperTrackFileName {
     Output pattern (matches the Plex naming convention
     https://support.plex.tv/articles/200265296-adding-music-media-from-folders/):
 
-        "<NN> - <Title>.flac"
+        "<NN> - <Title>.flac"           (single-disc)
+        "<D><NN> - <Title>.flac"        (multi-disc; e.g. 101 / 202 / 1015)
 
     Per-track artist is NEVER embedded in the filename, even on
     compilations. Plex (and Navidrome / Jellyfin / Foobar) reads the
@@ -66,10 +67,17 @@ function New-RipperTrackFileName {
     shows plain `01 - Hooked On A Feeling.mp3`.
 
     Where:
+        D      = disc number (omitted entirely when TotalDiscs <= 1).
+                 Width = digits in TotalDiscs, minimum 1. So a 2-disc
+                 set gets "1"/"2"; a 12-disc box set gets "01".."12".
         NN     = zero-padded track number (width = digits in TotalTracks,
                  minimum 2). So a 9-track album gets "01..09"; a 12-track
                  album gets "01..12"; a 100-track box set gets "001..100".
         Title  = the user-confirmed track title (post-sanitization).
+
+    Plex's exact multi-disc example: "/Pink Floyd/The Wall/101 - In the Flesh.mp3",
+    "102 - The Thin Ice.mp3", "201 - Hey You.mp3" — all flat at album root,
+    no Disc N\ subfolder.
 
     Sanitization rules (per-segment, applied to Artist and Title separately
     so a slash in a title can't escape into the path):
@@ -101,14 +109,22 @@ function New-RipperTrackFileName {
 .PARAMETER IsCompilation
     Accepted but ignored. See -Artist.
 
+.PARAMETER DiscNumber
+    1-based disc number for multi-disc sets. Ignored when TotalDiscs
+    is not supplied or is <= 1.
+
+.PARAMETER TotalDiscs
+    Total disc count for multi-disc sets. When > 1, the disc number is
+    prepended to the track number (Plex spec).
+
 .EXAMPLE
     PS> New-RipperTrackFileName -TrackNumber 3 -Title 'Hey Jude' -TotalTracks 12
     03 - Hey Jude.flac
 
 .EXAMPLE
-    PS> New-RipperTrackFileName -TrackNumber 1 -Title 'AC/DC: Live' `
-            -TotalTracks 9 -Artist 'AC/DC' -IsCompilation
-    01 - AC DC  Live.flac
+    PS> New-RipperTrackFileName -TrackNumber 5 -Title 'Hey You' `
+            -TotalTracks 13 -DiscNumber 2 -TotalDiscs 2
+    205 - Hey You.flac
 #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -117,11 +133,21 @@ function New-RipperTrackFileName {
         [Parameter(Mandatory)] [AllowEmptyString()] [string]$Title,
         [Parameter(Mandatory)] [ValidateRange(1, 9999)] [int]$TotalTracks,
         [string]$Artist,
-        [switch]$IsCompilation
+        [switch]$IsCompilation,
+        [ValidateRange(1, 999)] [int]$DiscNumber = 1,
+        [ValidateRange(1, 999)] [int]$TotalDiscs = 1
     )
 
-    $width  = [Math]::Max(2, ([string]$TotalTracks).Length)
-    $numStr = $TrackNumber.ToString("D$width")
+    $trackWidth = [Math]::Max(2, ([string]$TotalTracks).Length)
+    $trackStr   = $TrackNumber.ToString("D$trackWidth")
+
+    $numStr = if ($TotalDiscs -gt 1) {
+        $discWidth = ([string]$TotalDiscs).Length
+        $discStr   = $DiscNumber.ToString("D$discWidth")
+        "$discStr$trackStr"
+    } else {
+        $trackStr
+    }
 
     $titleSafe = _SanitizeTrackField -Value $Title
     "$numStr - $titleSafe.flac"

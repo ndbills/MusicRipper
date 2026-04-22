@@ -53,6 +53,29 @@ Describe 'New-RipperTrackFileName' {
         New-RipperTrackFileName -TrackNumber 1 -Title $title -TotalTracks 5 |
             Should -Be '01 - Foo Bar Baz.flac'
     }
+
+    It 'prepends disc number to track number when TotalDiscs > 1 (Plex spec)' {
+        # 2-disc set, disc 1 track 5 -> 105 - Title.flac
+        New-RipperTrackFileName -TrackNumber 5 -Title 'Hey You' -TotalTracks 13 `
+            -DiscNumber 1 -TotalDiscs 2 |
+            Should -Be '105 - Hey You.flac'
+        # disc 2 track 12 -> 212 - Title.flac
+        New-RipperTrackFileName -TrackNumber 12 -Title 'Comfortably Numb' -TotalTracks 13 `
+            -DiscNumber 2 -TotalDiscs 2 |
+            Should -Be '212 - Comfortably Numb.flac'
+    }
+
+    It 'pads disc number for >=10-disc box sets' {
+        # 12-disc box, disc 3 track 7 of 14 -> 0307
+        New-RipperTrackFileName -TrackNumber 7 -Title 'X' -TotalTracks 14 `
+            -DiscNumber 3 -TotalDiscs 12 |
+            Should -Be '0307 - X.flac'
+    }
+
+    It 'omits disc prefix when TotalDiscs is 1 (default)' {
+        New-RipperTrackFileName -TrackNumber 5 -Title 'X' -TotalTracks 13 -DiscNumber 1 |
+            Should -Be '05 - X.flac'
+    }
 }
 
 Describe 'ConvertTo-RipperCueTime' {

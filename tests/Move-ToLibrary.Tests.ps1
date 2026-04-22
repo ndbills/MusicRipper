@@ -179,26 +179,33 @@ Describe 'Move-RipToLibrary (integration)' {
         Test-Path -LiteralPath $script:rip | Should -BeFalse  # source removed when empty
     }
 
-    It 'fans per-track FLACs into Disc N\ for multi-disc albums (cover/cue/log stay at root)' {
+    It 'multi-disc albums land flat at album root (Plex spec; disc # already in filename)' {
+        # The mover no longer creates Disc N\ subfolders — per the Plex
+        # naming convention, multi-disc tracks live flat at the album
+        # root with their disc-prefixed filenames (101, 102, 201, ...).
+        # The ripper produced the prefixed filenames upstream.
         $md = New-FakeMetadata -TotalDiscs 2 -DiscNumber 1
         $result = Move-RipToLibrary -RipFolder $script:rip -LibraryRoot $script:lib `
                       -Metadata $md -Quality (New-FakeQuality) -DiscId 'd'
 
         $result.IsMultiDisc | Should -BeTrue
         $album = $result.Target
-        Test-Path -LiteralPath (Join-Path $album 'Disc 1\01 - Carol of the Bells.flac') | Should -BeTrue
-        Test-Path -LiteralPath (Join-Path $album 'Disc 1\02 - Silent Night.flac')        | Should -BeTrue
-        Test-Path -LiteralPath (Join-Path $album 'cover.jpg')                            | Should -BeTrue
-        Test-Path -LiteralPath (Join-Path $album 'Spirit of the Season.cue')             | Should -BeTrue
+        # Seed-RipFolder created '01 - Carol of the Bells.flac' as a stub;
+        # the real ripper would have written '101 - ...' for a multi-disc
+        # rip. We just verify Move doesn't fan into Disc N\.
+        Test-Path -LiteralPath (Join-Path $album '01 - Carol of the Bells.flac') | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $album 'Disc 1') | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $album 'cover.jpg')                    | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $album 'Spirit of the Season.cue')     | Should -BeTrue
     }
 
-    It 'routes a Suspect rip under _ReviewQueue WITHOUT Disc N fan-out' {
+    It 'routes a Suspect rip under _ReviewQueue (no special multi-disc handling)' {
         $md = New-FakeMetadata -TotalDiscs 2 -DiscNumber 1   # multi-disc, but suspect
         $result = Move-RipToLibrary -RipFolder $script:rip -LibraryRoot $script:lib `
                       -Metadata $md -Quality (New-FakeQuality 'SUSPECT') -DiscId 'abc'
 
         $result.IsReviewQueue | Should -BeTrue
-        $result.IsMultiDisc   | Should -BeFalse  # review queue keeps it flat
+        $result.IsMultiDisc   | Should -BeFalse  # review queue ignores multi-disc flag
         $result.Target | Should -BeLike "$($script:lib)\_ReviewQueue\SUSPECT - *"
         Test-Path -LiteralPath (Join-Path $result.Target '01 - Carol of the Bells.flac') | Should -BeTrue
         Test-Path -LiteralPath (Join-Path $result.Target 'Disc 1') | Should -BeFalse
