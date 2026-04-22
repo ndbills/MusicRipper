@@ -54,21 +54,22 @@ function New-RipperTrackFileName {
     Build a Windows-safe per-track FLAC filename for one track of an album.
 
 .DESCRIPTION
-    Output pattern (matches the de-facto standard most music libraries
-    expect: Plex, Navidrome, Jellyfin, Foobar):
+    Output pattern (matches the Plex naming convention
+    https://support.plex.tv/articles/200265296-adding-music-media-from-folders/):
 
-        "<NN> - <Title>.flac"                       (single-artist album)
-        "<NN> - <Artist> - <Title>.flac"            (compilation: per-track
-                                                     artist differs from
-                                                     the album artist)
+        "<NN> - <Title>.flac"
+
+    Per-track artist is NEVER embedded in the filename, even on
+    compilations. Plex (and Navidrome / Jellyfin / Foobar) reads the
+    per-track artist from the ARTIST Vorbis tag, not the filename.
+    Their own example for `Guardians of the Galaxy - Awesome Mix Vol. 1`
+    shows plain `01 - Hooked On A Feeling.mp3`.
 
     Where:
         NN     = zero-padded track number (width = digits in TotalTracks,
                  minimum 2). So a 9-track album gets "01..09"; a 12-track
                  album gets "01..12"; a 100-track box set gets "001..100".
         Title  = the user-confirmed track title (post-sanitization).
-        Artist = the user-confirmed per-track artist (post-sanitization),
-                 only included when -IsCompilation is set.
 
     Sanitization rules (per-segment, applied to Artist and Title separately
     so a slash in a title can't escape into the path):
@@ -93,14 +94,12 @@ function New-RipperTrackFileName {
     Total audio tracks on the disc (controls zero-padding width).
 
 .PARAMETER Artist
-    Per-track artist (post-edit). Only used when -IsCompilation is set.
+    Accepted but ignored. Retained for backward-compatibility with
+    callers built before the Plex-spec alignment; the per-track artist
+    belongs in the ARTIST Vorbis tag, not the filename.
 
 .PARAMETER IsCompilation
-    Switch. When set, prepends "<Artist> - " between the track number and
-    the title. Mirrors the disc's IsCompilation flag in the metadata
-    object — but we accept it as an explicit parameter (not derived) so
-    a caller who wants per-track-artist filenames on a non-compilation
-    can opt in.
+    Accepted but ignored. See -Artist.
 
 .EXAMPLE
     PS> New-RipperTrackFileName -TrackNumber 3 -Title 'Hey Jude' -TotalTracks 12
@@ -109,7 +108,7 @@ function New-RipperTrackFileName {
 .EXAMPLE
     PS> New-RipperTrackFileName -TrackNumber 1 -Title 'AC/DC: Live' `
             -TotalTracks 9 -Artist 'AC/DC' -IsCompilation
-    01 - AC DC - AC DC  Live.flac
+    01 - AC DC  Live.flac
 #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -124,15 +123,8 @@ function New-RipperTrackFileName {
     $width  = [Math]::Max(2, ([string]$TotalTracks).Length)
     $numStr = $TrackNumber.ToString("D$width")
 
-    $titleSafe  = _SanitizeTrackField -Value $Title
-    $parts = @($numStr, '-', $titleSafe)
-
-    if ($IsCompilation) {
-        $artistSafe = _SanitizeTrackField -Value $Artist
-        $parts = @($numStr, '-', $artistSafe, '-', $titleSafe)
-    }
-
-    "$($parts -join ' ').flac"
+    $titleSafe = _SanitizeTrackField -Value $Title
+    "$numStr - $titleSafe.flac"
 }
 
 function _SanitizeTrackField {

@@ -26,16 +26,16 @@ Describe 'New-RipperTrackFileName' {
             Should -Be '01 - Foo.flac'
     }
 
-    It 'includes artist when -IsCompilation set' {
+    It 'omits artist even when -IsCompilation set (Plex spec: artist lives in ARTIST tag)' {
         New-RipperTrackFileName -TrackNumber 1 -Title 'Foo' -TotalTracks 10 `
             -Artist 'Bar' -IsCompilation |
-            Should -Be '01 - Bar - Foo.flac'
+            Should -Be '01 - Foo.flac'
     }
 
-    It 'sanitizes NTFS-illegal chars in title and artist independently' {
+    It 'sanitizes NTFS-illegal chars in title' {
         $r = New-RipperTrackFileName -TrackNumber 2 -Title 'AC/DC: Live' `
                 -TotalTracks 9 -Artist 'AC/DC' -IsCompilation
-        $r | Should -Be '02 - AC DC - AC DC Live.flac'
+        $r | Should -Be '02 - AC DC Live.flac'
     }
 
     It 'substitutes _unknown_ for empty title' {
