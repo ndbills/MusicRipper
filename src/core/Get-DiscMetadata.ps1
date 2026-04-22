@@ -66,6 +66,7 @@ Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
 # Load all metadata providers. The orchestrator picks among them at
 # runtime based on cfg.MetadataProviders.
 . (Join-Path $repoRoot 'src\core\metadata\Get-MetadataFromMusicBrainz.ps1')
+. (Join-Path $repoRoot 'src\core\metadata\Get-MetadataFromCuetoolsDb.ps1')
 
 function Get-RipperCoverArt {
 <#
@@ -208,12 +209,20 @@ function Get-RipperDiscMetadata {
                 Invoke-MusicBrainzMetadataProvider -DiscIdInfo $DiscIdInfo -PreferredCountry $PreferredCountry
             }
             'CuetoolsDb' {
-                # Provider not yet implemented in this commit -- skip with a
-                # diagnostic so the chain still functions.
-                Write-RipperLog INFO 'Get-DiscMetadata' "CuetoolsDb provider not yet wired in; skipping."
-                [pscustomobject]@{
-                    Source = 'CTDB'; Status = 'NoMatch'; BestMatch = $null
-                    Candidates = @(); Diagnostic = 'CTDB provider pending implementation.'
+                # Pull a UA out of config for the CTDB request. Falls back
+                # to the provider's own default when config is unreadable.
+                $ua = $null
+                try {
+                    Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1') -Force
+                    $cfgLocal = Import-RipperConfig
+                    if ($cfgLocal.PSObject.Properties['MusicBrainzUserAgent'] -and $cfgLocal.MusicBrainzUserAgent) {
+                        $ua = [string]$cfgLocal.MusicBrainzUserAgent
+                    }
+                } catch { }
+                if ($ua) {
+                    Invoke-CuetoolsDbMetadataProvider -DiscIdInfo $DiscIdInfo -UserAgent $ua
+                } else {
+                    Invoke-CuetoolsDbMetadataProvider -DiscIdInfo $DiscIdInfo
                 }
             }
             default {

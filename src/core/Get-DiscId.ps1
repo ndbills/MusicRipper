@@ -98,6 +98,11 @@ function Get-RipperDiscId {
         Tracks           : Array of per-track records:
                              { Number, IsAudio, StartSector, LengthSectors,
                                LengthSeconds, PreEmphasis }
+        Toc              : The raw [CUETools.CDImage.CDImageLayout] from
+                           the read. Lets downstream providers (e.g. the
+                           CTDB metadata provider) talk to CUETools APIs
+                           that need a real TOC object without re-opening
+                           the drive. Not serialized to sidecar JSON.
 
 .PARAMETER DriveLetter
     Single letter (e.g. 'D') or 'D:'. If omitted, falls back to the
@@ -181,6 +186,12 @@ function Get-RipperDiscId {
             DurationSeconds = [math]::Round([double]$toc.AudioLength / 75.0, 3)
             DriveLetter     = "$driveChar`:"
             Tracks          = @($tracks)
+            # Hand the live TOC out to downstream providers (CTDB needs a
+            # real CDImageLayout). The reader is about to be Close()d in
+            # the finally{} below, but CDImageLayout is a managed POCO --
+            # all the data was already pulled into it during Open(). It
+            # stays usable for the lifetime of this PowerShell process.
+            Toc             = $toc
         }
 
         Write-RipperLog INFO 'Get-DiscId' "TOC read: DiscId=$($result.DiscId), $($result.AudioTracks) audio tracks, $([int]$result.DurationSeconds)s."
