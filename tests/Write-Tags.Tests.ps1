@@ -126,6 +126,90 @@ Describe 'New-RipperFlacTagSet' {
         { New-RipperFlacTagSet -Metadata (New-FakeMetadata) -TrackIndex 5 -DiscId 'd' -IsCompilation $false } |
             Should -Throw '*out of range*'
     }
+
+    Context 'Picard-parity tags' {
+        BeforeAll {
+            function script:New-RichMetadata {
+                $tracks = @(
+                    [pscustomobject]@{
+                        Number = 1; Title = 'Speak to Me'
+                        Artist = ''; ArtistSort = 'Pink Floyd'
+                        ArtistMbid = 'aaa-1'; RecordingMbid = 'rec-1'
+                        LengthMs = 67000
+                    }
+                )
+                [pscustomobject]@{
+                    AlbumArtist      = 'The Beatles'
+                    AlbumArtistSort  = 'Beatles, The'
+                    AlbumArtistMbid  = 'mbid-1/mbid-2'
+                    Album            = 'Abbey Road'
+                    ReleaseMbid      = 'rel-1'
+                    ReleaseGroupMbid = 'rg-1'
+                    Year             = 1969
+                    ReleaseDate      = '1969-09-26'
+                    OriginalDate     = '1969-09-26'
+                    OriginalYear     = 1969
+                    Country          = 'GB'
+                    ReleaseStatus    = 'Official'
+                    ReleaseType      = 'Album'
+                    Script           = 'Latn'
+                    Language         = 'eng'
+                    Asin             = 'B0025KVLU8'
+                    Barcode          = '094638246817'
+                    LabelName        = 'Apple Records'
+                    CatalogNumber    = 'PCS 7088'
+                    DiscNumber       = 1
+                    TotalDiscs       = 1
+                    IsCompilation    = $false
+                    Tracks           = $tracks
+                }
+            }
+        }
+
+        It 'emits all Picard-standard album-level tags when present' {
+            $tags = New-RipperFlacTagSet -Metadata (New-RichMetadata) -TrackIndex 0 -DiscId 'd' -IsCompilation $false
+            $tags | Should -Contain 'ALBUMARTISTSORT=Beatles, The'
+            $tags | Should -Contain 'ARTISTSORT=Pink Floyd'
+            $tags | Should -Contain 'DATE=1969-09-26'
+            $tags | Should -Contain 'ORIGINALDATE=1969-09-26'
+            $tags | Should -Contain 'ORIGINALYEAR=1969'
+            $tags | Should -Contain 'RELEASESTATUS=Official'
+            $tags | Should -Contain 'RELEASETYPE=Album'
+            $tags | Should -Contain 'RELEASECOUNTRY=GB'
+            $tags | Should -Contain 'SCRIPT=Latn'
+            $tags | Should -Contain 'LANGUAGE=eng'
+            $tags | Should -Contain 'LABEL=Apple Records'
+            $tags | Should -Contain 'CATALOGNUMBER=PCS 7088'
+            $tags | Should -Contain 'BARCODE=094638246817'
+            $tags | Should -Contain 'ASIN=B0025KVLU8'
+            $tags | Should -Contain 'MUSICBRAINZ_ALBUMARTISTID=mbid-1/mbid-2'
+        }
+
+        It 'ARTISTSORT falls back to AlbumArtistSort when track has no ArtistSort' {
+            $md = New-RichMetadata
+            $md.Tracks[0].ArtistSort = ''
+            $tags = New-RipperFlacTagSet -Metadata $md -TrackIndex 0 -DiscId 'd' -IsCompilation $false
+            $tags | Should -Contain 'ARTISTSORT=Beatles, The'
+        }
+
+        It 'DATE falls back to bare Year when ReleaseDate is missing' {
+            $md = New-RichMetadata
+            $md.ReleaseDate = $null
+            $tags = New-RipperFlacTagSet -Metadata $md -TrackIndex 0 -DiscId 'd' -IsCompilation $false
+            $tags | Should -Contain 'DATE=1969'
+        }
+
+        It 'omits all Picard-parity tags when the legacy metadata shape is used' {
+            # The minimal New-FakeMetadata shape (no AlbumArtistSort, no
+            # ReleaseStatus, etc.) must not emit any of the new tags.
+            $tags = New-RipperFlacTagSet -Metadata (New-FakeMetadata) -TrackIndex 0 -DiscId 'd' -IsCompilation $false
+            foreach ($name in 'ALBUMARTISTSORT','ARTISTSORT','ORIGINALDATE','ORIGINALYEAR',
+                              'RELEASESTATUS','RELEASETYPE','RELEASECOUNTRY','SCRIPT',
+                              'LANGUAGE','LABEL','CATALOGNUMBER','BARCODE','ASIN') {
+                $tags | Where-Object { $_ -like "$name=*" } | Should -BeNullOrEmpty
+            }
+        }
+    }
 }
 
 Describe 'Get-RipperRipFolderTracks' {

@@ -72,15 +72,31 @@ function New-RipperFlacTagSet {
     string[] of "NAME=value" strings to be passed to
     `metaflac --set-tag=...`.
 
-    Tag list (Plex-friendly, see plan.md Phase 5 §2):
+    Tag list (Plex-friendly + Picard-parity; see plan.md Phase 5 §2 and
+    https://picard-docs.musicbrainz.org/en/appendices/tag_mapping.html):
         ALBUMARTIST, ARTIST, ALBUM, TITLE,
         TRACKNUMBER, TRACKTOTAL, DISCNUMBER, DISCTOTAL,
-        DATE                              (only if Year is set)
+        ALBUMARTISTSORT                   (only if AlbumArtistSort is set)
+        ARTISTSORT                        (track ArtistSort, falls back to album)
+        DATE                              (full ReleaseDate; falls back to Year)
+        ORIGINALDATE                      (only if OriginalDate is set)
+        ORIGINALYEAR                      (only if OriginalYear is set)
         GENRE                             (only if Genre is set)
         COMPILATION=1                     (only if -IsCompilation)
+        RELEASESTATUS                     (only if ReleaseStatus is set)
+        RELEASETYPE                       (only if ReleaseType is set)
+        RELEASECOUNTRY                    (only if Country is set)
+        SCRIPT                            (only if Script is set)
+        LANGUAGE                          (only if Language is set)
+        LABEL                             (only if LabelName is set)
+        CATALOGNUMBER                     (only if CatalogNumber is set)
+        BARCODE                           (only if Barcode is set)
+        ASIN                              (only if Asin is set)
         MUSICBRAINZ_DISCID                (always)
         MUSICBRAINZ_ALBUMID               (only if ReleaseMbid is set)
-        MUSICBRAINZ_ALBUMARTISTID         (only if AlbumArtistMbid is set)
+        MUSICBRAINZ_ALBUMARTISTID         (only if AlbumArtistMbid is set;
+                                           multi-artist values are '/'-joined
+                                           per Picard convention)
         MUSICBRAINZ_ARTISTID              (only if track has ArtistMbid)
         MUSICBRAINZ_TRACKID               (only if track has RecordingMbid)
         MUSICBRAINZ_RELEASEGROUPID        (only if ReleaseGroupMbid is set)
@@ -153,9 +169,44 @@ function New-RipperFlacTagSet {
     $tags.Add("DISCNUMBER=$discNumber")
     $tags.Add("DISCTOTAL=$discTotal")
 
-    if ($Metadata.PSObject.Properties['Year']  -and $Metadata.Year)  { $tags.Add("DATE=$($Metadata.Year)") }
+    # ---- Sort-name forms (Picard-standard; lets clients sort 'The Beatles'
+    # under 'B', 'Lowell Mason' under 'M', etc.) -------------------------
+    if ($Metadata.PSObject.Properties['AlbumArtistSort'] -and $Metadata.AlbumArtistSort) {
+        $tags.Add("ALBUMARTISTSORT=$($Metadata.AlbumArtistSort)")
+    }
+    $trackArtistSort = if ($tm.PSObject.Properties['ArtistSort'] -and $tm.ArtistSort) {
+                          [string]$tm.ArtistSort
+                      } elseif ($Metadata.PSObject.Properties['AlbumArtistSort'] -and $Metadata.AlbumArtistSort) {
+                          [string]$Metadata.AlbumArtistSort
+                      } else { $null }
+    if ($trackArtistSort) { $tags.Add("ARTISTSORT=$trackArtistSort") }
+
+    # ---- Dates: prefer the full release date, fall back to bare year ----
+    if ($Metadata.PSObject.Properties['ReleaseDate'] -and $Metadata.ReleaseDate) {
+        $tags.Add("DATE=$($Metadata.ReleaseDate)")
+    } elseif ($Metadata.PSObject.Properties['Year'] -and $Metadata.Year) {
+        $tags.Add("DATE=$($Metadata.Year)")
+    }
+    if ($Metadata.PSObject.Properties['OriginalDate'] -and $Metadata.OriginalDate) {
+        $tags.Add("ORIGINALDATE=$($Metadata.OriginalDate)")
+    }
+    if ($Metadata.PSObject.Properties['OriginalYear'] -and $Metadata.OriginalYear) {
+        $tags.Add("ORIGINALYEAR=$($Metadata.OriginalYear)")
+    }
+
     if ($Metadata.PSObject.Properties['Genre'] -and $Metadata.Genre) { $tags.Add("GENRE=$($Metadata.Genre)") }
     if ($IsCompilation) { $tags.Add('COMPILATION=1') }
+
+    # ---- Release-level descriptors (all Picard-standard) ----------------
+    if ($Metadata.PSObject.Properties['ReleaseStatus']  -and $Metadata.ReleaseStatus)  { $tags.Add("RELEASESTATUS=$($Metadata.ReleaseStatus)") }
+    if ($Metadata.PSObject.Properties['ReleaseType']    -and $Metadata.ReleaseType)    { $tags.Add("RELEASETYPE=$($Metadata.ReleaseType)") }
+    if ($Metadata.PSObject.Properties['Country']        -and $Metadata.Country)        { $tags.Add("RELEASECOUNTRY=$($Metadata.Country)") }
+    if ($Metadata.PSObject.Properties['Script']         -and $Metadata.Script)         { $tags.Add("SCRIPT=$($Metadata.Script)") }
+    if ($Metadata.PSObject.Properties['Language']       -and $Metadata.Language)       { $tags.Add("LANGUAGE=$($Metadata.Language)") }
+    if ($Metadata.PSObject.Properties['LabelName']      -and $Metadata.LabelName)      { $tags.Add("LABEL=$($Metadata.LabelName)") }
+    if ($Metadata.PSObject.Properties['CatalogNumber']  -and $Metadata.CatalogNumber)  { $tags.Add("CATALOGNUMBER=$($Metadata.CatalogNumber)") }
+    if ($Metadata.PSObject.Properties['Barcode']        -and $Metadata.Barcode)        { $tags.Add("BARCODE=$($Metadata.Barcode)") }
+    if ($Metadata.PSObject.Properties['Asin']           -and $Metadata.Asin)           { $tags.Add("ASIN=$($Metadata.Asin)") }
 
     $tags.Add("MUSICBRAINZ_DISCID=$DiscId")
     if ($Metadata.PSObject.Properties['ReleaseMbid']      -and $Metadata.ReleaseMbid)      { $tags.Add("MUSICBRAINZ_ALBUMID=$($Metadata.ReleaseMbid)") }

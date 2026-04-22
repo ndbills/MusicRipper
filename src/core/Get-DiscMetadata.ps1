@@ -71,19 +71,31 @@ function ConvertFrom-MusicBrainzDiscIdResponse {
     Normalized candidate shape:
 
         AlbumArtist           : string (joined artist-credit phrase)
-        AlbumArtistMbid       : string (first artist's MBID)
+        AlbumArtistSort       : string (joined sort-names; for ALBUMARTISTSORT)
+        AlbumArtistMbid       : string (slash-joined MBIDs of all album-artist credits)
         Album                 : string (release title)
         ReleaseMbid           : string
         ReleaseGroupMbid      : string
         Year                  : int? (parsed from release.date YYYY)
-        Country               : string
+        ReleaseDate           : string? (full YYYY-MM-DD or YYYY-MM or YYYY)
+        OriginalYear          : int? (release-group.first-release-date YYYY)
+        OriginalDate          : string? (release-group.first-release-date)
+        Country               : string  (release.country, e.g. 'US' -> RELEASECOUNTRY)
+        ReleaseStatus         : string? (release.status, e.g. 'Official')
+        ReleaseType            : string? (release-group.primary-type, e.g. 'Album')
+        Script                : string? (release.text-representation.script)
+        Language              : string? (release.text-representation.language)
+        Asin                  : string? (release.asin)
+        Barcode               : string? (release.barcode)
+        LabelName             : string? (first label-info entry)
+        CatalogNumber         : string? (first label-info entry)
         TrackCount            : int (audio tracks on the disc-matched medium)
         DiscNumber            : int (medium position; 1-based)
         TotalDiscs            : int (release.media.Count)
         IsCompilation         : bool
         HasCoverArt           : bool (release.cover-art-archive.front)
-        Tracks                : array of {Number, Title, Artist, ArtistMbid,
-                                          RecordingMbid, LengthMs}
+        Tracks                : array of {Number, Title, Artist, ArtistSort,
+                                          ArtistMbid, RecordingMbid, LengthMs}
 
 .PARAMETER Response
     The parsed JSON response object (an `ConvertFrom-Json` result).
@@ -148,13 +160,67 @@ function ConvertFrom-MusicBrainzDiscIdResponse {
         $albumArtist = ($rel.'artist-credit' | ForEach-Object {
             "$($_.name)$($_.joinphrase)"
         }) -join ''
-        $albumArtistMbid = if ($rel.'artist-credit' -and $rel.'artist-credit'[0].artist) {
-            $rel.'artist-credit'[0].artist.id
+        # Sort form: same shape but using artist.sort-name (Picard convention).
+        $albumArtistSort = ($rel.'artist-credit' | ForEach-Object {
+            $sn = $_.name
+            if ($_.PSObject.Properties['artist'] -and $_.artist) {
+                if ($_.artist.PSObject.Properties['sort-name'] -and $_.artist.'sort-name') {
+                    $sn = $_.artist.'sort-name'
+                }
+            }
+            "$sn$($_.joinphrase)"
+        }) -join ''
+        # Picard joins multi-artist MBIDs with '/' (e.g. collab releases).
+        $albumArtistMbid = if ($rel.'artist-credit') {
+            (@($rel.'artist-credit') | ForEach-Object {
+                if ($_.artist) { [string]$_.artist.id } else { $null }
+            } | Where-Object { $_ }) -join '/'
         } else { $null }
+        if (-not $albumArtistMbid) { $albumArtistMbid = $null }
 
         # Year: first 4 chars of release.date if present.
         $year = $null
         if ($rel.date -and $rel.date -match '^(\d{4})') { $year = [int]$Matches[1] }
+        $releaseDate = if ($rel.date) { [string]$rel.date } else { $null }
+
+        # Original (release-group) first release date.
+        $originalDate = $null
+        $originalYear = $null
+        if ($rel.'release-group' -and $rel.'release-group'.PSObject.Properties['first-release-date'] `
+                -and $rel.'release-group'.'first-release-date') {
+            $originalDate = [string]$rel.'release-group'.'first-release-date'
+            if ($originalDate -match '^(\d{4})') { $originalYear = [int]$Matches[1] }
+        }
+
+        # Release type: release-group.primary-type, e.g. 'Album', 'EP', 'Single'.
+        $releaseType = $null
+        if ($rel.'release-group' -and $rel.'release-group'.PSObject.Properties['primary-type'] `
+                -and $rel.'release-group'.'primary-type') {
+            $releaseType = [string]$rel.'release-group'.'primary-type'
+        }
+
+        # Status, script, language, asin, barcode -- straight pulls (strict-safe).
+        $releaseStatus = if ($rel.PSObject.Properties['status']  -and $rel.status)  { [string]$rel.status }  else { $null }
+        $asin          = if ($rel.PSObject.Properties['asin']    -and $rel.asin)    { [string]$rel.asin }    else { $null }
+        $barcode       = if ($rel.PSObject.Properties['barcode'] -and $rel.barcode) { [string]$rel.barcode } else { $null }
+        $script        = $null
+        $language      = $null
+        if ($rel.PSObject.Properties['text-representation'] -and $rel.'text-representation') {
+            $tr = $rel.'text-representation'
+            if ($tr.PSObject.Properties['script']   -and $tr.script)   { $script   = [string]$tr.script }
+            if ($tr.PSObject.Properties['language'] -and $tr.language) { $language = [string]$tr.language }
+        }
+
+        # Label / catalog-number from the first label-info entry. Releases
+        # often have multiple labels; we pick the first as the canonical
+        # one (matches Picard's default behaviour).
+        $labelName     = $null
+        $catalogNumber = $null
+        if ($rel.PSObject.Properties['label-info'] -and $rel.'label-info' -and @($rel.'label-info').Count -gt 0) {
+            $li = @($rel.'label-info')[0]
+            if ($li.PSObject.Properties['label']          -and $li.label -and $li.label.name) { $labelName     = [string]$li.label.name }
+            if ($li.PSObject.Properties['catalog-number'] -and $li.'catalog-number')          { $catalogNumber = [string]$li.'catalog-number' }
+        }
 
         # Compilation? Two signals: VA artist OR release-group secondary-type.
         $isCompilation = $false
@@ -179,9 +245,22 @@ function ConvertFrom-MusicBrainzDiscIdResponse {
                 $trackArtist = ($t.'artist-credit' | ForEach-Object {
                     "$($_.name)$($_.joinphrase)"
                 }) -join ''
-                $trackArtistMbid = if ($t.'artist-credit' -and $t.'artist-credit'[0].artist) {
-                    $t.'artist-credit'[0].artist.id
+                $trackArtistSort = ($t.'artist-credit' | ForEach-Object {
+                    $sn = $_.name
+                    if ($_.PSObject.Properties['artist'] -and $_.artist) {
+                        if ($_.artist.PSObject.Properties['sort-name'] -and $_.artist.'sort-name') {
+                            $sn = $_.artist.'sort-name'
+                        }
+                    }
+                    "$sn$($_.joinphrase)"
+                }) -join ''
+                # Slash-joined for multi-artist tracks (Picard convention).
+                $trackArtistMbid = if ($t.'artist-credit') {
+                    (@($t.'artist-credit') | ForEach-Object {
+                        if ($_.artist) { [string]$_.artist.id } else { $null }
+                    } | Where-Object { $_ }) -join '/'
                 } else { $null }
+                if (-not $trackArtistMbid) { $trackArtistMbid = $null }
                 # Length: prefer track.length (medium-specific); fall back to
                 # recording.length (canonical, may differ slightly).
                 $lengthMs = if ($t.length) { [int]$t.length }
@@ -191,6 +270,7 @@ function ConvertFrom-MusicBrainzDiscIdResponse {
                     Number        = [int]$t.position
                     Title         = [string]$t.title
                     Artist        = $trackArtist
+                    ArtistSort    = $trackArtistSort
                     ArtistMbid    = $trackArtistMbid
                     RecordingMbid = if ($t.recording) { [string]$t.recording.id } else { $null }
                     LengthMs      = $lengthMs
@@ -200,12 +280,24 @@ function ConvertFrom-MusicBrainzDiscIdResponse {
 
         [pscustomobject]@{
             AlbumArtist      = $albumArtist
+            AlbumArtistSort  = $albumArtistSort
             AlbumArtistMbid  = $albumArtistMbid
             Album            = [string]$rel.title
             ReleaseMbid      = [string]$rel.id
             ReleaseGroupMbid = if ($rel.'release-group') { [string]$rel.'release-group'.id } else { $null }
             Year             = $year
+            ReleaseDate      = $releaseDate
+            OriginalYear     = $originalYear
+            OriginalDate     = $originalDate
             Country          = [string]$rel.country
+            ReleaseStatus    = $releaseStatus
+            ReleaseType      = $releaseType
+            Script           = $script
+            Language         = $language
+            Asin             = $asin
+            Barcode          = $barcode
+            LabelName        = $labelName
+            CatalogNumber    = $catalogNumber
             TrackCount       = @($tracks).Count
             DiscNumber       = $discNumber
             TotalDiscs       = $totalDiscs
