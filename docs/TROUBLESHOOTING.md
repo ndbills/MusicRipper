@@ -181,3 +181,9 @@ to re-run.
 If the tool refuses with a track-count mismatch, that usually means a
 multi-disc release whose `MUSICBRAINZ_DISCID` tag is missing or wrong.
 Re-run with an explicit `-ReleaseMbid` pointing at the correct medium.
+
+By default the tool also preserves each file's `LastWriteTime` and
+`CreationTime` across the rewrite (matches Picard's "Preserve
+timestamps of tagged files" option). Pass `-PreserveTimestamps:$false`
+if you actually want the OS to bump the mtimes (e.g. so a sync tool
+re-uploads).

@@ -337,4 +337,33 @@ exit /b 0
               -DiscId 'd' -SkipReplayGain -MetaflacPath $script:stubExe } |
             Should -Throw '*Track-count mismatch*'
     }
+
+    It 'preserves file timestamps by default (Picard parity)' {
+        $flac1 = Join-Path $script:rip '01 - Carol of the Bells.flac'
+        $flac2 = Join-Path $script:rip '02 - Silent Night.flac'
+        # Backdate both files so we can prove restore happened.
+        $oldStamp = Get-Date '2020-01-15T12:34:56'
+        foreach ($f in @($flac1, $flac2)) {
+            (Get-Item -LiteralPath $f).LastWriteTime = $oldStamp
+            (Get-Item -LiteralPath $f).CreationTime  = $oldStamp
+        }
+
+        $result = Invoke-RipperWriteTags -RipFolder $script:rip -Metadata (New-FakeMetadata) `
+                      -DiscId 'd' -SkipReplayGain -MetaflacPath $script:stubExe
+
+        $result.TimestampsPreserved | Should -BeTrue
+        # Tolerance: 2s, to absorb any FAT-style timestamp resolution issues
+        # if anyone runs the suite on a non-NTFS temp.
+        ((Get-Item -LiteralPath $flac1).LastWriteTime - $oldStamp).TotalSeconds |
+            Should -BeLessThan 2
+        ((Get-Item -LiteralPath $flac2).LastWriteTime - $oldStamp).TotalSeconds |
+            Should -BeLessThan 2
+    }
+
+    It 'reports TimestampsPreserved=$false when -PreserveTimestamps:$false' {
+        $result = Invoke-RipperWriteTags -RipFolder $script:rip -Metadata (New-FakeMetadata) `
+                      -DiscId 'd' -SkipReplayGain -MetaflacPath $script:stubExe `
+                      -PreserveTimestamps:$false
+        $result.TimestampsPreserved | Should -BeFalse
+    }
 }

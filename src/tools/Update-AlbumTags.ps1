@@ -66,6 +66,14 @@
     Two-letter ISO country to bias text-search ranking. Defaults to
     'US'. Only consulted in lookup mode 4 (text search).
 
+.PARAMETER PreserveTimestamps
+    When $true (the default), each FLAC's LastWriteTime and
+    CreationTime are captured before tagging and restored after, so
+    re-tagging an old album does not bump every file's mtime to
+    "now". Matches Picard's "Preserve timestamps of tagged files"
+    option. Pass `-PreserveTimestamps:$false` if you actually want
+    the OS to update the mtimes (e.g. so a sync tool re-uploads).
+
 .EXAMPLE
     PS> ./src/tools/Update-AlbumTags.ps1 'E:\digitize\MusicRipper\Pink Floyd\The Dark Side of the Moon (1973)'
     Reads MUSICBRAINZ_ALBUMID off track 1, refetches the release JSON,
@@ -97,7 +105,9 @@ param(
 
     [switch] $SkipReplayGain,
 
-    [string] $PreferredCountry = 'US'
+    [string] $PreferredCountry = 'US',
+
+    [bool] $PreserveTimestamps = $true
 )
 
 Set-StrictMode -Version 3.0
@@ -328,12 +338,13 @@ if ($RefreshCoverArt) {
 # --- 5. Tag write (re-uses the Phase-5 pipeline) --------------------------
 $discIdForWrite = if ($discIdForTags) { $discIdForTags } else { '' }
 $result = Invoke-RipperWriteTags `
-    -RipFolder      $AlbumFolder `
-    -Metadata       $metadata `
-    -DiscId         $discIdForWrite `
-    -CoverArtBytes  $coverBytes `
+    -RipFolder           $AlbumFolder `
+    -Metadata            $metadata `
+    -DiscId              $discIdForWrite `
+    -CoverArtBytes       $coverBytes `
     -SkipReplayGain:$SkipReplayGain `
-    -MetaflacPath   $metaflac
+    -MetaflacPath        $metaflac `
+    -PreserveTimestamps  $PreserveTimestamps
 
 # Tack on the lookup provenance for the caller / log.
 $result | Add-Member -NotePropertyName LookupSource -NotePropertyValue $lookupSource -PassThru |

@@ -290,6 +290,15 @@ function Invoke-RipperWriteTags {
     Override the metaflac.exe location (mostly for tests). Default
     resolves via Common\Get-MetaflacPath.
 
+.PARAMETER PreserveTimestamps
+    When $true (the default), the LastWriteTime and CreationTime of
+    every FLAC are captured before tagging and restored afterward, so
+    `metaflac` editing the file in place does not bump the file's
+    mtime. Matches Picard's "Preserve timestamps of tagged files"
+    option. Pass `-PreserveTimestamps:$false` to let the OS update
+    the timestamps as normal (e.g. if a downstream sync tool keys off
+    mtime to detect "changed" files).
+
 .EXAMPLE
     PS> Invoke-RipperWriteTags -RipFolder 'D:\Music\_inbox\Foo - Bar' `
             -Metadata $md -DiscId 'abc...' -CoverArtBytes $bytes
@@ -297,7 +306,8 @@ function Invoke-RipperWriteTags {
 .NOTES
     Returns a result object:
         { RipFolder, FlacFiles[], TagsWrittenPerFile, CoverEmbedded,
-          CoverSidecarWritten, ReplayGainComputed, ElapsedMs }
+          CoverSidecarWritten, ReplayGainComputed, TimestampsPreserved,
+          ElapsedMs }
 #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -307,7 +317,8 @@ function Invoke-RipperWriteTags {
         [Parameter(Mandatory)] [string]$DiscId,
         [byte[]]$CoverArtBytes,
         [switch]$SkipReplayGain,
-        [string]$MetaflacPath
+        [string]$MetaflacPath,
+        [bool]$PreserveTimestamps = $true
     )
 
     $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -326,10 +337,32 @@ function Invoke-RipperWriteTags {
 
     Write-RipperLog INFO 'Write-Tags' "Tagging $($tracks.Count) FLAC files in $RipFolder via $MetaflacPath."
 
+    # --- Snapshot timestamps (Picard-style preserve) -----------------------
+    # Capture both LastWriteTime and CreationTime so a restore round-trip is
+    # complete. We also stash the cover.jpg sidecar's stamps if it already
+    # exists, to keep its mtime stable across re-runs.
+    $stampMap = @{}   # path -> @{ LastWrite, Creation }
+    if ($PreserveTimestamps) {
+        foreach ($t in $tracks) {
+            $stampMap[$t.FullName] = @{
+                LastWrite = $t.LastWriteTime
+                Creation  = $t.CreationTime
+            }
+        }
+    }
+
     # --- Cover art sidecar -------------------------------------------------
     $coverPath = Join-Path $RipFolder 'cover.jpg'
+    $coverPreExisting = Test-Path -LiteralPath $coverPath
+    if ($PreserveTimestamps -and $coverPreExisting) {
+        $coverItem = Get-Item -LiteralPath $coverPath
+        $stampMap[$coverPath] = @{
+            LastWrite = $coverItem.LastWriteTime
+            Creation  = $coverItem.CreationTime
+        }
+    }
     $coverSidecarWritten = $false
-    if ($CoverArtBytes -and -not (Test-Path -LiteralPath $coverPath)) {
+    if ($CoverArtBytes -and -not $coverPreExisting) {
         [System.IO.File]::WriteAllBytes($coverPath, $CoverArtBytes)
         $coverSidecarWritten = $true
         Write-RipperLog INFO 'Write-Tags' "Wrote cover.jpg sidecar ($($CoverArtBytes.Length) bytes)."
@@ -390,6 +423,21 @@ function Invoke-RipperWriteTags {
         Write-RipperLog INFO 'Write-Tags' 'ReplayGain computed (album + per-track).'
     }
 
+    # --- Restore timestamps (after metaflac is fully done writing) ---------
+    if ($PreserveTimestamps -and $stampMap.Count -gt 0) {
+        foreach ($path in $stampMap.Keys) {
+            if (-not (Test-Path -LiteralPath $path)) { continue }
+            $s = $stampMap[$path]
+            try {
+                [System.IO.File]::SetLastWriteTime($path, $s.LastWrite)
+                [System.IO.File]::SetCreationTime($path,  $s.Creation)
+            } catch {
+                Write-RipperLog WARN 'Write-Tags' "Could not restore timestamps on $path : $($_.Exception.Message)"
+            }
+        }
+        Write-RipperLog INFO 'Write-Tags' "Restored timestamps on $($stampMap.Count) file(s)."
+    }
+
     $sw.Stop()
     Write-RipperLog INFO 'Write-Tags' "Done in $([int]$sw.Elapsed.TotalMilliseconds) ms."
 
@@ -400,6 +448,7 @@ function Invoke-RipperWriteTags {
         CoverEmbedded        = $coverEmbeddedCount
         CoverSidecarWritten  = $coverSidecarWritten
         ReplayGainComputed   = $replayGainComputed
+        TimestampsPreserved  = [bool]$PreserveTimestamps
         ElapsedMs            = [int]$sw.Elapsed.TotalMilliseconds
     }
 }
