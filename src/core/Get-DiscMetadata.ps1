@@ -176,16 +176,19 @@ function ConvertFrom-MusicBrainzDiscIdResponse {
         # artist-credit, no joinphrases. Stored as a string[] so callers can
         # emit multiple ALBUMARTISTS=... tag lines.
         $albumArtists = @($rel.'artist-credit' | ForEach-Object { [string]$_.name } | Where-Object { $_ })
-        # Sort form: same shape but using artist.sort-name (Picard convention).
-        $albumArtistSort = ($rel.'artist-credit' | ForEach-Object {
+        # Sort form: Picard joins multi-artist sort names with '; '
+        # (their MULTI_VALUED_JOINER), NOT the artist-credit joinphrase.
+        # Joinphrases like ' & ' or ' feat. ' would defeat the purpose of
+        # a sort field, since 'X & Y' wouldn't file alphabetically.
+        $albumArtistSort = (@($rel.'artist-credit' | ForEach-Object {
             $sn = $_.name
             if ($_.PSObject.Properties['artist'] -and $_.artist) {
                 if ($_.artist.PSObject.Properties['sort-name'] -and $_.artist.'sort-name') {
                     $sn = $_.artist.'sort-name'
                 }
             }
-            "$sn$($_.joinphrase)"
-        }) -join ''
+            [string]$sn
+        }) | Where-Object { $_ }) -join '; '
         # Picard joins multi-artist MBIDs with '/' (e.g. collab releases).
         $albumArtistMbid = if ($rel.'artist-credit') {
             (@($rel.'artist-credit') | ForEach-Object {
@@ -263,15 +266,15 @@ function ConvertFrom-MusicBrainzDiscIdResponse {
                 }) -join ''
                 # Multi-value form (Picard ARTISTS).
                 $trackArtists = @($t.'artist-credit' | ForEach-Object { [string]$_.name } | Where-Object { $_ })
-                $trackArtistSort = ($t.'artist-credit' | ForEach-Object {
+                $trackArtistSort = (@($t.'artist-credit' | ForEach-Object {
                     $sn = $_.name
                     if ($_.PSObject.Properties['artist'] -and $_.artist) {
                         if ($_.artist.PSObject.Properties['sort-name'] -and $_.artist.'sort-name') {
                             $sn = $_.artist.'sort-name'
                         }
                     }
-                    "$sn$($_.joinphrase)"
-                }) -join ''
+                    [string]$sn
+                }) | Where-Object { $_ }) -join '; '
                 # Slash-joined for multi-artist tracks (Picard convention).
                 $trackArtistMbid = if ($t.'artist-credit') {
                     (@($t.'artist-credit') | ForEach-Object {
