@@ -68,6 +68,9 @@ Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
 . (Join-Path $repoRoot 'src\core\metadata\Get-MetadataFromMusicBrainz.ps1')
 . (Join-Path $repoRoot 'src\core\metadata\Get-MetadataFromCuetoolsDb.ps1')
 
+# Cover-art chain orchestrator (CAA -> iTunes -> Deezer by default).
+. (Join-Path $repoRoot 'src\core\coverart\Get-CoverArt.ps1')
+
 function Get-RipperCoverArt {
 <#
 .SYNOPSIS
@@ -390,14 +393,13 @@ function Get-RipperBestCoverArt {
     Run the cover-art provider chain for a chosen metadata candidate.
 
 .DESCRIPTION
-    Phase 5.2 placeholder — the chain (CoverArtArchive -> iTunes ->
-    Deezer) lands in src\core\coverart\Get-CoverArt.ps1 in a follow-up
-    commit. For now this just calls the existing CAA path via
-    Get-RipperCoverArt so behavior is unchanged.
+    Thin shim over Get-RipperCoverArtChain (in
+    src/core/coverart/Get-CoverArt.ps1). Lives here so the metadata
+    orchestrator can call cover art with a single line; tests can mock
+    this name to skip the network entirely.
 
 .PARAMETER Candidate
-    The chosen candidate object (must carry ReleaseMbid for the
-    current implementation).
+    The chosen candidate object.
 
 .EXAMPLE
     PS> $bytes = Get-RipperBestCoverArt -Candidate $best
@@ -406,9 +408,5 @@ function Get-RipperBestCoverArt {
     [OutputType([byte[]])]
     param([Parameter(Mandatory)] [pscustomobject]$Candidate)
 
-    if ($Candidate.PSObject.Properties['ReleaseMbid'] -and $Candidate.ReleaseMbid `
-            -and $Candidate.PSObject.Properties['HasCoverArt'] -and $Candidate.HasCoverArt) {
-        return Get-RipperCoverArt -ReleaseMbid $Candidate.ReleaseMbid
-    }
-    return $null
+    Get-RipperCoverArtChain -Candidate $Candidate
 }
