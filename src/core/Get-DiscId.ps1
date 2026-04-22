@@ -165,6 +165,7 @@ function Get-RipperDiscId {
                 IsAudio       = [bool]$t.IsAudio
                 StartSector   = [int64]$t.Start
                 LengthSectors = [int64]$t.Length
+                Pregap        = [int64]$t.Pregap
                 # CD audio is exactly 75 sectors per second.
                 LengthSeconds = [math]::Round([double]$t.Length / 75.0, 3)
                 PreEmphasis   = [bool]$t.PreEmphasis
