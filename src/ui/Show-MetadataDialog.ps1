@@ -169,12 +169,28 @@ function ConvertFrom-MetadataViewModel {
 
     $src = $ViewModel.Source
 
+    # Build a Number -> source-track lookup so we can carry over per-track
+    # fields the dialog doesn't expose (ArtistSort). User can't add/remove
+    # rows in the dialog, so the source track set is authoritative.
+    $srcTrackByNumber = @{}
+    if ($src -and $src.PSObject.Properties['Tracks'] -and $src.Tracks) {
+        foreach ($st in @($src.Tracks)) {
+            $srcTrackByNumber[[int]$st.Number] = $st
+        }
+    }
+
     # Rebuild Tracks: marry edited Title/Artist with preserved Number/Length/MBIDs.
     $newTracks = foreach ($row in @($ViewModel.Tracks)) {
+        $srcT = $srcTrackByNumber[[int]$row.Number]
+        $artistSort = $null
+        if ($srcT -and $srcT.PSObject.Properties['ArtistSort']) {
+            $artistSort = [string]$srcT.ArtistSort
+        }
         [pscustomobject]@{
             Number        = [int]$row.Number
             Title         = [string]$row.Title
             Artist        = [string]$row.Artist
+            ArtistSort    = $artistSort
             ArtistMbid    = [string]$row.ArtistMbid
             RecordingMbid = [string]$row.RecordingMbid
             LengthMs      = [int]$row.LengthMs
@@ -186,14 +202,32 @@ function ConvertFrom-MetadataViewModel {
         $year = [int]$ViewModel.Year
     }
 
+    # Helper: pull a property from $src or return $null if absent (strict-safe).
+    $srcProp = {
+        param($name)
+        if ($src -and $src.PSObject.Properties[$name]) { $src.$name } else { $null }
+    }
+
     $out = [pscustomobject]@{
         AlbumArtist      = [string]$ViewModel.AlbumArtist
+        AlbumArtistSort  = & $srcProp 'AlbumArtistSort'
         AlbumArtistMbid  = $src.AlbumArtistMbid
         Album            = [string]$ViewModel.Album
         ReleaseMbid      = $src.ReleaseMbid
         ReleaseGroupMbid = $src.ReleaseGroupMbid
         Year             = $year
+        ReleaseDate      = & $srcProp 'ReleaseDate'
+        OriginalYear     = & $srcProp 'OriginalYear'
+        OriginalDate     = & $srcProp 'OriginalDate'
         Country          = $src.Country
+        ReleaseStatus    = & $srcProp 'ReleaseStatus'
+        ReleaseType      = & $srcProp 'ReleaseType'
+        Script           = & $srcProp 'Script'
+        Language         = & $srcProp 'Language'
+        Asin             = & $srcProp 'Asin'
+        Barcode          = & $srcProp 'Barcode'
+        LabelName        = & $srcProp 'LabelName'
+        CatalogNumber    = & $srcProp 'CatalogNumber'
         TrackCount       = @($newTracks).Count
         DiscNumber       = [int]$ViewModel.DiscNumber
         TotalDiscs       = [int]$ViewModel.TotalDiscs

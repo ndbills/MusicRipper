@@ -122,6 +122,35 @@ Describe 'ConvertFrom-MetadataViewModel' {
         $back = ConvertFrom-MetadataViewModel -ViewModel $vm
         $back.Year | Should -BeNullOrEmpty
     }
+
+    It 'preserves Picard-parity album fields from the source (regression: dialog used to drop them)' {
+        $vm   = ConvertTo-MetadataViewModel -Candidate $cand
+        $back = ConvertFrom-MetadataViewModel -ViewModel $vm
+        # These are populated on the enriched mb-single-match.json fixture and
+        # were silently dropped by ConvertFrom-MetadataViewModel pre-fix, so
+        # rip-flow FLACs were missing the new Picard tags even though
+        # New-RipperFlacTagSet knew how to emit them.
+        $back.AlbumArtistSort | Should -Be $cand.AlbumArtistSort
+        $back.ReleaseDate     | Should -Be $cand.ReleaseDate
+        $back.OriginalDate    | Should -Be $cand.OriginalDate
+        $back.OriginalYear    | Should -Be $cand.OriginalYear
+        $back.ReleaseStatus   | Should -Be $cand.ReleaseStatus
+        $back.ReleaseType     | Should -Be $cand.ReleaseType
+        $back.Script          | Should -Be $cand.Script
+        $back.Language        | Should -Be $cand.Language
+        $back.Asin            | Should -Be $cand.Asin
+        $back.Barcode         | Should -Be $cand.Barcode
+        $back.LabelName       | Should -Be $cand.LabelName
+        $back.CatalogNumber   | Should -Be $cand.CatalogNumber
+    }
+
+    It 'preserves per-track ArtistSort from the source (regression)' {
+        $vm   = ConvertTo-MetadataViewModel -Candidate $cand
+        $back = ConvertFrom-MetadataViewModel -ViewModel $vm
+        for ($i = 0; $i -lt @($cand.Tracks).Count; $i++) {
+            $back.Tracks[$i].ArtistSort | Should -Be $cand.Tracks[$i].ArtistSort
+        }
+    }
 }
 
 Describe 'Format-MetadataCandidateLabel' {
