@@ -116,3 +116,48 @@ Describe 'Get-MetaflacPath' {
         }
     }
 }
+
+Describe 'Test-RipperDependencies' {
+    # We exercise the function shape and the negative case (which we can
+    # produce deterministically by stripping PATH + the fallback dirs).
+    # The positive case depends on whether the dev/CI box has CUETools +
+    # Xiph.FLAC installed; we assert shape only, not values.
+
+    It 'returns a hashtable with Ok and Missing keys' {
+        $r = Test-RipperDependencies
+        $r              | Should -BeOfType [hashtable]
+        $r.ContainsKey('Ok')      | Should -BeTrue
+        $r.ContainsKey('Missing') | Should -BeTrue
+        $r.Ok      | Should -BeOfType [bool]
+        ,$r.Missing | Should -BeOfType [array]
+    }
+
+    It 'reports both deps missing when neither CUETools nor metaflac can be found' {
+        $sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("mr-deps-{0}" -f [guid]::NewGuid())
+        New-Item -ItemType Directory -Path $sandbox | Out-Null
+        $origPath  = $env:PATH
+        $origLocal = $env:LOCALAPPDATA
+        $origPF    = $env:ProgramFiles
+        $origPF86  = ${env:ProgramFiles(x86)}
+        try {
+            $env:PATH              = ''
+            $env:LOCALAPPDATA      = $sandbox
+            $env:ProgramFiles      = $sandbox
+            ${env:ProgramFiles(x86)} = $sandbox
+
+            $r = Test-RipperDependencies
+            $r.Ok | Should -BeFalse
+            $r.Missing.Count | Should -Be 2
+            ($r.Missing.Name -join ',') | Should -Match 'CUETools'
+            ($r.Missing.Name -join ',') | Should -Match 'Xiph.FLAC'
+            ($r.Missing.WingetId) | Should -Contain 'gchudov.CUETools'
+            ($r.Missing.WingetId) | Should -Contain 'Xiph.FLAC'
+        } finally {
+            $env:PATH              = $origPath
+            $env:LOCALAPPDATA      = $origLocal
+            $env:ProgramFiles      = $origPF
+            ${env:ProgramFiles(x86)} = $origPF86
+            Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}

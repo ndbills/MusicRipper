@@ -146,6 +146,52 @@ if (-not (Test-Path -LiteralPath $configPath)) {
 }
 $cfg = Import-RipperConfig
 
+# --- Dependency check -----------------------------------------------------
+# We do this BEFORE any disc work because a missing metaflac.exe would
+# only surface AFTER the rip (Phase 5 needs it for tagging + ReplayGain),
+# wasting an 11-minute rip. Idempotent flow: if anything is missing,
+# offer to run setup/Install-Dependencies.ps1 in-place, then ask the
+# user to relaunch. A subsequent launch finds everything and proceeds.
+$deps = Test-RipperDependencies
+if (-not $deps.Ok) {
+    $list   = ($deps.Missing | ForEach-Object { "  - $($_.Name)  (winget id: $($_.WingetId))" }) -join "`n"
+    $names  = ($deps.Missing.Name) -join ', '
+    Write-RipperLog WARN 'Start-Ripper' "Missing dependencies: $names"
+
+    Add-Type -AssemblyName System.Windows.Forms | Out-Null
+    $rc = [System.Windows.Forms.MessageBox]::Show(
+        "MusicRipper needs the following tools, which aren't installed yet:`n`n$list`n`nInstall them now via winget? (you may see an admin elevation prompt)",
+        'MusicRipper - Missing Dependencies',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Warning)
+
+    if ($rc -ne [System.Windows.Forms.DialogResult]::Yes) {
+        Write-RipperLog WARN 'Start-Ripper' 'User declined dependency install.'
+        Show-RipperInfo "MusicRipper can't continue without those tools.`n`nRun setup\Install-Dependencies.ps1 manually when ready, then re-launch." `
+            'MusicRipper' 'Information'
+        Stop-RipperLog
+        return
+    }
+
+    $installScript = Join-Path $repoRoot 'setup\Install-Dependencies.ps1'
+    Write-RipperLog INFO 'Start-Ripper' "Running $installScript"
+    try {
+        & $installScript
+    } catch {
+        Write-RipperLog ERROR 'Start-Ripper' "Install-Dependencies failed: $($_.Exception.Message)"
+        Show-RipperInfo "Dependency install failed:`n`n  $($_.Exception.Message)`n`nSee log:`n  $logPath" `
+            'MusicRipper - Install Failed' 'Error'
+        Stop-RipperLog
+        return
+    }
+
+    Write-RipperLog INFO 'Start-Ripper' 'Dependency installer finished. Asking user to relaunch.'
+    Show-RipperInfo "Dependencies installed.`n`nPlease re-launch MusicRipper to continue." `
+        'MusicRipper' 'Information'
+    Stop-RipperLog
+    return
+}
+
 # --- Read disc -------------------------------------------------------------
 # If the tray was left open, close it first so the user doesn't get an
 # immediate "no disc" error. After a close, the drive needs a beat to spin

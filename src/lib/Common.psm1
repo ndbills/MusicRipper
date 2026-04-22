@@ -238,4 +238,65 @@ function Get-MetaflacPath {
     throw "metaflac.exe not found. Run setup/Install-Dependencies.ps1 to install Xiph.FLAC."
 }
 
-Export-ModuleMember -Function ConvertTo-SafeWindowsPathSegment, Get-RipperRepoRoot, Get-CueToolsPath, Get-MetaflacPath
+function Test-RipperDependencies {
+<#
+.SYNOPSIS
+    Probe the third-party tools MusicRipper needs at runtime.
+
+.DESCRIPTION
+    Phase 5 wires post-rip stages (tag, ReplayGain, library move, review
+    artifacts) that fail mid-flight if `metaflac.exe` or the CUETools .NET
+    DLLs aren't installed. We don't want to discover that AFTER an 11
+    minute rip, so Start-Ripper calls this BEFORE any disc work and
+    offers to run setup/Install-Dependencies.ps1 if anything is missing.
+
+    Probes (idempotent, side-effect-free):
+      - CUETools (`Get-CueToolsPath`).
+      - Xiph.FLAC's `metaflac.exe` (`Get-MetaflacPath`).
+
+    `flac.exe` is intentionally NOT a hard requirement — it's only used
+    by `New-RipperReviewImage` for the optional `_image\<Album>.flac`
+    inspection file, and that step degrades gracefully (logs a warning,
+    skips the image, returns `$null`).
+
+.OUTPUTS
+    Hashtable with:
+      Ok      [bool]    — true when nothing is missing.
+      Missing [array]   — one PSCustomObject per missing dep, with:
+                          Name      (human-readable)
+                          WingetId  (for the install prompt)
+                          Reason    (the failed-probe error message)
+
+.EXAMPLE
+    PS> $deps = Test-RipperDependencies
+    PS> if (-not $deps.Ok) { $deps.Missing | Format-Table }
+#>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param()
+
+    $missing = @()
+
+    try { Get-CueToolsPath | Out-Null } catch {
+        $missing += [pscustomobject]@{
+            Name     = 'CUETools'
+            WingetId = 'gchudov.CUETools'
+            Reason   = $_.Exception.Message
+        }
+    }
+
+    try { Get-MetaflacPath | Out-Null } catch {
+        $missing += [pscustomobject]@{
+            Name     = 'Xiph.FLAC (metaflac.exe)'
+            WingetId = 'Xiph.FLAC'
+            Reason   = $_.Exception.Message
+        }
+    }
+
+    return @{
+        Ok      = ($missing.Count -eq 0)
+        Missing = @($missing)
+    }
+}
+
+Export-ModuleMember -Function ConvertTo-SafeWindowsPathSegment, Get-RipperRepoRoot, Get-CueToolsPath, Get-MetaflacPath, Test-RipperDependencies
