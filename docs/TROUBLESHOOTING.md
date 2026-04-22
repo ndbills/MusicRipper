@@ -96,10 +96,19 @@ full Plex/MusicBrainz Picard set:
 - `ALBUMARTIST` (Plex needs this distinct from `ARTIST` for compilation
   grouping; without it, every track on a Various Artists disc shows up
   as a separate "album" in your library).
+- `ALBUMARTISTS` / `ARTISTS` — multi-value forms (one tag line per
+  credited artist, no joinphrases). Picard always writes these.
+- `ALBUMARTISTSORT` / `ARTISTSORT` — sort-name forms so clients file
+  "The Beatles" under B and "Lowell Mason" under M.
 - `TRACKTOTAL`, `DISCNUMBER`, `DISCTOTAL` (multi-disc set support).
-- `DATE`, `GENRE`, `COMPILATION`.
+- `DATE`, `ORIGINALDATE`, `ORIGINALYEAR`, `GENRE`, `COMPILATION`.
+- `RELEASESTATUS`, `RELEASETYPE`, `RELEASECOUNTRY`, `SCRIPT`,
+  `LANGUAGE`, `MEDIA`, `LABEL`, `CATALOGNUMBER`, `BARCODE`, `ASIN` —
+  the full Picard release-level descriptor set.
 - `MUSICBRAINZ_DISCID`, `MUSICBRAINZ_ALBUMID`, `MUSICBRAINZ_ALBUMARTISTID`,
-  `MUSICBRAINZ_ARTISTID`, `MUSICBRAINZ_TRACKID`, `MUSICBRAINZ_RELEASEGROUPID`
+  `MUSICBRAINZ_ARTISTID`, `MUSICBRAINZ_TRACKID` (recording id),
+  `MUSICBRAINZ_RELEASETRACKID` (per-release track id; Picard's
+  confusingly-named "MusicBrainz Track Id"), `MUSICBRAINZ_RELEASEGROUPID`
   — so Picard / Plex can re-match without re-querying MusicBrainz.
 - Embedded `PICTURE` block (front cover) on every track. The
   `cover.jpg` sidecar alone is not enough; Plex mobile/Roku display
@@ -157,8 +166,9 @@ inside the orphan folder, and on `https://musicbrainz.org/cdtoc/<id>`.
 ### "An older rip is missing tags Picard would set (sort names, ASIN, etc.)"
 The Phase-5 tag set has grown over time. Older rips were tagged
 against an earlier schema and are missing fields like `ALBUMARTISTSORT`,
-`ORIGINALDATE`, `RELEASESTATUS`, `LABEL`, etc. To bring an existing
-album up to the current schema without re-ripping the disc:
+`ARTISTS`, `MEDIA`, `MUSICBRAINZ_RELEASETRACKID`, `ORIGINALDATE`,
+`RELEASESTATUS`, `LABEL`, etc. To bring an existing album up to the
+current schema without re-ripping the disc:
 
 ```powershell
 ./src/tools/Update-AlbumTags.ps1 'E:\digitize\MusicRipper\<artist>\<album>'
