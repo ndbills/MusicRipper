@@ -22,13 +22,15 @@
             <Album>.log
 
         Compilations -> <LibraryRoot>\Various Artists\<Album> (Year)\
-        Multi-disc   -> ...\<Album> (Year)\Disc N\<NN - Track>.flac
-                        (cover/cue/log live at album-root level)
+        Multi-disc   -> <LibraryRoot>\<AlbumArtist>\<Album> (Year)\
+                        <D><NN> - Track.flac     (flat at album root,
+                                                  disc number prefixed
+                                                  to track number per
+                                                  Plex spec)
 
         Suspect / Unknown / LowMatch / Manual rips ->
         <LibraryRoot>\_ReviewQueue\<PREFIX> - <descriptor> - <discId>\
-            (no fan-out into Disc N subfolders here — keep flat for
-             easier inspection in Picard)
+            (flat — keep easy to inspect in Picard)
 
     Move semantics:
         Same-volume  -> directory rename (essentially free).
@@ -249,9 +251,10 @@ function Move-RipToLibrary {
 
 .DESCRIPTION
     Resolves the target directory via Get-RipperLibraryTargetDir, creates
-    it, and moves every file from the rip folder. For multi-disc albums
-    in the main library, per-track FLACs are fanned into Disc N\
-    subfolders; cover.jpg / .cue / .log stay at the album root.
+    it, and moves every file from the rip folder. Multi-disc albums land
+    flat at the album root — disc number is already encoded in each
+    track filename (e.g. `101 - In the Flesh.flac`) per Plex's spec.
+    cover.jpg / .cue / .log live at the album root regardless.
 
     Same-volume moves are essentially free (Move-Item performs a
     directory entry rename). Cross-volume moves transparently fall back
@@ -303,14 +306,10 @@ function Move-RipToLibrary {
                   -Quality $Quality -DiscId $DiscId
     $isReviewQueue = $target -like "*\_ReviewQueue\*"
     $isMultiDisc   = $false
-    $discNumber    = 1
     if (-not $isReviewQueue `
             -and $Metadata.PSObject.Properties['TotalDiscs'] `
             -and [int]$Metadata.TotalDiscs -gt 1) {
         $isMultiDisc = $true
-        if ($Metadata.PSObject.Properties['DiscNumber'] -and $Metadata.DiscNumber) {
-            $discNumber = [int]$Metadata.DiscNumber
-        }
     }
 
     if ((Test-Path -LiteralPath $target) -and -not $Force -and -not $isMultiDisc) {
@@ -323,26 +322,12 @@ function Move-RipToLibrary {
         New-Item -ItemType Directory -Path $target -Force | Out-Null
     }
 
-    $trackDir = if ($isMultiDisc) {
-        $discFolder = Join-Path $target ("Disc {0}" -f $discNumber)
-        if ($PSCmdlet.ShouldProcess($discFolder, 'Create disc subfolder')) {
-            New-Item -ItemType Directory -Path $discFolder -Force | Out-Null
-        }
-        $discFolder
-    } else {
-        $target
-    }
-
     $filesMoved = 0
     foreach ($entry in (Get-ChildItem -LiteralPath $RipFolder -File)) {
-        # Per-track FLACs fan to Disc N for multi-disc; everything else
-        # (cover.jpg, .cue, .log, sidecar logs) stays at the album root.
-        $dest = if ($isMultiDisc -and $entry.Extension -ieq '.flac' `
-                    -and $entry.Name -match '^\d{2,}\s*-\s*') {
-            Join-Path $trackDir $entry.Name
-        } else {
-            Join-Path $target $entry.Name
-        }
+        # All files — including per-disc track FLACs — land at the album
+        # root. The disc number is already in the FLAC filename prefix
+        # (e.g. `101 - Track.flac`) per the Plex naming spec.
+        $dest = Join-Path $target $entry.Name
         if ($PSCmdlet.ShouldProcess($dest, "Move $($entry.Name)")) {
             Move-Item -LiteralPath $entry.FullName -Destination $dest -Force:$Force
             $filesMoved++
