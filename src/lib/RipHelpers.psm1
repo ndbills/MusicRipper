@@ -470,7 +470,34 @@ function Get-RipperLogSummary {
     }
     if ([string]::IsNullOrWhiteSpace($text)) { return $result }
 
-    # --- AR album-level line ---------------------------------------------
+    # CUETools emits two distinct log shapes; we accept both.
+    #
+    # SHAPE A — "tabular" (what AccurateRipVerify.GenerateFullLog actually
+    # produces in 2.2.x; the format we discovered on real-disc-test-3):
+    #
+    #     [AccurateRip ID: <id>] found.
+    #     Track    Status
+    #      01      (14/36) Accurately ripped with offset(s) 6(14)
+    #      02      (14/37) Accurately ripped with offset(s) 6(14)
+    #     ...
+    #
+    #     Track | CTDB Status
+    #       1   | (94/95) Accurately ripped
+    #       2   | (92/95) Accurately ripped
+    #     ...
+    #
+    # In SHAPE A there's no album-level summary line; we derive it from
+    # the per-track lines. The two numbers in "(N/M)" mean N matching
+    # pressings out of M total — N is the AR/CTDB confidence.
+    #
+    # SHAPE B — older "bracketed" style still seen in some CUETools
+    # versions and used by our existing unit tests:
+    #
+    #     [AccurateRip: Disc present in database, all tracks accurately ripped (confidence 9)]
+    #     [CTDB: id=xyz, all tracks accurately ripped (confidence 8)]
+    #     Track 01 [aaaa]: accurately ripped (confidence 9)
+
+    # --- SHAPE B: AR album-level line (legacy) ---------------------------
     $arNotPresent  = $text -match '(?im)^\[?AccurateRip[:\]].*not present.*database'
     $arAllAccurate = $text -match '(?im)^\[?AccurateRip[:\]].*accurately ripped(?:.*confidence\s+(\d+))?'
     if ($arAllAccurate) {
@@ -482,7 +509,7 @@ function Get-RipperLogSummary {
         $result.AccurateRip.Status = 'NotInDatabase'
     }
 
-    # --- CTDB album-level line -------------------------------------------
+    # --- SHAPE B: CTDB album-level line (legacy) -------------------------
     $ctdbAllMatch = $text -match '(?im)^\[?CTDB[:\]].*all tracks accurately ripped(?:.*confidence\s+(\d+))?'
     $ctdbPartial  = $text -match '(?im)^\[?CTDB[:\]].*?(\d+)\s+entries?\s+match'
     if ($ctdbAllMatch) {
@@ -494,13 +521,47 @@ function Get-RipperLogSummary {
         $result.Ctdb.Status = 'Partial'
     }
 
-    # --- Per-track lines (permissive) ------------------------------------
-    # Both of these shapes appear across CUETools versions:
-    #   "Track 01 [aaaa]: accurately ripped (confidence 8)"
-    #   "01: AccurateRip-verified, confidence 7"
-    $trackLines = New-Object System.Collections.Generic.List[psobject]
-    $rxFull = '(?im)^\s*(?:Track\s+)?(\d{1,3})\b.*?(accurately\s+ripped|differs?|unverified|not\s+present)(?:.*?confidence\s+(\d+))?'
-    foreach ($m in [regex]::Matches($text, $rxFull)) {
+    # --- SHAPE A: AR header --------------------------------------------------
+    if ($text -match '(?im)^\[AccurateRip ID:[^\]]*\]\s*not\s+found') {
+        if ($result.AccurateRip.Status -eq 'Unknown') {
+            $result.AccurateRip.Status = 'NotInDatabase'
+        }
+    }
+
+    # --- Per-track lines: collect AR + CTDB separately, then merge ---------
+    # CTDB tabular row uses a "|" separator after the track number to
+    # disambiguate it from the AR row. We anchor on that.
+    $arTracks   = New-Object System.Collections.Generic.List[psobject]
+    $ctdbTracks = New-Object System.Collections.Generic.List[psobject]
+
+    # SHAPE A — CTDB first (so its lines are claimed before AR's looser
+    # regex sees them).
+    $rxCtdbA = '(?im)^\s*(\d{1,3})\s*\|\s*\((\d+)/\d+\)\s*Accurately\s+ripped'
+    foreach ($m in [regex]::Matches($text, $rxCtdbA)) {
+        $ctdbTracks.Add([pscustomobject]@{
+            Number     = [int]$m.Groups[1].Value
+            Verdict    = 'Verified'
+            Confidence = [int]$m.Groups[2].Value
+        })
+    }
+
+    # SHAPE A — AR per-track (no "|", optional "with offset" tail).
+    $rxArA = '(?im)^\s*(\d{1,3})\s+\((\d+)/\d+\)\s+(Accurately\s+ripped|Cannot\s+be\s+verified|No\s+match)'
+    foreach ($m in [regex]::Matches($text, $rxArA)) {
+        $word = ($m.Groups[3].Value -replace '\s+',' ').ToLowerInvariant()
+        $verdict = if ($word -like 'accurately*') { 'Verified' }
+                   elseif ($word -like 'no match*') { 'Suspect' }
+                   else                            { 'Unverified' }
+        $arTracks.Add([pscustomobject]@{
+            Number     = [int]$m.Groups[1].Value
+            Verdict    = $verdict
+            Confidence = [int]$m.Groups[2].Value
+        })
+    }
+
+    # SHAPE B — legacy per-track ("Track 01 [aaaa]: accurately ripped (confidence 9)")
+    $rxLegacy = '(?im)^\s*(?:Track\s+)?(\d{1,3})\s*\[[^\]]*\]\s*:\s*(accurately\s+ripped|differs?|unverified|not\s+present)(?:.*?confidence\s+(\d+))?'
+    foreach ($m in [regex]::Matches($text, $rxLegacy)) {
         $verdict = ($m.Groups[2].Value -replace '\s+', ' ').ToLowerInvariant()
         $verdictClass = switch -Regex ($verdict) {
             'accurately'   { 'Verified';      break }
@@ -510,13 +571,17 @@ function Get-RipperLogSummary {
             default        { 'Unknown' }
         }
         $confidence = if ($m.Groups[3].Success) { [int]$m.Groups[3].Value } else { $null }
-        $trackLines.Add([pscustomobject]@{
+        $arTracks.Add([pscustomobject]@{
             Number     = [int]$m.Groups[1].Value
             Verdict    = $verdictClass
             Confidence = $confidence
         })
     }
-    $result.Tracks = @($trackLines | Sort-Object Number -Unique)
+
+    # Build the merged Tracks list. AR drives the per-track verdict because
+    # it's the gold standard; CTDB's confidence is folded into Ctdb.MinConfidence.
+    # Dedupe by number — Sort -Unique keeps the first occurrence.
+    $result.Tracks = @($arTracks | Sort-Object Number -Unique)
 
     if ($result.Tracks.Count -gt 0) {
         $result.AccurateRip.TotalTracks   = $result.Tracks.Count
@@ -524,6 +589,24 @@ function Get-RipperLogSummary {
         $confidences = @($result.Tracks | Where-Object { $null -ne $_.Confidence } | ForEach-Object Confidence)
         if ($confidences.Count -gt 0 -and -not $result.AccurateRip.MinConfidence) {
             $result.AccurateRip.MinConfidence = ($confidences | Measure-Object -Minimum).Minimum
+        }
+        # SHAPE A: derive AR album status from per-track verdicts when
+        # the bracketed album line was absent.
+        if ($result.AccurateRip.Status -eq 'Unknown' -and
+            $result.AccurateRip.MatchedTracks -eq $result.AccurateRip.TotalTracks) {
+            $result.AccurateRip.Status = 'Verified'
+        }
+    }
+
+    # SHAPE A: derive CTDB album status from per-track CTDB verdicts.
+    if ($ctdbTracks.Count -gt 0) {
+        $allCtdbVerified = @($ctdbTracks | Where-Object Verdict -ne 'Verified').Count -eq 0
+        if ($result.Ctdb.Status -eq 'Unknown' -and $allCtdbVerified) {
+            $result.Ctdb.Status = 'Verified'
+        }
+        $ctdbConfs = @($ctdbTracks | ForEach-Object Confidence)
+        if ($ctdbConfs.Count -gt 0 -and -not $result.Ctdb.MinConfidence) {
+            $result.Ctdb.MinConfidence = ($ctdbConfs | Measure-Object -Minimum).Minimum
         }
     }
 

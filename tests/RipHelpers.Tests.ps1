@@ -318,6 +318,23 @@ Describe 'Get-RipperLogSummary' {
         $r = Get-RipperLogSummary -LogText $log
         $r.Status | Should -Be 'Verified'
     }
+
+    It 'parses the real CUETools "tabular" log format (real-disc-test-3 fixture)' {
+        # Captured from a real Spirit-of-the-Season rip on 2026-04-21.
+        # AR confidence column is the FIRST number in (N/M); same for CTDB.
+        # CTDB rows use a "|" separator after the track number.
+        $logPath = Join-Path $PSScriptRoot 'fixtures\rip-log-spirit-of-the-season.txt'
+        $log = Get-Content -Raw $logPath
+        $r = Get-RipperLogSummary -LogText $log
+
+        $r.AccurateRip.Status        | Should -Be 'Verified'
+        $r.AccurateRip.TotalTracks   | Should -Be 16
+        $r.AccurateRip.MatchedTracks | Should -Be 16
+        $r.AccurateRip.MinConfidence | Should -Be 13   # tracks 13 + 14 are (13/35)
+        $r.Ctdb.Status               | Should -Be 'Verified'
+        $r.Ctdb.MinConfidence        | Should -Be 92   # several tracks are (92/95)
+        $r.Status                    | Should -Be 'Verified'
+    }
 }
 
 Describe 'ConvertTo-RipperEtaText' {
