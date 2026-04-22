@@ -56,6 +56,7 @@ Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 . (Join-Path $repoRoot 'src\core\Write-Tags.ps1')
 . (Join-Path $repoRoot 'src\core\Move-ToLibrary.ps1')
 . (Join-Path $repoRoot 'src\core\New-ReviewQueueArtifacts.ps1')
+. (Join-Path $repoRoot 'src\core\Invoke-PostProcess.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-MetadataDialog.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-RipProgress.ps1')
 
@@ -302,48 +303,15 @@ switch ($choice.Action) {
         $phase5Quality = $null
         if ($result.Status -ne 'Cancelled' -and $result.Status -ne 'Failed') {
             try {
-                $phase5Quality = Test-RipQuality -LogPath $result.LogFile
-                Write-RipperLog INFO 'Start-Ripper' `
-                    "Quality gate: $($phase5Quality.Status) -> $($phase5Quality.Destination) (prefix='$($phase5Quality.RoutingPrefix)')"
-
-                # Tag only library-bound rips. Review-queue items keep their
-                # raw, untagged state so a human in Picard sees exactly what
-                # came off the disc.
-                if ($phase5Quality.Destination -eq 'Library') {
-                    $tagArgs = @{
-                        RipFolder = $result.OutputDir
-                        Metadata  = $m
-                        DiscId    = $disc.DiscId
-                    }
-                    if ($result.CoverArtFile -and (Test-Path -LiteralPath $result.CoverArtFile)) {
-                        $tagArgs.CoverArtBytes = [System.IO.File]::ReadAllBytes($result.CoverArtFile)
-                    }
-                    Invoke-RipperWriteTags @tagArgs | Out-Null
-                }
-
-                $move = Move-RipToLibrary `
-                    -RipFolder   $result.OutputDir `
-                    -LibraryRoot $cfg.LibraryRoot `
-                    -Metadata    $m `
-                    -Quality     $phase5Quality `
-                    -DiscId      $disc.DiscId
-                $phase5Target = $move.Target
-                Write-RipperLog INFO 'Start-Ripper' `
-                    "Moved to: $($move.Target) (review=$($move.IsReviewQueue), files=$($move.FilesMoved))"
-
-                if ($move.IsReviewQueue) {
-                    $logFileName = Split-Path -Leaf $result.LogFile
-                    Write-RipperReviewTxt `
-                        -ReviewFolder $move.Target `
-                        -Quality      $phase5Quality `
-                        -Metadata     $m `
-                        -DiscId       $disc.DiscId `
-                        -LogFileName  $logFileName | Out-Null
-                    New-RipperReviewImage `
-                        -ReviewFolder $move.Target `
-                        -Metadata     $m `
-                        -DiscId       $disc.DiscId | Out-Null
-                }
+                $pp = Invoke-RipperPostProcess `
+                    -RipFolder    $result.OutputDir `
+                    -LogFile      $result.LogFile `
+                    -Metadata     $m `
+                    -DiscId       $disc.DiscId `
+                    -LibraryRoot  $cfg.LibraryRoot `
+                    -CoverArtFile $result.CoverArtFile
+                $phase5Quality = $pp.Quality
+                $phase5Target  = $pp.Target
             } catch {
                 Write-RipperLog ERROR 'Start-Ripper' "Phase 5 pipeline failed: $($_.Exception.Message)"
                 Show-RipperInfo "Rip succeeded but post-processing failed:`n`n  $($_.Exception.Message)`n`nThe raw rip is still at:`n  $($result.OutputDir)`n`nSee log:`n  $logPath" `
