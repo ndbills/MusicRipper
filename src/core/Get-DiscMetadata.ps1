@@ -161,10 +161,21 @@ function ConvertFrom-MusicBrainzDiscIdResponse {
             }
         }
 
+        # Media format (e.g. 'CD', 'Digital Media', 'Vinyl') from the matching
+        # medium. Picard's MEDIA tag.
+        $mediaFormat = $null
+        if ($matchingMedium -and $matchingMedium.PSObject.Properties['format'] -and $matchingMedium.format) {
+            $mediaFormat = [string]$matchingMedium.format
+        }
+
         # Album-level artist credit -> joined phrase (handles "Foo feat. Bar").
         $albumArtist = ($rel.'artist-credit' | ForEach-Object {
             "$($_.name)$($_.joinphrase)"
         }) -join ''
+        # Multi-value album artists (Picard ALBUMARTISTS): one entry per
+        # artist-credit, no joinphrases. Stored as a string[] so callers can
+        # emit multiple ALBUMARTISTS=... tag lines.
+        $albumArtists = @($rel.'artist-credit' | ForEach-Object { [string]$_.name } | Where-Object { $_ })
         # Sort form: same shape but using artist.sort-name (Picard convention).
         $albumArtistSort = ($rel.'artist-credit' | ForEach-Object {
             $sn = $_.name
@@ -250,6 +261,8 @@ function ConvertFrom-MusicBrainzDiscIdResponse {
                 $trackArtist = ($t.'artist-credit' | ForEach-Object {
                     "$($_.name)$($_.joinphrase)"
                 }) -join ''
+                # Multi-value form (Picard ARTISTS).
+                $trackArtists = @($t.'artist-credit' | ForEach-Object { [string]$_.name } | Where-Object { $_ })
                 $trackArtistSort = ($t.'artist-credit' | ForEach-Object {
                     $sn = $_.name
                     if ($_.PSObject.Properties['artist'] -and $_.artist) {
@@ -271,23 +284,31 @@ function ConvertFrom-MusicBrainzDiscIdResponse {
                 $lengthMs = if ($t.length) { [int]$t.length }
                             elseif ($t.recording -and $t.recording.length) { [int]$t.recording.length }
                             else { 0 }
+                # Release-track MBID (Picard MUSICBRAINZ_RELEASETRACKID =
+                # Picard's "MusicBrainz Track Id"). Distinct from the
+                # recording MBID, which is per-recording across releases.
+                $releaseTrackMbid = if ($t.PSObject.Properties['id'] -and $t.id) { [string]$t.id } else { $null }
                 [pscustomobject]@{
-                    Number        = [int]$t.position
-                    Title         = [string]$t.title
-                    Artist        = $trackArtist
-                    ArtistSort    = $trackArtistSort
-                    ArtistMbid    = $trackArtistMbid
-                    RecordingMbid = if ($t.recording) { [string]$t.recording.id } else { $null }
-                    LengthMs      = $lengthMs
+                    Number           = [int]$t.position
+                    Title            = [string]$t.title
+                    Artist           = $trackArtist
+                    Artists          = $trackArtists
+                    ArtistSort       = $trackArtistSort
+                    ArtistMbid       = $trackArtistMbid
+                    RecordingMbid    = if ($t.recording) { [string]$t.recording.id } else { $null }
+                    ReleaseTrackMbid = $releaseTrackMbid
+                    LengthMs         = $lengthMs
                 }
             }
         }
 
         [pscustomobject]@{
             AlbumArtist      = $albumArtist
+            AlbumArtists     = $albumArtists
             AlbumArtistSort  = $albumArtistSort
             AlbumArtistMbid  = $albumArtistMbid
             Album            = [string]$rel.title
+            Media            = $mediaFormat
             ReleaseMbid      = [string]$rel.id
             ReleaseGroupMbid = if ($rel.'release-group') { [string]$rel.'release-group'.id } else { $null }
             Year             = $year

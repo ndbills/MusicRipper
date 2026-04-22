@@ -183,17 +183,23 @@ function ConvertFrom-MetadataViewModel {
     $newTracks = foreach ($row in @($ViewModel.Tracks)) {
         $srcT = $srcTrackByNumber[[int]$row.Number]
         $artistSort = $null
-        if ($srcT -and $srcT.PSObject.Properties['ArtistSort']) {
-            $artistSort = [string]$srcT.ArtistSort
+        $artists = $null
+        $releaseTrackMbid = $null
+        if ($srcT) {
+            if ($srcT.PSObject.Properties['ArtistSort'])       { $artistSort       = [string]$srcT.ArtistSort }
+            if ($srcT.PSObject.Properties['Artists'])          { $artists          = $srcT.Artists }
+            if ($srcT.PSObject.Properties['ReleaseTrackMbid']) { $releaseTrackMbid = [string]$srcT.ReleaseTrackMbid }
         }
         [pscustomobject]@{
-            Number        = [int]$row.Number
-            Title         = [string]$row.Title
-            Artist        = [string]$row.Artist
-            ArtistSort    = $artistSort
-            ArtistMbid    = [string]$row.ArtistMbid
-            RecordingMbid = [string]$row.RecordingMbid
-            LengthMs      = [int]$row.LengthMs
+            Number           = [int]$row.Number
+            Title            = [string]$row.Title
+            Artist           = [string]$row.Artist
+            Artists          = $artists
+            ArtistSort       = $artistSort
+            ArtistMbid       = [string]$row.ArtistMbid
+            RecordingMbid    = [string]$row.RecordingMbid
+            ReleaseTrackMbid = $releaseTrackMbid
+            LengthMs         = [int]$row.LengthMs
         }
     }
 
@@ -210,9 +216,11 @@ function ConvertFrom-MetadataViewModel {
 
     $out = [pscustomobject]@{
         AlbumArtist      = [string]$ViewModel.AlbumArtist
+        AlbumArtists     = & $srcProp 'AlbumArtists'
         AlbumArtistSort  = & $srcProp 'AlbumArtistSort'
         AlbumArtistMbid  = $src.AlbumArtistMbid
         Album            = [string]$ViewModel.Album
+        Media            = & $srcProp 'Media'
         ReleaseMbid      = $src.ReleaseMbid
         ReleaseGroupMbid = $src.ReleaseGroupMbid
         Year             = $year

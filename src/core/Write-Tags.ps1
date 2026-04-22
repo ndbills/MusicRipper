@@ -161,7 +161,24 @@ function New-RipperFlacTagSet {
 
     $tags = New-Object 'System.Collections.Generic.List[string]'
     $tags.Add("ALBUMARTIST=$albumArtist")
+    # Multi-value ALBUMARTISTS (Picard parity): one tag line per credited
+    # album artist, no joinphrases. Skipped on single-artist albums where
+    # it would be redundant with ALBUMARTIST.
+    if ($Metadata.PSObject.Properties['AlbumArtists'] -and $Metadata.AlbumArtists) {
+        $aa = @($Metadata.AlbumArtists) | Where-Object { $_ }
+        if (@($aa).Count -gt 1) {
+            foreach ($a in $aa) { $tags.Add("ALBUMARTISTS=$a") }
+        }
+    }
     $tags.Add("ARTIST=$trackArtist")
+    # Multi-value ARTISTS (Picard parity): one tag line per credited track
+    # artist. Same single-artist suppression as ALBUMARTISTS.
+    if ($tm.PSObject.Properties['Artists'] -and $tm.Artists) {
+        $ta = @($tm.Artists) | Where-Object { $_ }
+        if (@($ta).Count -gt 1) {
+            foreach ($a in $ta) { $tags.Add("ARTISTS=$a") }
+        }
+    }
     $tags.Add("ALBUM=$($Metadata.Album)")
     $tags.Add("TITLE=$($tm.Title)")
     $tags.Add("TRACKNUMBER=$($tm.Number)")
@@ -207,12 +224,17 @@ function New-RipperFlacTagSet {
     if ($Metadata.PSObject.Properties['CatalogNumber']  -and $Metadata.CatalogNumber)  { $tags.Add("CATALOGNUMBER=$($Metadata.CatalogNumber)") }
     if ($Metadata.PSObject.Properties['Barcode']        -and $Metadata.Barcode)        { $tags.Add("BARCODE=$($Metadata.Barcode)") }
     if ($Metadata.PSObject.Properties['Asin']           -and $Metadata.Asin)           { $tags.Add("ASIN=$($Metadata.Asin)") }
+    if ($Metadata.PSObject.Properties['Media']          -and $Metadata.Media)          { $tags.Add("MEDIA=$($Metadata.Media)") }
 
     $tags.Add("MUSICBRAINZ_DISCID=$DiscId")
     if ($Metadata.PSObject.Properties['ReleaseMbid']      -and $Metadata.ReleaseMbid)      { $tags.Add("MUSICBRAINZ_ALBUMID=$($Metadata.ReleaseMbid)") }
     if ($Metadata.PSObject.Properties['AlbumArtistMbid']  -and $Metadata.AlbumArtistMbid)  { $tags.Add("MUSICBRAINZ_ALBUMARTISTID=$($Metadata.AlbumArtistMbid)") }
     if ($tm.PSObject.Properties['ArtistMbid']             -and $tm.ArtistMbid)             { $tags.Add("MUSICBRAINZ_ARTISTID=$($tm.ArtistMbid)") }
     if ($tm.PSObject.Properties['RecordingMbid']          -and $tm.RecordingMbid)          { $tags.Add("MUSICBRAINZ_TRACKID=$($tm.RecordingMbid)") }
+    # Picard's MUSICBRAINZ_RELEASETRACKID == Picard's "MusicBrainz Track Id"
+    # (the per-release track entity, distinct from the cross-release
+    # recording MBID stored as MUSICBRAINZ_TRACKID).
+    if ($tm.PSObject.Properties['ReleaseTrackMbid']       -and $tm.ReleaseTrackMbid)       { $tags.Add("MUSICBRAINZ_RELEASETRACKID=$($tm.ReleaseTrackMbid)") }
     if ($Metadata.PSObject.Properties['ReleaseGroupMbid'] -and $Metadata.ReleaseGroupMbid) { $tags.Add("MUSICBRAINZ_RELEASEGROUPID=$($Metadata.ReleaseGroupMbid)") }
 
     , $tags.ToArray()
