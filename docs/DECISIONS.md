@@ -205,3 +205,85 @@ resulting `CDImageLayout`, then closes the drive.
 The relevant types have been stable for years; risk is low.
 
 ---
+
+## D-009 — Tag-write engine: Xiph `metaflac.exe`, not CUETools .NET *(Phase 5)*
+
+**Choice:** Add `Xiph.FLAC` (winget id `Xiph.FLAC`, currently v1.5.0) to
+`setup/Install-Dependencies.ps1`. `src/core/Write-Tags.ps1` shells out to
+`metaflac.exe` for the full Vorbis tag set, embedded cover art, and
+ReplayGain (`--add-replay-gain` over the album).
+
+**Alternatives considered:**
+
+- **CUETools .NET assemblies.** CUETools is already installed (D-008), but
+  it does **not** expose a public, stable metadata-write API. The Vorbis
+  comment surface lives inside `CUETools.Codecs.FLAKE` internals that
+  are not part of the documented assembly contract.
+- **TagLib# / atldotnet.** Mature .NET tag libraries, but vendoring a
+  managed DLL into a PowerShell repo adds a load-order ceremony and a
+  third-party update path. ReplayGain still needs an audio-analysis
+  pass that neither library ships.
+- **Hand-write the FLAC metadata blocks.** Possible (the spec is small),
+  but reinventing a wheel where Xiph ships the canonical reference tool.
+
+**Why metaflac wins:**
+
+- Canonical Xiph tool; whatever it writes is by definition
+  spec-compliant.
+- ReplayGain analysis is a single `--add-replay-gain` invocation across
+  the album set — no separate analyzer dependency.
+- Phase 4's `Invoke-Rip` already reserves 8192 bytes of
+  `EncoderSettings.Padding` per file specifically so metaflac can write
+  tags + 8 KB cover art **in place** with zero audio rewrite. Don't
+  break this in any future Invoke-Rip change.
+- One winget line in setup; no managed-DLL load-order surprises.
+
+---
+
+## D-010 — `_ReviewQueue/_image/` single-file image via `flac.exe` cmd-shell pipe *(Phase 5)*
+
+**Choice:** When a rip routes to `_ReviewQueue/`, generate the inspection
+image `_image/<Album>.flac` + `.cue` by decoding each per-track FLAC to
+raw PCM, concatenating to one temp `.raw`, then re-encoding with
+`flac.exe` invoked through `cmd.exe /c` with explicit quoting. The
+encoder reads the raw stdin / `-o` writes the output — no PowerShell
+binary pipe sits between two native processes.
+
+**Alternatives considered:**
+
+- **CUETools .NET decoder + Flake re-encoder.** Same dep we already use
+  for ripping, no new winget line. Works in isolation, but the
+  per-track decode loop is significantly more code than `flac.exe -d`,
+  and a bug in stream-frame alignment surfaces as a corrupt image
+  rather than a clean error.
+- **`& $FlacPath` (PowerShell native call).** First implementation.
+  Intermittently corrupted the encoded output (~1-in-10 runs) on the
+  test fixture path, with no PowerShell-level error. Root cause was
+  never fully isolated; symptom was a non-FLAC file with PowerShell
+  banner bytes inserted near the start.
+- **`Start-Process -FilePath flac.exe -ArgumentList ...`** Same
+  intermittent corruption.
+- **`sox`, `ffmpeg`, etc.** New dependency for one feature.
+
+**Why `cmd.exe /c "flac.exe ... -o out.flac in.raw"` wins:**
+
+- We already ship `flac.exe` for D-009 (metaflac and flac come from
+  the same Xiph.FLAC winget package).
+- Quoting and arg parsing happen entirely inside cmd.exe; PowerShell
+  doesn't touch the native arg vector. The intermittent corruption
+  disappeared after switching to this form.
+- Skip-when-missing: if `flac.exe` isn't on PATH or in standard
+  install dirs, `New-RipperReviewImage` logs a warning and returns
+  `$null`. The per-track FLACs at the album root are still usable in
+  foobar2000, so the review queue degrades gracefully.
+
+**Test strategy:** Earlier commits used a hand-rolled `flac.cmd` stub to
+fake the encoder. Tests went 159/1/1 to 160/0/1 randomly. Three
+different stub-side fixes (`& exe`, `Start-Process exe`,
+`Start-Process cmd /c`) all left occasional 1-in-5 failures. The fix
+that stuck: use the **real** `flac.exe` plus a **real** `.flac`
+fixture under `tests/fixtures/` (gitignored via `*.flac` so developers
+drop one in manually; CI / fresh clones skip the integration tests
+cleanly). Five consecutive clean suite runs confirmed stability.
+
+---

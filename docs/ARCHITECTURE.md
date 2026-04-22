@@ -12,15 +12,26 @@ the first thing to update.
 [Start-Ripper.ps1] ──► [Get-DiscId] ──► [Get-DiscMetadata] ──┐
                                                              ▼
                                               [Show-MetadataDialog]
-                                                  (confirm/edit)
+                                                  (confirm/edit/review)
                                                              │
                                                              ▼
                                   [Invoke-Rip] ──► CUETools secure rip
                                                              │
                                                              ▼
                                               [Test-RipQuality]
-                                                  ├─ pass ──► [Write-Tags] ──► [Move-ToLibrary] ──► [PostProcessors] ──► [Eject]
-                                                  └─ fail ──► [_ReviewQueue]
+                                                             │
+                            ┌── Verified / Probably-good ─┤
+                            ▼                                ▼ Suspect / Unknown / LowMatch / Manual
+                  [Write-Tags] (metaflac:                    │
+                   Vorbis + cover + RG)                      │
+                            │                                │
+                            ▼                                ▼
+                  [Move-ToLibrary]                 [Move-ToLibrary] (route=_ReviewQueue)
+                            │                                │
+                            ▼                                ▼
+                            │           [Write-RipperReviewTxt] + [New-RipperReviewImage]
+                            │                                │
+                            └─────────────[Eject]─────────────┘
 ```
 
 ## Module map
@@ -35,7 +46,7 @@ the first thing to update.
 | `src/lib/Logging.psm1`             | 1     | Per-session structured log files.                      |
 | `src/lib/Common.psm1`              | 1     | Path sanitization, repo-root locator.                  |
 | `src/lib/RipHelpers.psm1`          | 4     | Filename, CUE-sheet, ETA/speed formatters, log rollup. |
-| `src/Start-Ripper.ps1`             | 1→7   | Orchestrator (currently runs Phase 1–4).               |
+| `src/Start-Ripper.ps1`             | 1→7   | Orchestrator (currently runs Phase 1–5).               |
 | `src/core/Get-DiscId.ps1`          | 2     | Read TOC via CUETools .NET DLLs; emit MB disc id.      |
 | `src/core/Get-DiscMetadata.ps1`    | 2     | MusicBrainz + Cover Art Archive lookup, throttled.     |
 | `src/ui/Show-MetadataDialog.ps1`   | 3     | WPF confirm/edit dialog. Returns Rip / Review / Cancel. |
@@ -43,9 +54,11 @@ the first thing to update.
 |                                    |       | elapsed, ETA, read speed, AR/CTDB status, Cancel).      |
 | `src/core/Invoke-Rip.ps1`          | 4     | Secure FLAC rip via CUETools .NET DLLs (CDDriveReader   |
 |                                    |       | + AccurateRip + CTDB + Flake encoder); emits CUE + log. |
-| `src/core/Test-RipQuality.ps1`     | 5     | Parse rip log → Verified/Probably-good/Suspect.        |
-| `src/core/Write-Tags.ps1`          | 5     | Vorbis tags, ReplayGain, embedded cover art.           |
-| `src/core/Move-ToLibrary.ps1`      | 5     | Plex layout + `_ReviewQueue/` routing.                 |
+| `src/core/Test-RipQuality.ps1`     | 5     | Parse rip log → Verified/ProbablyGood/Suspect/Unknown; |
+|                                    |       | emit `RoutingPrefix` (`''`/`SUSPECT`/`UNKNOWN`/...).    |
+| `src/core/Write-Tags.ps1`          | 5     | Vorbis tags, ReplayGain, embedded cover via metaflac.   |
+| `src/core/Move-ToLibrary.ps1`      | 5     | Plex layout + sanitization + `_ReviewQueue/` routing.   |
+| `src/core/New-ReviewQueueArtifacts.ps1` | 5 | `REVIEW.txt` + single-file `_image/<Album>.flac+cue`. |
 | `src/postprocessors/*.ps1`         | 6     | Optional OneDrive / Synology mirror.                   |
 | `src/tools/Move-FromReviewQueue.ps1` | 7   | Promote a fixed-up review-queue album into the library. |
 | `Install-MusicRipper.ps1` (root)   | 7     | One-shot self-installer.                               |
@@ -74,11 +87,11 @@ the first thing to update.
 
 ## Library layout (final, Phase 5)
 
-Phase 4 stages every rip into `<LibraryRoot>\_inbox\<AlbumArtist> - <Album>\`
-first (FLACs + `cover.jpg` + `<album>.cue` + `<album>.log`). Phase 5's
-`Move-ToLibrary` will rename that folder into either the Plex layout below
-or `_ReviewQueue/`, based on the rip's quality status. Same-volume staging
-keeps the eventual move a fast rename rather than a copy.
+A successful rip lands directly in the Plex layout below. Suspect rips,
+low-confidence MusicBrainz matches, and unknown discs route to
+`_ReviewQueue/` with a `REVIEW.txt` plus a single-file inspection image
+under `_image/`. See [REVIEW-WORKFLOW.md](REVIEW-WORKFLOW.md) for the
+clear-the-queue runbook.
 
 ```
 <LibraryRoot>/
