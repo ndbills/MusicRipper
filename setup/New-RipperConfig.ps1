@@ -12,6 +12,8 @@
         - MusicBrainz contact email (required by their ToS)
         - Optional OneDrive mirror path
         - Optional Synology NAS UNC + credential (DPAPI-stored)
+        - Metadata-provider chain   (Phase 5.2; comma-separated, in priority order)
+        - Cover-art-provider chain  (Phase 5.2; comma-separated, in priority order)
 
 .EXAMPLE
     PS> ./setup/New-RipperConfig.ps1
@@ -65,6 +67,10 @@ if ($existing) {
     Write-Host "  OneDrivePath          : $($existing.OneDrivePath)"
     Write-Host "  SynologyUnc           : $($existing.SynologyUnc)"
     Write-Host "  DriveLetter / Offset  : $($existing.DriveLetter) / $($existing.DriveOffset)"
+    $existingMd  = if ($existing.PSObject.Properties['MetadataProviders']  -and $existing.MetadataProviders)  { ($existing.MetadataProviders  -join ', ') } else { '(default)' }
+    $existingCov = if ($existing.PSObject.Properties['CoverArtProviders'] -and $existing.CoverArtProviders) { ($existing.CoverArtProviders -join ', ') } else { '(default)' }
+    Write-Host "  MetadataProviders     : $existingMd"
+    Write-Host "  CoverArtProviders     : $existingCov"
     Write-Host ""
     $ans = Read-Host "Press Enter to keep ALL existing values, or type 'e' to edit field-by-field"
     if ([string]::IsNullOrWhiteSpace($ans)) {
@@ -109,6 +115,39 @@ if ($syn) {
     }
 }
 
+# --- Provider chains (Phase 5.2) ------------------------------------------
+# Free-form comma-separated lists so the user can reorder, drop, or add
+# providers we ship later without this script needing to grow a menu.
+# Names that don't match a known provider are accepted but warned about
+# (the orchestrator skips unknowns at runtime with a WARN log line).
+$knownMd  = @('MusicBrainz', 'CuetoolsDb')
+$knownCov = @('CoverArtArchive', 'iTunesSearch', 'Deezer')
+
+function Read-ProviderList {
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)] [string]$Prompt,
+        [Parameter(Mandatory)] [string[]]$Default,
+        [Parameter(Mandatory)] [string[]]$Known
+    )
+    $defStr = $Default -join ', '
+    $raw = Read-Host "$Prompt [$defStr] (Enter = keep)"
+    if ([string]::IsNullOrWhiteSpace($raw)) { return $Default }
+    $list = @($raw -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    foreach ($n in $list) {
+        if ($Known -notcontains $n) {
+            Write-Warning "Provider '$n' is not one of the built-ins ($($Known -join ', ')). It will be skipped at runtime unless you add a matching provider module."
+        }
+    }
+    return $list
+}
+
+$defaultMd  = if ($existing -and $existing.PSObject.Properties['MetadataProviders']  -and $existing.MetadataProviders)  { @($existing.MetadataProviders)  } else { $knownMd }
+$defaultCov = if ($existing -and $existing.PSObject.Properties['CoverArtProviders'] -and $existing.CoverArtProviders) { @($existing.CoverArtProviders) } else { $knownCov }
+$metadataProviders = Read-ProviderList -Prompt 'Metadata providers (priority order, comma-separated)'  -Default $defaultMd  -Known $knownMd
+$coverArtProviders = Read-ProviderList -Prompt 'Cover-art providers (priority order, comma-separated)' -Default $defaultCov -Known $knownCov
+
 # --- Build & persist -------------------------------------------------------
 $cfg = New-RipperConfigObject `
     -LibraryRoot   $libraryRoot `
@@ -117,6 +156,8 @@ $cfg = New-RipperConfigObject `
 
 $cfg.MusicBrainzUserAgent  = $ua
 $cfg.HasSynologyCredential = $hasCred
+$cfg.MetadataProviders     = $metadataProviders
+$cfg.CoverArtProviders     = $coverArtProviders
 
 # Carry over drive info if Register-Drive ran first.
 if ($existing) {
