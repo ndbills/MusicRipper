@@ -342,9 +342,22 @@ function Get-RipperCoverArt {
 
 .DESCRIPTION
     Cover Art Archive serves a 307 redirect to the underlying S3-hosted
-    image. Invoke-WebRequest follows redirects automatically. We only
-    grab the "front" — Phase 5 will embed it as APIC and write
-    cover.jpg next to the FLACs.
+    image. Invoke-WebRequest follows redirects automatically. We grab
+    the 1200px-bounded thumbnail rather than the unbounded `/front`
+    original because:
+
+      - Plex / Picard / foobar2000 all render fine at 1200px (Plex's
+        own poster art is ~1000x1500).
+      - Original uploads on CAA are uncapped and frequently 3000x3000+
+        / 5+ MB. Embedding that in every track of a 12-track album adds
+        ~60 MB of redundant pixels and breaks Windows Explorer's
+        built-in FLAC property handler (it stops reading tags when
+        the PICTURE block is too large, leaving Title/Album/Artist
+        columns blank).
+      - 1200px JPEGs are typically 150-400 KB, well under any handler
+        threshold.
+
+    See: https://wiki.musicbrainz.org/Cover_Art_Archive/API#Image_size
 
 .PARAMETER ReleaseMbid
     The release MBID to look up.
@@ -361,7 +374,7 @@ function Get-RipperCoverArt {
         [Parameter(Mandatory)] [string]$ReleaseMbid
     )
 
-    $url = "https://coverartarchive.org/release/$ReleaseMbid/front"
+    $url = "https://coverartarchive.org/release/$ReleaseMbid/front-1200"
     try {
         # -OutFile via temp + Get-Content -AsByteStream is the reliable way to
         # grab raw bytes in PS7 without text decoding mangling them.
