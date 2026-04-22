@@ -182,7 +182,13 @@ function Invoke-RipperRip {
         [Parameter(Mandatory)] $Metadata,
         [Parameter(Mandatory)] [string]$OutputRoot,
         [scriptblock]$OnProgress,
-        [ref]$CancelRequested,
+        # Either a [ref] to a [bool] (legacy) or a [scriptblock] returning
+        # [bool]. The scriptblock form is required when the caller wants
+        # the rip loop to see live updates from another thread, since
+        # PowerShell's [ref]-of-an-array-slot snapshots the value at the
+        # time the [ref] is constructed. The runspace-based UI (Show-RipProgress)
+        # uses the scriptblock form to read the synchronized state hashtable.
+        $CancelRequested,
         [bool]$ContactNetwork = $true
     )
 
@@ -224,7 +230,18 @@ function Invoke-RipperRip {
     $startTime     = [DateTime]::UtcNow
     $errors        = @()
     $progressCb    = $OnProgress
-    $cancelRef     = $CancelRequested
+    # Build a uniform 'is cancel requested?' callable so the inner loop
+    # doesn't have to branch on the parameter type every iteration.
+    $isCancelled = if ($null -eq $CancelRequested) {
+        { $false }
+    } elseif ($CancelRequested -is [scriptblock]) {
+        $CancelRequested
+    } elseif ($CancelRequested -is [System.Management.Automation.PSReference]) {
+        $cancelRefLocal = $CancelRequested
+        { [bool]$cancelRefLocal.Value }.GetNewClosure()
+    } else {
+        throw "CancelRequested must be a [ref] or a [scriptblock]; got $($CancelRequested.GetType().FullName)."
+    }
     $cancelled     = $false
     $arStatusText  = 'pending'
 
@@ -402,7 +419,7 @@ function Invoke-RipperRip {
         $stopwatch      = [Diagnostics.Stopwatch]::StartNew()
 
         while ($samplesRead -lt $totalSamples) {
-            if ($cancelRef -and $cancelRef.Value) {
+            if (& $isCancelled) {
                 Write-RipperLog WARN 'Invoke-Rip' 'Cancel requested — aborting rip.'
                 $cancelled = $true
                 break
