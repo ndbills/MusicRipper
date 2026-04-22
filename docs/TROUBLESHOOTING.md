@@ -83,3 +83,73 @@ No internet, MusicBrainz is down (`https://status.musicbrainz.org`),
 or the rate limit kicked in. Tool retries on the next disc; the
 current disc still rips (Phase 5+) but goes to `_ReviewQueue/` with
 placeholder tags.
+
+## Tagging & library files (Phase 5)
+
+### Why does Phase 5 "re-tag" files that already have tags?
+CUETools' encoder writes a **minimal** Vorbis comment block during the
+rip (TITLE / ARTIST / ALBUM / TRACKNUMBER) — enough to identify the
+file in isolation, not enough for a real music library. Phase 5
+(`src/core/Write-Tags.ps1`) wipes those minimal tags and writes the
+full Plex/MusicBrainz Picard set:
+
+- `ALBUMARTIST` (Plex needs this distinct from `ARTIST` for compilation
+  grouping; without it, every track on a Various Artists disc shows up
+  as a separate "album" in your library).
+- `TRACKTOTAL`, `DISCNUMBER`, `DISCTOTAL` (multi-disc set support).
+- `DATE`, `GENRE`, `COMPILATION`.
+- `MUSICBRAINZ_DISCID`, `MUSICBRAINZ_ALBUMID`, `MUSICBRAINZ_ALBUMARTISTID`,
+  `MUSICBRAINZ_ARTISTID`, `MUSICBRAINZ_TRACKID`, `MUSICBRAINZ_RELEASEGROUPID`
+  — so Picard / Plex can re-match without re-querying MusicBrainz.
+- Embedded `PICTURE` block (front cover) on every track. The
+  `cover.jpg` sidecar alone is not enough; Plex mobile/Roku display
+  the embedded picture, not the sidecar.
+- `REPLAYGAIN_TRACK_GAIN/PEAK` per track + `REPLAYGAIN_ALBUM_GAIN/PEAK`
+  across the disc. CUETools has **no .NET API** for ReplayGain at all;
+  if you skip Phase 5, volume normalization in Plex/foobar2000 will
+  not work.
+
+This is exactly what you'd do by dragging the rip folder into
+MusicBrainz Picard after a CUETools / EAC rip — most online "rip for
+Plex" guides assume you'll do the Picard step manually. We just
+automated it.
+
+### Windows Explorer shows blank Title/Artist/Album columns
+Windows 11's built-in FLAC property handler is unreliable and
+frequently shows blank columns even when the tags are perfectly
+written. F5 won't help — there is no cache to invalidate, the handler
+just doesn't read those Vorbis comment layouts.
+
+Verify the file is actually fine:
+
+```powershell
+./src/tools/Show-FlacTags.ps1 'E:\digitize\MusicRipper\<artist>\<album>'
+```
+
+If that prints a populated 20-line VORBIS_COMMENT block, the file is
+golden — Plex, foobar2000, MusicBee, Picard, VLC, MediaInfo will all
+read it correctly.
+
+To also fix Explorer, install [Icaros](https://shark007.net/Icaros.html)
+(free shell extension; gives FLAC files real Title/Album/Artist/Length
+columns and album-art thumbnails). This is a Windows-side cosmetic
+fix; nothing to change in MusicRipper.
+
+### "My rip crashed mid-flow — what happens to the partial folder?"
+Commit C added a `_ripper-state.json` sidecar that's written after the
+rip completes but before post-process moves the folder. On the next
+launch of `Start-Ripper.ps1`, the orphan-recovery prompt offers to
+finish those rips automatically (Yes = process all / No = skip /
+Cancel = quit).
+
+For pre-sidecar orphans (rips from before commit C, or sidecars
+manually deleted), use the manual tool:
+
+```powershell
+./src/tools/Complete-OrphanedRip.ps1 `
+    -RipFolder 'E:\digitize\MusicRipper\_inbox\<orphan folder>' `
+    -DiscId    '<musicbrainz disc id>'
+```
+
+The MusicBrainz disc id is in the first few lines of the rip log
+inside the orphan folder, and on `https://musicbrainz.org/cdtoc/<id>`.

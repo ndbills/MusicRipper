@@ -61,6 +61,8 @@ the first thing to update.
 | `src/core/New-ReviewQueueArtifacts.ps1` | 5 | `REVIEW.txt` + single-file `_image/<Album>.flac+cue`. |
 | `src/postprocessors/*.ps1`         | 6     | Optional OneDrive / Synology mirror.                   |
 | `src/tools/Move-FromReviewQueue.ps1` | 7   | Promote a fixed-up review-queue album into the library. |
+| `src/tools/Complete-OrphanedRip.ps1` | 5   | Manual finish for an orphaned rip folder (sidecar or `-DiscId`). |
+| `src/tools/Show-FlacTags.ps1`      | 5     | Dump Vorbis comments + PICTURE summary for a file/folder. |
 | `Install-MusicRipper.ps1` (root)   | 7     | One-shot self-installer.                               |
 
 ## State on disk
