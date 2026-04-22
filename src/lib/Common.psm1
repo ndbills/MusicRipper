@@ -173,4 +173,69 @@ function Get-CueToolsPath {
     throw "CUETools not found. Run setup/Install-Dependencies.ps1 to install it."
 }
 
-Export-ModuleMember -Function ConvertTo-SafeWindowsPathSegment, Get-RipperRepoRoot, Get-CueToolsPath
+function Get-MetaflacPath {
+<#
+.SYNOPSIS
+    Locate the `metaflac.exe` binary from the Xiph FLAC reference tools.
+
+.DESCRIPTION
+    Phase 5 uses metaflac for three things the CUETools .NET DLLs do not
+    expose: writing the full Vorbis tag set onto an existing FLAC file,
+    embedding cover art as a PICTURE block, and computing ReplayGain
+    (`metaflac --add-replay-gain`). See docs/DECISIONS.md D-009.
+
+    The Xiph FLAC tools install location varies by winget package version
+    and Windows. We check, in order:
+
+      1. `metaflac.exe` already on PATH (covers MSI installs, manual
+         installs, CI runners).
+      2. winget portable layout under
+         %LOCALAPPDATA%\Microsoft\WinGet\Packages\Xiph.FLAC_*\.
+      3. winget linked-symlink under %LOCALAPPDATA%\Microsoft\WinGet\Links.
+      4. Standard install directories under Program Files.
+
+.EXAMPLE
+    PS> Get-MetaflacPath
+    C:\Users\alice\AppData\Local\Microsoft\WinGet\Links\metaflac.exe
+
+.NOTES
+    Throws if metaflac cannot be found. Run setup/Install-Dependencies.ps1
+    to install the Xiph.FLAC winget package.
+#>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    # 1. PATH.
+    $cmd = Get-Command metaflac.exe -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+
+    # 2. winget portable package — recurse the package dir for metaflac.exe.
+    $wingetRoot = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
+    if (Test-Path -LiteralPath $wingetRoot) {
+        $pkgDirs = Get-ChildItem -LiteralPath $wingetRoot -Directory `
+                       -Filter 'Xiph.FLAC*' -ErrorAction SilentlyContinue
+        foreach ($pkg in $pkgDirs) {
+            $hit = Get-ChildItem -LiteralPath $pkg.FullName -Recurse -File `
+                       -Filter 'metaflac.exe' -ErrorAction SilentlyContinue |
+                   Select-Object -First 1
+            if ($hit) { return $hit.FullName }
+        }
+    }
+
+    # 3. winget Links symlink dir.
+    $linkPath = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links\metaflac.exe'
+    if (Test-Path -LiteralPath $linkPath) { return $linkPath }
+
+    # 4. Program Files (in case Xiph.FLAC is ever shipped as a non-portable installer).
+    foreach ($candidate in @(
+        (Join-Path $env:ProgramFiles        'FLAC\metaflac.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'FLAC\metaflac.exe')
+    )) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate)) { return $candidate }
+    }
+
+    throw "metaflac.exe not found. Run setup/Install-Dependencies.ps1 to install Xiph.FLAC."
+}
+
+Export-ModuleMember -Function ConvertTo-SafeWindowsPathSegment, Get-RipperRepoRoot, Get-CueToolsPath, Get-MetaflacPath

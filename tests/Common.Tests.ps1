@@ -65,3 +65,54 @@ Describe 'ConvertTo-SafeWindowsPathSegment' {
         'a:b','c?d' | ConvertTo-SafeWindowsPathSegment | Should -Be @('a b', 'c d')
     }
 }
+
+Describe 'Get-MetaflacPath' {
+    # We don't want this test suite to depend on Xiph.FLAC actually being
+    # installed (CI / dev box may not have it), and we don't want to mock
+    # Get-Command at module scope (it's used everywhere). So we drop a
+    # fake metaflac.exe in a temp dir and prepend it to PATH for the
+    # "found on PATH" branch, and verify the throw branch by stripping
+    # PATH and pointing the winget roots at empty dirs via env override.
+
+    BeforeAll {
+        $script:tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("mr-metaflac-{0}" -f [guid]::NewGuid())
+        New-Item -ItemType Directory -Path $script:tempDir | Out-Null
+        $script:fakeExe = Join-Path $script:tempDir 'metaflac.exe'
+        # Empty file is enough — Get-Command resolves by name + PATHEXT.
+        Set-Content -LiteralPath $script:fakeExe -Value '' -NoNewline
+        $script:origPath = $env:PATH
+    }
+    AfterAll {
+        $env:PATH = $script:origPath
+        Remove-Item -LiteralPath $script:tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'returns the PATH-resolved metaflac.exe when one exists' {
+        $env:PATH = "$script:tempDir;$script:origPath"
+        # Get-Command caches by session — clear the cache for metaflac.exe.
+        $resolved = Get-MetaflacPath
+        $resolved | Should -Be $script:fakeExe
+    }
+
+    It 'throws a clear error when metaflac cannot be found anywhere' {
+        # Strip PATH of anything that could resolve metaflac, and point
+        # LOCALAPPDATA / Program Files at empty dirs so the fallback
+        # branches all miss too.
+        $env:PATH = ''
+        $sandbox = Join-Path $script:tempDir 'sandbox'
+        New-Item -ItemType Directory -Path $sandbox | Out-Null
+        $origLocal = $env:LOCALAPPDATA
+        $origPF    = $env:ProgramFiles
+        $origPF86  = ${env:ProgramFiles(x86)}
+        try {
+            $env:LOCALAPPDATA      = $sandbox
+            $env:ProgramFiles      = $sandbox
+            ${env:ProgramFiles(x86)} = $sandbox
+            { Get-MetaflacPath } | Should -Throw -ErrorId '*' -ExpectedMessage '*metaflac.exe not found*'
+        } finally {
+            $env:LOCALAPPDATA      = $origLocal
+            $env:ProgramFiles      = $origPF
+            ${env:ProgramFiles(x86)} = $origPF86
+        }
+    }
+}
