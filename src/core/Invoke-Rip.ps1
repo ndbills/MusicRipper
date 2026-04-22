@@ -277,13 +277,16 @@ function Invoke-RipperRip {
         $ctdb.Init($ar) | Out-Null
         if ($ContactNetwork) {
             try {
-                # Args: server (null = default), userAgent, driveName,
-                #       ctdb=$true, fuzzy=$true, metadataSearch=None(0).
-                # Re-use the MusicBrainz UA — CTDB just wants any contact
-                # string and we already validated this one at config time.
+                # ContactDB has two overloads. The 3-arg form
+                # (ctdb, fuzzy, metadataSearch) uses the static
+                # CUEToolsDB.defaultServer field ("db.cuetools.net")
+                # and the userAgent / driveName already passed to the
+                # ctor + Init. Calling the 6-arg overload with a $null
+                # server raises "Invalid URI: The hostname could not
+                # be parsed."
                 $ua = [string]$cfg.MusicBrainzUserAgent
                 if (-not $ua) { throw 'config.json missing MusicBrainzUserAgent.' }
-                $ctdb.ContactDB($null, $ua, [string]$reader.EACName, $true, $true, 0) | Out-Null
+                $ctdb.ContactDB('db.cuetools.net', $ua, [string]$reader.EACName, $true, $true, 0) | Out-Null
                 Write-RipperLog INFO 'Invoke-Rip' "CTDB contact: $($ctdb.DBStatus)"
             } catch {
                 $errors += "CTDB offline: $($_.Exception.Message)"
