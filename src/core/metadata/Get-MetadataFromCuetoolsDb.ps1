@@ -208,7 +208,20 @@ function ConvertFrom-CtdbMetadata {
         }
     }
 
-    @($out)
+    # CTDB sometimes returns verification-only entries where the row exists
+    # (so AccurateRip-style confidence can be reported) but album/artist/
+    # tracks are all blank. Those are useless to the user — filter them out
+    # so the orchestrator sees them as NoMatch instead of a fake "Match"
+    # with <unknown artist> - <unknown album>. A candidate is "real" if it
+    # has SOMETHING in album, artist, or any track title.
+    $real = foreach ($c in $out) {
+        $hasAny = ($c.Album       -and -not [string]::IsNullOrWhiteSpace($c.Album)) -or
+                  ($c.AlbumArtist -and -not [string]::IsNullOrWhiteSpace($c.AlbumArtist)) -or
+                  (@($c.Tracks | Where-Object { $_.Title -and -not [string]::IsNullOrWhiteSpace($_.Title) }).Count -gt 0)
+        if ($hasAny) { $c }
+    }
+
+    @($real)
 }
 
 function Invoke-CuetoolsDbMetadataProvider {

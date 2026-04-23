@@ -111,6 +111,30 @@ Describe 'ConvertFrom-CtdbMetadata' {
         $cands[0].Barcode       | Should -BeNullOrEmpty
         $cands[0].CatalogNumber | Should -BeNullOrEmpty
     }
+
+    It 'drops verification-only entries that have no album, artist, or track titles' {
+        # CTDB occasionally returns a TOC-match row with empty metadata
+        # fields (the database has the disc for AR-style verification but
+        # nobody submitted artist/album). Without filtering, this used to
+        # surface as a fake "Match" of "<unknown> - <unknown>".
+        $meta = @(
+            [pscustomobject]@{ artist=''; album=''; year=$null; tracks=@() }
+            [pscustomobject]@{ artist=$null; album=$null; year=$null
+                tracks=@([pscustomobject]@{ name=''; artist='' }) }
+        )
+        $cands = @(ConvertFrom-CtdbMetadata -Metadata $meta -DiscIdInfo $script:disc)
+        $cands.Count | Should -Be 0
+    }
+
+    It 'keeps an entry that has only a track title (no album/artist)' {
+        # A submission with nothing but a track name is still useful.
+        $meta = @([pscustomobject]@{
+            artist=''; album=''; year=$null
+            tracks=@([pscustomobject]@{ name='Some Track'; artist='' })
+        })
+        $cands = @(ConvertFrom-CtdbMetadata -Metadata $meta -DiscIdInfo $script:disc)
+        $cands.Count | Should -Be 1
+    }
 }
 
 Describe 'Invoke-CuetoolsDbMetadataProvider input validation' {
