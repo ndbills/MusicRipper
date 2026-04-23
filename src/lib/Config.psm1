@@ -152,6 +152,13 @@ function New-RipperConfigObject {
         # bytes win. CAA needs an MB ReleaseMbid; iTunes/Deezer fall back
         # to artist+album text search. All three are free / no auth.
         CoverArtProviders       = @('CoverArtArchive', 'iTunesSearch', 'Deezer')
+
+        # Phase 5.4: eject the optical drive after the rip / review /
+        # cancel flow finishes. Default true preserves the existing
+        # parent-friendly batch behaviour. Set false when you're
+        # iterating on metadata or testing -- the dialog also exposes a
+        # per-rip checkbox seeded from this value.
+        EjectAfterRip           = $true
     }
 }
 

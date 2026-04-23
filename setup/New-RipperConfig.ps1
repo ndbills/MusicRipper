@@ -69,6 +69,7 @@ if ($existing) {
     $expected = @{
         MetadataProviders = $knownMd
         CoverArtProviders = $knownCov
+        EjectAfterRip     = $true
     }
     foreach ($k in $expected.Keys) {
         if (-not $existing.PSObject.Properties[$k]) {
@@ -103,8 +104,10 @@ if ($existing) {
     Write-Host "  DriveLetter / Offset  : $($existing.DriveLetter) / $($existing.DriveOffset)"
     $existingMd  = if ($existing.PSObject.Properties['MetadataProviders']  -and $existing.MetadataProviders)  { ($existing.MetadataProviders  -join ', ') } else { '(missing — will default to: ' + ($knownMd  -join ', ') + ')' }
     $existingCov = if ($existing.PSObject.Properties['CoverArtProviders'] -and $existing.CoverArtProviders) { ($existing.CoverArtProviders -join ', ') } else { '(missing — will default to: ' + ($knownCov -join ', ') + ')' }
+    $existingEject = if ($existing.PSObject.Properties['EjectAfterRip']) { [string][bool]$existing.EjectAfterRip } else { '(missing — will default to: True)' }
     Write-Host "  MetadataProviders     : $existingMd"
     Write-Host "  CoverArtProviders     : $existingCov"
+    Write-Host "  EjectAfterRip         : $existingEject"
     Write-Host ""
 
     # -TopUp: non-interactive upgrade path. Write existing values back
@@ -234,6 +237,15 @@ $defaultCov = if ($existing -and $existing.PSObject.Properties['CoverArtProvider
 $metadataProviders = Read-ProviderList -Prompt 'Metadata providers (priority order, comma-separated)'  -Default $defaultMd  -Known $knownMd
 $coverArtProviders = Read-ProviderList -Prompt 'Cover-art providers (priority order, comma-separated)' -Default $defaultCov -Known $knownCov
 
+# --- Eject-after-rip toggle (Phase 5.4) -----------------------------------
+# Default-true preserves the parent-friendly batch flow (insert disc,
+# wait for green check, eject, repeat). The confirm dialog still
+# surfaces a per-rip checkbox seeded from this value, so power users
+# can flip it per-disc without editing the config.
+$defaultEject = if ($existing -and $existing.PSObject.Properties['EjectAfterRip']) { [bool]$existing.EjectAfterRip } else { $true }
+$ejectStr = Read-WithDefault -Prompt 'Eject disc after rip? (Y/N)' -Default ($(if ($defaultEject) { 'Y' } else { 'N' }))
+$ejectAfterRip = ($ejectStr -match '^\s*[YyTt1]')
+
 # --- Build & persist -------------------------------------------------------
 $cfg = New-RipperConfigObject `
     -LibraryRoot   $libraryRoot `
@@ -244,6 +256,7 @@ $cfg.MusicBrainzUserAgent  = $ua
 $cfg.HasSynologyCredential = $hasCred
 $cfg.MetadataProviders     = $metadataProviders
 $cfg.CoverArtProviders     = $coverArtProviders
+$cfg.EjectAfterRip         = $ejectAfterRip
 
 # Carry over drive info if Register-Drive ran first.
 if ($existing) {

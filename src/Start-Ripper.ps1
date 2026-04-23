@@ -356,9 +356,22 @@ $choice = Show-RipperMetadataDialog `
             -Metadata             $meta `
             -OnResearch           $onResearch `
             -OnTextSearch         $onTextSearch `
-            -TextSearchProviders  $textSearchProviders
+            -TextSearchProviders  $textSearchProviders `
+            -EjectAfterRip        ($(if ($cfg.PSObject.Properties['EjectAfterRip']) { [bool]$cfg.EjectAfterRip } else { $true }))
 
-Write-RipperLog INFO 'Start-Ripper' "User chose: $($choice.Action)."
+Write-RipperLog INFO 'Start-Ripper' "User chose: $($choice.Action) (eject=$($choice.EjectAfterRip))."
+
+# Honour the per-rip eject decision the user just made in the dialog
+# (seeded from cfg.EjectAfterRip but flippable via the checkbox).
+# Wrapper instead of inline guards so every existing Invoke-RipperEject
+# call site stays a single line.
+function Invoke-RipperMaybeEject {
+    if ($choice -and $choice.PSObject.Properties['EjectAfterRip'] -and -not $choice.EjectAfterRip) {
+        Write-RipperLog INFO 'Start-Ripper' 'Skipping eject (per-rip checkbox unchecked).'
+        return
+    }
+    Invoke-RipperEject
+}
 
 switch ($choice.Action) {
     'Rip' {
@@ -387,7 +400,7 @@ switch ($choice.Action) {
             Write-RipperLog ERROR 'Start-Ripper' "Rip threw: $($_.Exception.Message)"
             Show-RipperInfo "Rip failed:`n`n  $($_.Exception.Message)`n`nSee log:`n  $logPath" `
                 'MusicRipper - Rip Failed' 'Error'
-            Invoke-RipperEject
+            Invoke-RipperMaybeEject
             Stop-RipperLog
             return
         }
@@ -396,7 +409,7 @@ switch ($choice.Action) {
             # Progress window closed before the rip started — rare but
             # survivable. Treat like a cancel.
             Write-RipperLog WARN 'Start-Ripper' 'Rip returned $null (window closed early).'
-            Invoke-RipperEject
+            Invoke-RipperMaybeEject
             break
         }
 
@@ -443,7 +456,7 @@ switch ($choice.Action) {
                 Write-RipperLog ERROR 'Start-Ripper' "Phase 5 pipeline failed: $($_.Exception.Message)"
                 Show-RipperInfo "Rip succeeded but post-processing failed:`n`n  $($_.Exception.Message)`n`nThe raw rip is still at:`n  $($result.OutputDir)`n`nSee log:`n  $logPath" `
                     'MusicRipper - Post-Processing Failed' 'Warning'
-                Invoke-RipperEject
+                Invoke-RipperMaybeEject
                 Stop-RipperLog
                 return
             }
@@ -497,17 +510,17 @@ switch ($choice.Action) {
             }
         }
 
-        Invoke-RipperEject
+        Invoke-RipperMaybeEject
     }
     'Review' {
         $m = $choice.Metadata
         Show-RipperInfo "Marked for Review (Phase 5 routing).`n`nDisc: $($m.AlbumArtist) - $($m.Album)`n`nEjecting now." `
             'MusicRipper (Phase 3 stub)' 'Information'
-        Invoke-RipperEject
+        Invoke-RipperMaybeEject
     }
     'Cancel' {
         Write-RipperLog INFO 'Start-Ripper' 'User cancelled at confirm dialog. Ejecting.'
-        Invoke-RipperEject
+        Invoke-RipperMaybeEject
     }
 }
 
