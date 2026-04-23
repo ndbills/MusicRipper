@@ -21,8 +21,8 @@
 
         Supported providers:
             1. MusicBrainz   (Commit A — implemented)
-            2. iTunes Search (Commit B — TBD)
-            3. Deezer        (Commit B — TBD)
+            2. iTunes Search (Commit B — implemented)
+            3. Deezer        (Commit B — implemented)
             4. GnuDB         (Commit C — TBD)
 
         Note: CTDB has no text-search API and is intentionally absent
@@ -49,29 +49,51 @@ Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
 # Re-use the disc-id provider files (each one ALSO defines its
 # Invoke-XxxTextSearchProvider entry point, when supported).
 . (Join-Path $repoRoot 'src\core\metadata\Get-MetadataFromMusicBrainz.ps1')
+. (Join-Path $repoRoot 'src\core\metadata\Get-MetadataFromItunesSearch.ps1')
+. (Join-Path $repoRoot 'src\core\metadata\Get-MetadataFromDeezer.ps1')
 
 # Providers known to expose a text-search entry point. Extending this
-# set to iTunes/Deezer/GnuDB happens in Commits B and C. The dialog
-# uses Get-RipperTextSearchProviderNames to render its provider
-# checkbox list, so adding a name here automatically makes it appear
-# in the UI (so long as the provider is also in cfg.MetadataProviders).
+# set to GnuDB happens in Commit C. The dialog uses
+# Get-RipperTextSearchProviderNames to render its provider checkbox
+# list, so adding a name here automatically makes it appear in the UI.
+#
+# IsDiscIdCapable controls how the picker decides whether to surface
+# a provider:
+#   - true  -> only show when the user has it in cfg.MetadataProviders
+#              (it's a disc-id chain member; respect the user's chain).
+#   - false -> always show (text-search-only provider; not part of the
+#              disc-id chain at all, so cfg.MetadataProviders has no
+#              opinion on it).
 $script:TextSearchSupported = @{
-    'MusicBrainz' = $true
+    'MusicBrainz'  = @{ IsDiscIdCapable = $true  }
+    'iTunesSearch' = @{ IsDiscIdCapable = $false }
+    'Deezer'       = @{ IsDiscIdCapable = $false }
 }
 
 function Get-RipperTextSearchProviderNames {
 <#
 .SYNOPSIS
-    Return the list of configured providers that support text search.
+    Return the list of providers that should appear in the dialog's
+    text-search picker.
 
 .DESCRIPTION
-    Intersects cfg.MetadataProviders (the user's configured chain)
-    with the hard-coded support set. Used by the dialog to render
-    its provider checkboxes dynamically.
+    Combines two sets:
+      1. Disc-id-capable providers from cfg.MetadataProviders that
+         also expose a text-search entry point (MusicBrainz today;
+         GnuDB once Commit C lands). The user's chain order is
+         honored.
+      2. Text-search-only providers (iTunesSearch, Deezer). They
+         aren't in the disc-id chain so cfg.MetadataProviders has
+         no say; they're appended after the configured ones.
+
+    The result is the dynamic checkbox list inside the
+    "Search by text…" sub-modal.
 
 .EXAMPLE
     PS> Get-RipperTextSearchProviderNames
     MusicBrainz
+    iTunesSearch
+    Deezer
 #>
     [CmdletBinding()]
     [OutputType([string[]])]
@@ -91,7 +113,23 @@ function Get-RipperTextSearchProviderNames {
         $configured = @('MusicBrainz', 'CuetoolsDb', 'GnuDb')
     }
 
-    , @($configured | Where-Object { $script:TextSearchSupported.ContainsKey($_) })
+    $out = @()
+    # 1. Configured disc-id-capable providers, in chain order.
+    foreach ($name in $configured) {
+        if ($script:TextSearchSupported.ContainsKey($name) -and
+            $script:TextSearchSupported[$name].IsDiscIdCapable) {
+            $out += $name
+        }
+    }
+    # 2. Text-search-only providers (independent of cfg.MetadataProviders).
+    foreach ($name in $script:TextSearchSupported.Keys) {
+        if (-not $script:TextSearchSupported[$name].IsDiscIdCapable -and
+            $out -notcontains $name) {
+            $out += $name
+        }
+    }
+
+    , @($out)
 }
 
 function Search-RipperMetadataByText {
@@ -169,6 +207,12 @@ function Search-RipperMetadataByText {
         switch ($name) {
             'MusicBrainz' {
                 Invoke-MusicBrainzTextSearchProvider -Artist $Artist -Album $Album -Year $Year
+            }
+            'iTunesSearch' {
+                Invoke-ItunesSearchTextSearchProvider -Artist $Artist -Album $Album -Year $Year
+            }
+            'Deezer' {
+                Invoke-DeezerTextSearchProvider -Artist $Artist -Album $Album -Year $Year
             }
             default {
                 Write-RipperLog WARN 'Search-DiscMetadataByText' "Unknown text-search provider '$name'; skipping."

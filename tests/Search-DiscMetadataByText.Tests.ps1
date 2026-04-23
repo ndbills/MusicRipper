@@ -239,17 +239,259 @@ Describe 'Search-RipperMetadataByText orchestrator' {
 
 Describe 'Get-RipperTextSearchProviderNames' {
 
-    It 'intersects the configured provider chain with the supported set (MusicBrainz only in Commit A)' {
+    It 'lists configured disc-id providers (intersected with supported) followed by text-search-only providers' {
         Mock -CommandName Import-RipperConfig -MockWith {
             [pscustomobject]@{ MetadataProviders = @('MusicBrainz', 'CuetoolsDb', 'GnuDb') }
         }
         $names = Get-RipperTextSearchProviderNames
-        $names | Should -Be @('MusicBrainz')
+        # MusicBrainz first (from the configured chain), then the
+        # text-search-only iTunes + Deezer (any order between them).
+        $names[0]  | Should -Be 'MusicBrainz'
+        $names     | Should -Contain 'iTunesSearch'
+        $names     | Should -Contain 'Deezer'
+        $names     | Should -Not -Contain 'CuetoolsDb'   # not text-search-capable
+        $names     | Should -Not -Contain 'GnuDb'        # not yet (Commit C)
     }
 
-    It 'falls back to the default chain when config has no MetadataProviders field' {
+    It 'still surfaces text-search-only providers when no MetadataProviders are configured' {
         Mock -CommandName Import-RipperConfig -MockWith { [pscustomobject]@{} }
         $names = Get-RipperTextSearchProviderNames
-        $names | Should -Contain 'MusicBrainz'
+        $names | Should -Contain 'MusicBrainz'   # default chain default-includes it
+        $names | Should -Contain 'iTunesSearch'
+        $names | Should -Contain 'Deezer'
+    }
+}
+
+Describe 'Invoke-ItunesSearchTextSearchProvider' {
+
+    It 'returns NoMatch with a diagnostic when neither artist nor album is given' {
+        $r = Invoke-ItunesSearchTextSearchProvider -Artist '' -Album '' -InvokeWebRequest { throw 'should not call' }
+        $r.Source     | Should -Be 'iTunesSearch'
+        $r.Status     | Should -Be 'NoMatch'
+        $r.Diagnostic | Should -Match 'artist or album'
+    }
+
+    It 'searches /search?term=...&entity=album then /lookup?id=&entity=song per top-N hit' {
+        $captured = New-Object System.Collections.Generic.List[string]
+        $invoke = {
+            param($Url)
+            $captured.Add($Url)
+            if ($Url -match '/search\?') {
+                return [pscustomobject]@{
+                    results = @(
+                        [pscustomobject]@{ collectionId = 1001; collectionName = 'A' }
+                        [pscustomobject]@{ collectionId = 1002; collectionName = 'B' }
+                    )
+                }
+            }
+            if ($Url -match 'id=1001') {
+                return [pscustomobject]@{
+                    results = @(
+                        [pscustomobject]@{
+                            wrapperType    = 'collection'
+                            artistName     = 'Pink Floyd'
+                            collectionName = 'The Wall'
+                            releaseDate    = '1979-11-30T08:00:00Z'
+                            country        = 'USA'
+                            trackCount     = 2
+                            artworkUrl100  = 'http://x/100x100bb.jpg'
+                        }
+                        [pscustomobject]@{
+                            wrapperType     = 'track'
+                            kind            = 'song'
+                            trackNumber     = 1
+                            trackName       = 'In the Flesh?'
+                            artistName      = 'Pink Floyd'
+                            trackTimeMillis = 199000
+                        }
+                        [pscustomobject]@{
+                            wrapperType     = 'track'
+                            kind            = 'song'
+                            trackNumber     = 2
+                            trackName       = 'The Thin Ice'
+                            artistName      = 'Pink Floyd'
+                            trackTimeMillis = 167000
+                        }
+                    )
+                }
+            }
+            if ($Url -match 'id=1002') {
+                return [pscustomobject]@{
+                    results = @(
+                        [pscustomobject]@{
+                            wrapperType    = 'collection'
+                            artistName     = 'Pink Floyd'
+                            collectionName = 'The Wall (Deluxe)'
+                            releaseDate    = '2011-01-01T00:00:00Z'
+                            country        = 'USA'
+                            trackCount     = 1
+                        }
+                        [pscustomobject]@{
+                            wrapperType     = 'track'
+                            kind            = 'song'
+                            trackNumber     = 1
+                            trackName       = 'In the Flesh?'
+                            artistName      = 'Pink Floyd'
+                            trackTimeMillis = 199000
+                        }
+                    )
+                }
+            }
+            throw "unexpected url: $Url"
+        }
+
+        $r = Invoke-ItunesSearchTextSearchProvider `
+                -Artist 'Pink Floyd' -Album 'The Wall' `
+                -DetailLimit 2 -InvokeWebRequest $invoke
+
+        $r.Status                       | Should -Be 'MultiMatch'
+        $r.Candidates                   | Should -HaveCount 2
+        $r.Candidates[0].Source         | Should -Be 'iTunesSearch'
+        $r.Candidates[0].Album          | Should -Be 'The Wall'
+        $r.Candidates[0].AlbumArtist    | Should -Be 'Pink Floyd'
+        $r.Candidates[0].Year           | Should -Be 1979
+        $r.Candidates[0].Tracks         | Should -HaveCount 2
+        $r.Candidates[0].Tracks[0].Title    | Should -Be 'In the Flesh?'
+        $r.Candidates[0].Tracks[0].LengthMs | Should -Be 199000
+        # First call is the search; next two are the lookups.
+        $captured.Count | Should -Be 3
+        $captured[0]    | Should -Match '/search\?term=Pink%20Floyd'
+        $captured[1]    | Should -Match 'id=1001'
+        $captured[2]    | Should -Match 'id=1002'
+    }
+
+    It 'returns Offline when the search endpoint throws' {
+        $r = Invoke-ItunesSearchTextSearchProvider -Artist 'X' -InvokeWebRequest { param($Url) throw 'down' }
+        $r.Status | Should -Be 'Offline'
+    }
+
+    It 'returns NoMatch when the search returns zero hits' {
+        $r = Invoke-ItunesSearchTextSearchProvider -Artist 'X' -InvokeWebRequest {
+            param($Url) [pscustomobject]@{ results = @() }
+        }
+        $r.Status | Should -Be 'NoMatch'
+    }
+
+    It "flags Various Artists as IsCompilation" {
+        $invoke = {
+            param($Url)
+            if ($Url -match '/search\?') {
+                return [pscustomobject]@{ results = @([pscustomobject]@{ collectionId = 99 }) }
+            }
+            [pscustomobject]@{
+                results = @(
+                    [pscustomobject]@{
+                        wrapperType    = 'collection'
+                        artistName     = 'Various Artists'
+                        collectionName = 'Comp'
+                        releaseDate    = '2010-01-01T00:00:00Z'
+                    }
+                    [pscustomobject]@{
+                        wrapperType = 'track'; kind = 'song'
+                        trackNumber = 1; trackName = 'A'; artistName = 'X'; trackTimeMillis = 1000
+                    }
+                )
+            }
+        }
+        $r = Invoke-ItunesSearchTextSearchProvider -Artist 'Various' -InvokeWebRequest $invoke
+        $r.Candidates[0].IsCompilation | Should -BeTrue
+    }
+}
+
+Describe 'Invoke-DeezerTextSearchProvider' {
+
+    It 'returns NoMatch with a diagnostic when neither artist nor album is given' {
+        $r = Invoke-DeezerTextSearchProvider -Artist '' -Album '' -InvokeWebRequest { throw 'should not call' }
+        $r.Source     | Should -Be 'Deezer'
+        $r.Status     | Should -Be 'NoMatch'
+        $r.Diagnostic | Should -Match 'artist or album'
+    }
+
+    It 'builds an advanced artist:"X" album:"Y" query and follows up per top-N hit' {
+        $captured = New-Object System.Collections.Generic.List[string]
+        $invoke = {
+            param($Url)
+            $captured.Add($Url)
+            if ($Url -match '/search/album\?') {
+                return [pscustomobject]@{
+                    data = @(
+                        [pscustomobject]@{ id = 11; title = 'A' }
+                        [pscustomobject]@{ id = 22; title = 'B' }
+                    )
+                }
+            }
+            if ($Url -match '/album/11') {
+                return [pscustomobject]@{
+                    title        = 'The Wall'
+                    artist       = [pscustomobject]@{ name = 'Pink Floyd' }
+                    release_date = '1979-11-30'
+                    nb_tracks    = 2
+                    record_type  = 'album'
+                    label        = 'Harvest'
+                    upc          = '00000001'
+                    cover_xl     = 'http://img/xl.jpg'
+                    tracks       = [pscustomobject]@{
+                        data = @(
+                            [pscustomobject]@{ track_position = 1; title = 'In the Flesh?'; duration = 199; artist = [pscustomobject]@{ name = 'Pink Floyd' } }
+                            [pscustomobject]@{ track_position = 2; title = 'The Thin Ice';  duration = 167; artist = [pscustomobject]@{ name = 'Pink Floyd' } }
+                        )
+                    }
+                }
+            }
+            if ($Url -match '/album/22') {
+                return [pscustomobject]@{
+                    title        = 'B'
+                    artist       = [pscustomobject]@{ name = 'X' }
+                    release_date = '2000-01-01'
+                    nb_tracks    = 1
+                    tracks       = [pscustomobject]@{ data = @([pscustomobject]@{ track_position=1; title='t'; duration=10 }) }
+                }
+            }
+            throw "unexpected url: $Url"
+        }
+
+        $r = Invoke-DeezerTextSearchProvider `
+                -Artist 'Pink Floyd' -Album 'The Wall' `
+                -DetailLimit 2 -InvokeWebRequest $invoke
+
+        $r.Status              | Should -Be 'MultiMatch'
+        $r.Candidates          | Should -HaveCount 2
+        $r.Candidates[0].Source       | Should -Be 'Deezer'
+        $r.Candidates[0].Album        | Should -Be 'The Wall'
+        $r.Candidates[0].AlbumArtist  | Should -Be 'Pink Floyd'
+        $r.Candidates[0].Year         | Should -Be 1979
+        $r.Candidates[0].LabelName    | Should -Be 'Harvest'
+        $r.Candidates[0].Barcode      | Should -Be '00000001'
+        $r.Candidates[0].Tracks       | Should -HaveCount 2
+        $r.Candidates[0].Tracks[0].LengthMs | Should -Be 199000  # seconds * 1000
+        # Search url first, then album detail per id, in order.
+        $captured.Count | Should -Be 3
+        $captured[0]    | Should -Match 'artist%3A'
+        $captured[0]    | Should -Match 'album%3A'
+        $captured[1]    | Should -Match '/album/11'
+        $captured[2]    | Should -Match '/album/22'
+    }
+
+    It 'escapes embedded double-quotes in the artist/album with a backslash' {
+        $captured = $null
+        $invoke = {
+            param($Url) $script:captured = $Url
+            [pscustomobject]@{ data = @() }
+        }
+        Invoke-DeezerTextSearchProvider -Artist 'AC"DC' -InvokeWebRequest $invoke | Out-Null
+        # URL-encoded `artist:"AC\"DC"` — backslash + quote -> %5C%22.
+        $script:captured | Should -Match '%5C%22'
+    }
+
+    It 'returns Offline when the search endpoint throws' {
+        $r = Invoke-DeezerTextSearchProvider -Artist 'X' -InvokeWebRequest { param($Url) throw 'down' }
+        $r.Status | Should -Be 'Offline'
+    }
+
+    It 'returns NoMatch when the search returns zero hits' {
+        $r = Invoke-DeezerTextSearchProvider -Artist 'X' -InvokeWebRequest {
+            param($Url) [pscustomobject]@{ data = @() }
+        }
+        $r.Status | Should -Be 'NoMatch'
     }
 }
