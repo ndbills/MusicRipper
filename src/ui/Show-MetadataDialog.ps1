@@ -380,17 +380,25 @@ function Show-RipperTextSearchDialog {
             [System.Windows.Data.IValueConverter].Assembly.Location
             [System.Windows.Media.Imaging.BitmapImage].Assembly.Location
             [System.Windows.DependencyObject].Assembly.Location
+            [psobject].Assembly.Location
         )
         Add-Type -ReferencedAssemblies $refAsms -TypeDefinition @'
 using System;
 using System.Globalization;
 using System.IO;
+using System.Management.Automation;
 using System.Windows.Data;
 using System.Windows.Media.Imaging;
 
 namespace MusicRipper {
     public class BytesToImageConverter : IValueConverter {
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture) {
+            // WPF data binding through PSObject's ICustomTypeDescriptor
+            // surfaces NoteProperty values still wrapped in PSObject;
+            // unwrap to the BaseObject before the byte[] cast or it
+            // silently returns null and the thumbnail goes blank.
+            PSObject pso = value as PSObject;
+            if (pso != null) value = pso.BaseObject;
             byte[] bytes = value as byte[];
             if (bytes == null || bytes.Length == 0) return null;
             try {
@@ -503,6 +511,28 @@ namespace MusicRipper {
     $reader = [System.Xml.XmlNodeReader]::new(([xml]$xaml))
     $window = [Windows.Markup.XamlReader]::Load($reader)
     if ($Owner) { $window.Owner = $Owner }
+
+    # Phase-4 lesson: WPF re-raises tick / binding / template errors as
+    # a generic NullReferenceException at the call site of ShowDialog,
+    # making the original failure invisible. Always install a dispatcher
+    # unhandled-exception sink that writes a sidecar log so we can
+    # actually see what blew up. The crash that motivated this was a
+    # template error after Search returned candidates; without this
+    # handler the user just sees the window vanish.
+    $sidecar = Join-Path $env:LOCALAPPDATA 'MusicRipper\logs\text-search-dispatcher.log'
+    $window.Dispatcher.add_UnhandledException({
+        param($s, $e)
+        try {
+            $ex = $e.Exception
+            $msg = "`n=== $(Get-Date -Format o) ===`n$($ex.GetType().FullName): $($ex.Message)`n$($ex.StackTrace)"
+            if ($ex.InnerException) {
+                $msg += "`n-- inner: $($ex.InnerException.GetType().FullName): $($ex.InnerException.Message)`n$($ex.InnerException.StackTrace)"
+            }
+            Add-Content -LiteralPath $sidecar -Value $msg -ErrorAction SilentlyContinue
+            try { Write-RipperLog ERROR 'Show-RipperTextSearchDialog' "Dispatcher exception: $($ex.GetType().FullName): $($ex.Message) (sidecar: $sidecar)" } catch {}
+        } catch {}
+        $e.Handled = $true
+    })
 
     # Register the converter as a window resource so the Cover column's
     # {StaticResource BytesToImg} reference resolves. We add it after
