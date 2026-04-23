@@ -920,7 +920,14 @@ and survives Synology snapshot/restore.
 - "Rip again" (Yes) needs a clear destination strategy —
   overwrite, side-by-side `(2)` folder, or route to ReviewQueue for
   manual diff. Default proposal: side-by-side `(2)` so nothing is
-  ever destroyed.
+  ever destroyed. The same three-way prompt should also replace the
+  current late-stage `Move-ToLibrary` "already exists" throw
+  (Move-ToLibrary.ps1#L316), which today is the only backstop for
+  cross-session duplicates and forces the user to discover the
+  collision *after* a 5-minute rip. Once the early index check is in
+  place, the late-stage throw becomes a belt-and-braces safety net
+  for index-miss cases (manual file moves, restored backups) and
+  should reuse the same prompt UX rather than throwing.
 - Index corruption: read errors fall back to the slow path, never
   block a rip.
 - Multi-disc sets share TOCs across discs in some pressings; key on
