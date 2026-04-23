@@ -762,6 +762,12 @@ function Show-RipperMetadataDialog {
     Get-RipperTextSearchProviderNames. Empty/null hides the
     "Search by text…" button.
 
+.PARAMETER EjectAfterRip
+    Phase 5.4. Initial state of the "Eject disc when done" checkbox in
+    the action-button row. Default $true matches the historical
+    parent-friendly batch behaviour. Returned on the result object as
+    .EjectAfterRip so the caller can honour the user's per-rip choice.
+
 .EXAMPLE
     PS> $r = Show-RipperMetadataDialog -Metadata $meta
     PS> if ($r.Action -eq 'Rip') { Invoke-Rip -Metadata $r.Metadata }
@@ -776,7 +782,9 @@ function Show-RipperMetadataDialog {
 
         [scriptblock]$OnTextSearch,
 
-        [string[]]$TextSearchProviders
+        [string[]]$TextSearchProviders,
+
+        [bool]$EjectAfterRip = $true
     )
 
     Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml | Out-Null
@@ -884,6 +892,9 @@ function Show-RipperMetadataDialog {
       <Button x:Name="RipButton"    Content="Rip"             DockPanel.Dock="Right" Padding="14,4" MinWidth="110"
               IsDefault="True" Background="#0a7" Foreground="White" FontWeight="Bold"
               ToolTip="Rip the disc with the metadata shown above. Ejects when the rip finishes."/>
+      <CheckBox x:Name="EjectCheck" Content="Eject disc when done" DockPanel.Dock="Right"
+                VerticalAlignment="Center" Margin="0,0,16,0"
+                ToolTip="Uncheck to keep the tray closed after the rip / review / cancel finishes. Default comes from your config.json EjectAfterRip setting."/>
       <TextBlock x:Name="ActionHint" VerticalAlignment="Center" Foreground="#444" FontStyle="Italic"
                  TextWrapping="Wrap" Margin="0,0,12,0"/>
     </DockPanel>
@@ -899,10 +910,11 @@ function Show-RipperMetadataDialog {
     foreach ($name in @(
         'CoverImage','StatusText','CandidateCombo','ResearchButton','TextSearchButton','DiscIdText',
         'AlbumBox','ArtistBox','YearBox','CompilationBox','TracksGrid',
-        'RipButton','ReviewButton','CancelButton','ActionHint'
+        'RipButton','ReviewButton','CancelButton','ActionHint','EjectCheck'
     )) {
         $controls[$name] = $window.FindName($name)
     }
+    $controls.EjectCheck.IsChecked = [bool]$EjectAfterRip
 
     if (-not $OnResearch)   { $controls.ResearchButton.Visibility   = 'Collapsed' }
     if (-not $OnTextSearch -or -not $TextSearchProviders -or @($TextSearchProviders).Count -eq 0) {
@@ -1164,8 +1176,9 @@ function Show-RipperMetadataDialog {
             return
         }
         $state.Result = [pscustomobject]@{
-            Action   = 'Rip'
-            Metadata = & $convertFrom -ViewModel $state.CurrentVm
+            Action        = 'Rip'
+            Metadata      = & $convertFrom -ViewModel $state.CurrentVm
+            EjectAfterRip = [bool]$controls.EjectCheck.IsChecked
         }
         $window.DialogResult = $true
         $window.Close()
@@ -1174,15 +1187,16 @@ function Show-RipperMetadataDialog {
     $controls.ReviewButton.Add_Click({
         & $applyEditsToCurrentVm
         $state.Result = [pscustomobject]@{
-            Action   = 'Review'
-            Metadata = & $convertFrom -ViewModel $state.CurrentVm
+            Action        = 'Review'
+            Metadata      = & $convertFrom -ViewModel $state.CurrentVm
+            EjectAfterRip = [bool]$controls.EjectCheck.IsChecked
         }
         $window.DialogResult = $true
         $window.Close()
     }.GetNewClosure())
 
     $controls.CancelButton.Add_Click({
-        $state.Result = [pscustomobject]@{ Action = 'Cancel'; Metadata = $null }
+        $state.Result = [pscustomobject]@{ Action = 'Cancel'; Metadata = $null; EjectAfterRip = [bool]$controls.EjectCheck.IsChecked }
         $window.DialogResult = $false
         $window.Close()
     }.GetNewClosure())
@@ -1190,7 +1204,7 @@ function Show-RipperMetadataDialog {
     $window.Add_Closing({
         # If the user X'd out without using a button, treat as Cancel.
         if (-not $state.Result) {
-            $state.Result = [pscustomobject]@{ Action = 'Cancel'; Metadata = $null }
+            $state.Result = [pscustomobject]@{ Action = 'Cancel'; Metadata = $null; EjectAfterRip = [bool]$controls.EjectCheck.IsChecked }
         }
     }.GetNewClosure())
 

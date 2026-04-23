@@ -30,5 +30,8 @@
     "MetadataProviders": ["MusicBrainz", "CuetoolsDb", "GnuDb"],
 
   "//CoverArtProviders":       "Ordered list of cover-art sources. First non-empty bytes win. CoverArtArchive needs a release MBID (so really only fires for MB-derived candidates); iTunesSearch + Deezer fall back to artist+album text search. All three are free / no auth.",
-  "CoverArtProviders": ["CoverArtArchive", "iTunesSearch", "Deezer"]
+  "CoverArtProviders": ["CoverArtArchive", "iTunesSearch", "Deezer"],
+
+  "//EjectAfterRip":           "Phase 5.4: if true, eject the disc after the rip / review / cancel flow finishes. Default true preserves the parent-friendly batch behaviour. The confirm dialog also exposes a per-rip checkbox seeded from this value.",
+  "EjectAfterRip": true
 }

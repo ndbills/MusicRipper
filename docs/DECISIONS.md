@@ -387,3 +387,39 @@ fix described inline in `Get-MetadataFromCuetoolsDb.ps1`).
 **Still deferred:** Discogs, fanart.tv, Apple Music, Last.fm,
 Spotify, Amazon (unchanged from D-011).
 
+
+
+---
+
+## D-013 — Eject-after-rip is a per-rip user choice, defaulted from config *(Phase 5.4)*
+
+**Choice:** A new `EjectAfterRip` boolean (default `true`) lives on
+the config object. The confirm dialog renders an "Eject disc when
+done" checkbox in the action-button row, IsChecked seeded from
+`cfg.EjectAfterRip`. The user's per-rip choice rides on the dialog
+result object as `.EjectAfterRip` and is honoured uniformly at every
+eject site in `Start-Ripper.ps1` (Rip-success, post-process-fail,
+rip-throw, rip-returned-null, Review, Cancel) via a single
+`Invoke-RipperMaybeEject` wrapper.
+
+**Why both layers:** The config default keeps the parent-friendly
+batch flow (insert disc → wait for green check → eject → repeat).
+The dialog checkbox lets a power user iterating on metadata flip it
+per-disc without editing JSON. We did NOT want a config-only toggle
+because the common power-user case ("I'm trying three different
+metadata sources for the same disc") changes the answer per-rip.
+We did NOT want a dialog-only toggle because the parents never
+touch the dialog any differently than today.
+
+**Rejected:** A second confirm dialog ("Eject? Y/N") after the rip
+finishes — adds a click in the common case, doesn't help the
+no-eject case, and creates a place where the script can hang
+waiting for a click that never comes if the parent walked away.
+
+**Wire:** `setup/New-RipperConfig.ps1` interactive Y/N prompt + top-up
+detection (so an existing pre-5.4 config picks up the new key on
+`-TopUp` or interactive `'u'`). `src/lib/Config.psm1` adds the field
+to `New-RipperConfigObject` so a fresh config gets it. The dialog
+wrapper accepts `-EjectAfterRip [bool]` and falls back to `$true`
+for pre-5.4 configs in `Start-Ripper.ps1` via
+`if ($cfg.PSObject.Properties['EjectAfterRip']) { ... } else { $true }`.
