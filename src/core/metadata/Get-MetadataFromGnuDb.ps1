@@ -168,12 +168,21 @@ function ConvertFrom-XmcdEntry {
     param(
         [Parameter(Mandatory)] [string]$Text,
         [Parameter(Mandatory)] [string]$Category,
-        [Parameter(Mandatory)] [pscustomobject]$DiscIdInfo
+        [AllowNull()]
+        [pscustomobject]$DiscIdInfo
     )
 
     if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
 
-    $audioCount = @($DiscIdInfo.Tracks | Where-Object { $_.IsAudio }).Count
+    # When called from the disc-id chain we know exactly how many audio
+    # tracks the disc has and pad missing TTITLEn to that count. From
+    # the text-search path there is no disc — discover the track count
+    # from the highest TTITLEn in the xmcd body itself (after parsing).
+    $audioCount = if ($DiscIdInfo) {
+        @($DiscIdInfo.Tracks | Where-Object { $_.IsAudio }).Count
+    } else {
+        0   # back-filled below once $fields is populated
+    }
     $fields     = @{}   # multi-line KEY= values get appended
 
     foreach ($rawLine in ($Text -split "`r?`n")) {
@@ -220,6 +229,19 @@ function ConvertFrom-XmcdEntry {
         $genre = [string]$fields['DGENRE']
     }
     if (-not $genre -and $Category) { $genre = $Category }
+
+    # If we don't already know the audio-track count (text-search call:
+    # no DiscIdInfo), derive it from the highest TTITLEn we parsed.
+    if ($audioCount -eq 0) {
+        $maxIdx = -1
+        foreach ($k in $fields.Keys) {
+            if ($k -match '^TTITLE(\d+)$') {
+                $n = [int]$Matches[1]
+                if ($n -gt $maxIdx) { $maxIdx = $n }
+            }
+        }
+        if ($maxIdx -ge 0) { $audioCount = $maxIdx + 1 }
+    }
 
     # Build tracks[] from TTITLE0..TTITLE(n-1). xmcd uses zero-based
     # indices. If GnuDB ships fewer than $audioCount titles, pad with
@@ -513,6 +535,182 @@ function Invoke-GnuDbMetadataProvider {
 
     $status = if (@($candidates).Count -gt 1) { 'MultiMatch' } else { 'Match' }
     Write-RipperLog INFO 'Get-DiscMetadata' "GnuDB produced $(@($candidates).Count) candidate(s); top: '$($candidates[0].AlbumArtist) - $($candidates[0].Album)'."
+    [pscustomobject]@{
+        Source     = 'GnuDB'
+        Status     = $status
+        BestMatch  = $candidates[0]
+        Candidates = @($candidates)
+        Diagnostic = $null
+    }
+}
+
+function Invoke-GnuDbTextSearchProvider {
+<#
+.SYNOPSIS
+    Text-search entry point: ask GnuDB for releases matching free-text
+    artist/album terms and return the uniform provider contract.
+
+.DESCRIPTION
+    Sibling of Invoke-GnuDbMetadataProvider. The disc-id round uses
+    `cddb query <disc-id> ...`; this one uses CDDB's `cddb search`
+    command, which takes a search type ('artist' | 'title' | 'track' |
+    'rest' | 'allfields') and a free-text string.
+
+    We use 'allfields' because it matches across artist, title, and
+    track names — useful when the user only remembers part of the album
+    name, or when the catalog has the artist baked into the title.
+
+    The response shares the same 200/210/211/202 envelope as
+    `cddb query`, so we parse it with the existing
+    ConvertFrom-GnuDbQueryResponse. Per top-N hit we then run
+    `cddb read <category> <discid>` and parse with ConvertFrom-XmcdEntry
+    (which now accepts a null DiscIdInfo and infers the audio-track
+    count from the highest TTITLEn it sees).
+
+.PARAMETER Artist
+    Free-text artist. Optional but at least one of -Artist or -Album
+    must be non-empty.
+
+.PARAMETER Album
+    Free-text album/title.
+
+.PARAMETER Year
+    Accepted for interface parity with the other providers; CDDB has
+    no year filter so it's only used to log the request.
+
+.PARAMETER Limit
+    Cap on how many search hits to consider before deref'ing.
+
+.PARAMETER DetailLimit
+    Cap on how many `cddb read` round-trips to issue. CDDB is rate
+    sensitive so 5 is a reasonable ceiling.
+
+.PARAMETER UserAgent
+    The MusicBrainz-shaped UA. Used only to extract the contact email
+    GnuDB needs in `hello=`.
+
+.PARAMETER BaseUrl
+    Override for tests. Production callers omit and get the real
+    https://gnudb.gnudb.org/~cddb/cddb.cgi endpoint.
+
+.PARAMETER InvokeWebRequest
+    Test seam matching Invoke-WebRequest's shape (returns an object
+    with a .Content property). Production callers omit it.
+#>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [string]$Artist,
+        [string]$Album,
+        [int]$Year,
+        [int]$Limit       = 10,
+        [int]$DetailLimit = 5,
+        [string]$UserAgent = 'MusicRipper/1.0 ( unknown@example.com )',
+        [string]$BaseUrl   = 'https://gnudb.gnudb.org/~cddb/cddb.cgi',
+        [scriptblock]$InvokeWebRequest
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Artist) -and [string]::IsNullOrWhiteSpace($Album)) {
+        return [pscustomobject]@{
+            Source     = 'GnuDB'
+            Status     = 'NoMatch'
+            BestMatch  = $null
+            Candidates = @()
+            Diagnostic = 'GnuDB text search needs at least an artist or album.'
+        }
+    }
+
+    # Build hello= the same way the disc-id provider does.
+    $email = 'unknown@example.com'
+    if ($UserAgent -match '\(\s*([^)\s]+@[^)\s]+)\s*\)') { $email = $Matches[1] }
+    $emailEsc = $email -replace '@', '+'
+    $helloVal = "$emailEsc+musicripper+0.1"
+
+    # Combine artist + album (and year, if given) into one query string.
+    # CDDB tokens are space-separated; URL-encode the whole thing.
+    $termParts = @()
+    if (-not [string]::IsNullOrWhiteSpace($Artist)) { $termParts += $Artist }
+    if (-not [string]::IsNullOrWhiteSpace($Album))  { $termParts += $Album  }
+    $term = ($termParts -join ' ').Trim()
+    $encodedTerm = [System.Uri]::EscapeDataString($term)
+    $searchCmd = "cddb+search+allfields+$encodedTerm"
+    $searchUrl = "$BaseUrl`?cmd=$searchCmd&hello=$helloVal&proto=6"
+
+    Write-RipperLog INFO 'Search-DiscMetadataByText' "GnuDB text search: term='$term' year=$Year"
+
+    $webCall = if ($InvokeWebRequest) { $InvokeWebRequest } else {
+        { param($Url) Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 30 }
+    }
+
+    try {
+        $resp = & $webCall $searchUrl
+        $body = [string]$resp.Content
+    } catch {
+        $msg = "GnuDB text search failed: $($_.Exception.Message)"
+        Write-RipperLog WARN 'Search-DiscMetadataByText' $msg
+        return [pscustomobject]@{
+            Source     = 'GnuDB'
+            Status     = 'Offline'
+            BestMatch  = $null
+            Candidates = @()
+            Diagnostic = $msg
+        }
+    }
+
+    $hits = @()
+    try {
+        $hits = ConvertFrom-GnuDbQueryResponse -Text $body
+    } catch {
+        $msg = "GnuDB text search parse failed: $($_.Exception.Message)"
+        Write-RipperLog WARN 'Search-DiscMetadataByText' $msg
+        return [pscustomobject]@{
+            Source     = 'GnuDB'
+            Status     = 'Error'
+            BestMatch  = $null
+            Candidates = @()
+            Diagnostic = $msg
+        }
+    }
+
+    if (@($hits).Count -eq 0) {
+        return [pscustomobject]@{
+            Source     = 'GnuDB'
+            Status     = 'NoMatch'
+            BestMatch  = $null
+            Candidates = @()
+            Diagnostic = $null
+        }
+    }
+
+    $hits = @($hits | Select-Object -First $Limit)
+    $readCount = [math]::Min([int]$DetailLimit, @($hits).Count)
+    Write-RipperLog INFO 'Search-DiscMetadataByText' "GnuDB returned $(@($hits).Count) hit(s); reading top $readCount."
+
+    $candidates = @()
+    for ($i = 0; $i -lt $readCount; $i++) {
+        $h = $hits[$i]
+        $readCmd = "cddb+read+$($h.Category)+$($h.DiscId)"
+        $readUrl = "$BaseUrl`?cmd=$readCmd&hello=$helloVal&proto=6"
+        try {
+            $rResp = & $webCall $readUrl
+            $cand  = ConvertFrom-XmcdEntry -Text ([string]$rResp.Content) -Category $h.Category -DiscIdInfo $null
+            if ($cand) { $candidates += $cand }
+        } catch {
+            Write-RipperLog WARN 'Search-DiscMetadataByText' "GnuDB text-search read failed for $($h.Category)/$($h.DiscId): $($_.Exception.Message)"
+        }
+    }
+
+    if (@($candidates).Count -eq 0) {
+        return [pscustomobject]@{
+            Source     = 'GnuDB'
+            Status     = 'NoMatch'
+            BestMatch  = $null
+            Candidates = @()
+            Diagnostic = 'GnuDB matched but all reads returned unparseable entries.'
+        }
+    }
+
+    $status = if (@($candidates).Count -gt 1) { 'MultiMatch' } else { 'Match' }
     [pscustomobject]@{
         Source     = 'GnuDB'
         Status     = $status

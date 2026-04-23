@@ -299,3 +299,109 @@ Describe 'Invoke-GnuDbMetadataProvider end-to-end (mocked HTTP)' {
         $r.Diagnostic | Should -Match 'remote name'
     }
 }
+
+Describe 'Invoke-GnuDbTextSearchProvider (mocked HTTP)' {
+
+    It 'returns NoMatch with a diagnostic when neither artist nor album is given' {
+        $r = Invoke-GnuDbTextSearchProvider -Artist '' -Album '' -InvokeWebRequest { throw 'should not call' }
+        $r.Source     | Should -Be 'GnuDB'
+        $r.Status     | Should -Be 'NoMatch'
+        $r.Diagnostic | Should -Match 'artist or album'
+    }
+
+    It 'issues cddb+search+allfields then cddb+read per top-N hit' {
+        $captured = New-Object System.Collections.Generic.List[string]
+        $fake = {
+            param($Url)
+            $captured.Add($Url)
+            if ($Url -match 'cddb\+search') {
+                $body = @(
+                    "210 Found exact matches, list follows"
+                    "rock 11111111 Pink Floyd / The Wall"
+                    "misc 22222222 Pink Floyd / The Wall (Remastered)"
+                    "."
+                ) -join "`r`n"
+                return [pscustomobject]@{ Content = $body }
+            }
+            if ($Url -match 'cddb\+read\+rock\+11111111') {
+                $body = @(
+                    "210 rock 11111111 CD database entry follows"
+                    "DISCID=11111111"
+                    "DTITLE=Pink Floyd / The Wall"
+                    "DYEAR=1979"
+                    "DGENRE=Rock"
+                    "TTITLE0=In the Flesh?"
+                    "TTITLE1=The Thin Ice"
+                    "."
+                ) -join "`r`n"
+                return [pscustomobject]@{ Content = $body }
+            }
+            if ($Url -match 'cddb\+read\+misc\+22222222') {
+                $body = @(
+                    "210 misc 22222222 CD database entry follows"
+                    "DTITLE=Pink Floyd / The Wall (Remastered)"
+                    "DYEAR=2011"
+                    "TTITLE0=In the Flesh?"
+                    "."
+                ) -join "`r`n"
+                return [pscustomobject]@{ Content = $body }
+            }
+            throw "unexpected url $Url"
+        }
+
+        $r = Invoke-GnuDbTextSearchProvider `
+                -Artist 'Pink Floyd' -Album 'The Wall' `
+                -DetailLimit 2 -InvokeWebRequest $fake
+
+        $r.Source                       | Should -Be 'GnuDB'
+        $r.Status                       | Should -Be 'MultiMatch'
+        $r.Candidates                   | Should -HaveCount 2
+        $r.Candidates[0].AlbumArtist    | Should -Be 'Pink Floyd'
+        $r.Candidates[0].Album          | Should -Be 'The Wall'
+        $r.Candidates[0].Year           | Should -Be 1979
+        $r.Candidates[0].Tracks         | Should -HaveCount 2
+        $r.Candidates[0].Tracks[1].Title | Should -Be 'The Thin Ice'
+
+        $captured.Count | Should -Be 3
+        $captured[0]    | Should -Match 'cddb\+search\+allfields'
+        $captured[0]    | Should -Match 'Pink%20Floyd%20The%20Wall'
+        $captured[1]    | Should -Match 'cddb\+read\+rock\+11111111'
+        $captured[2]    | Should -Match 'cddb\+read\+misc\+22222222'
+    }
+
+    It 'derives audio-track count from the highest TTITLEn when no DiscIdInfo is available' {
+        $fake = {
+            param($Url)
+            if ($Url -match 'cddb\+search') {
+                return [pscustomobject]@{ Content = "200 misc abcdef01 X / Y`r`n" }
+            }
+            $body = @(
+                "210 misc abcdef01 CD database entry follows"
+                "DTITLE=X / Y"
+                "TTITLE0=a"
+                "TTITLE1=b"
+                "TTITLE2=c"
+                "TTITLE3=d"
+                "."
+            ) -join "`r`n"
+            [pscustomobject]@{ Content = $body }
+        }
+        $r = Invoke-GnuDbTextSearchProvider -Artist 'X' -Album 'Y' -InvokeWebRequest $fake
+        $r.Status                  | Should -Be 'Match'
+        $r.Candidates[0].Tracks    | Should -HaveCount 4
+        $r.Candidates[0].TrackCount | Should -Be 4
+    }
+
+    It 'returns NoMatch when the search returns 202' {
+        $fake = { param($Url) [pscustomobject]@{ Content = "202 No match found`r`n" } }
+        $r = Invoke-GnuDbTextSearchProvider -Artist 'Nonsense' -InvokeWebRequest $fake
+        $r.Status | Should -Be 'NoMatch'
+    }
+
+    It 'returns Offline on network failure' {
+        $fake = { param($Url) throw 'The remote name could not be resolved' }
+        $r = Invoke-GnuDbTextSearchProvider -Artist 'X' -InvokeWebRequest $fake
+        $r.Status     | Should -Be 'Offline'
+        $r.Diagnostic | Should -Match 'remote name'
+    }
+}

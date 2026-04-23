@@ -244,19 +244,20 @@ Describe 'Get-RipperTextSearchProviderNames' {
             [pscustomobject]@{ MetadataProviders = @('MusicBrainz', 'CuetoolsDb', 'GnuDb') }
         }
         $names = Get-RipperTextSearchProviderNames
-        # MusicBrainz first (from the configured chain), then the
-        # text-search-only iTunes + Deezer (any order between them).
+        # MusicBrainz + GnuDb come from the configured chain (in chain
+        # order), then the text-search-only iTunes + Deezer follow.
         $names[0]  | Should -Be 'MusicBrainz'
+        $names[1]  | Should -Be 'GnuDb'
         $names     | Should -Contain 'iTunesSearch'
         $names     | Should -Contain 'Deezer'
         $names     | Should -Not -Contain 'CuetoolsDb'   # not text-search-capable
-        $names     | Should -Not -Contain 'GnuDb'        # not yet (Commit C)
     }
 
     It 'still surfaces text-search-only providers when no MetadataProviders are configured' {
         Mock -CommandName Import-RipperConfig -MockWith { [pscustomobject]@{} }
         $names = Get-RipperTextSearchProviderNames
         $names | Should -Contain 'MusicBrainz'   # default chain default-includes it
+        $names | Should -Contain 'GnuDb'
         $names | Should -Contain 'iTunesSearch'
         $names | Should -Contain 'Deezer'
     }

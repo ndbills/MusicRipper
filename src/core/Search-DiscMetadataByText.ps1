@@ -23,7 +23,7 @@
             1. MusicBrainz   (Commit A — implemented)
             2. iTunes Search (Commit B — implemented)
             3. Deezer        (Commit B — implemented)
-            4. GnuDB         (Commit C — TBD)
+            4. GnuDB         (Commit C — implemented)
 
         Note: CTDB has no text-search API and is intentionally absent
         from the supported set even though it's a disc-id metadata
@@ -51,6 +51,7 @@ Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
 . (Join-Path $repoRoot 'src\core\metadata\Get-MetadataFromMusicBrainz.ps1')
 . (Join-Path $repoRoot 'src\core\metadata\Get-MetadataFromItunesSearch.ps1')
 . (Join-Path $repoRoot 'src\core\metadata\Get-MetadataFromDeezer.ps1')
+. (Join-Path $repoRoot 'src\core\metadata\Get-MetadataFromGnuDb.ps1')
 
 # Providers known to expose a text-search entry point. Extending this
 # set to GnuDB happens in Commit C. The dialog uses
@@ -66,6 +67,7 @@ Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
 #              opinion on it).
 $script:TextSearchSupported = @{
     'MusicBrainz'  = @{ IsDiscIdCapable = $true  }
+    'GnuDb'        = @{ IsDiscIdCapable = $true  }
     'iTunesSearch' = @{ IsDiscIdCapable = $false }
     'Deezer'       = @{ IsDiscIdCapable = $false }
 }
@@ -213,6 +215,9 @@ function Search-RipperMetadataByText {
             }
             'Deezer' {
                 Invoke-DeezerTextSearchProvider -Artist $Artist -Album $Album -Year $Year
+            }
+            'GnuDb' {
+                Invoke-GnuDbTextSearchProvider -Artist $Artist -Album $Album -Year $Year
             }
             default {
                 Write-RipperLog WARN 'Search-DiscMetadataByText' "Unknown text-search provider '$name'; skipping."
