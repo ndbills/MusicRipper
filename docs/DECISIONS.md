@@ -871,3 +871,71 @@ is through the between-discs dialog.
   per-iteration log rotate; session-state `$script:RipperSession`
   with `DiscCount` / `RippedDiscs` / `LastSummary`.
 - Tests: `Config.Tests.ps1` defaults assert `ContinuousMode -eq $true`.
+
+
+---
+
+## D-017 — Cross-session duplicate-rip detection via library check *(Phase 5+ backlog)*
+
+**Status:** Deferred. Surfaced during Phase 5.7 manual verification
+(Task 3) when the user asked whether the "already ripped this session"
+prompt also catches discs ripped in *previous* sessions.
+
+**Problem:** `$script:RipperSession.RippedDiscs` (D-016) only lives for
+the lifetime of one Start-Ripper.ps1 process. Quit and relaunch and
+the same disc will rip again with no warning, silently overwriting (or
+worse, ReviewQueue-duplicating) work the user already finished. The
+session-scoped check catches the "I forgot I just did this disc"
+case but not the "I did this disc last weekend" case, which is the
+more likely failure for a parents-grade tool used in short bursts.
+
+**Approach (sketch):**
+
+The library itself is the durable source of truth — if an album folder
+already exists at the destination path, we already ripped this disc.
+Two layers, cheap to check, both before the expensive rip:
+
+1. **Fast path — DiscId index file.** Maintain
+   `<library-root>/.musicripper/discids.json` mapping
+   `DiscId -> { path, rippedAt, source }`. Append on every successful
+   `Move-ToLibrary`. At the start of `Invoke-RipperOneDiscCycle`,
+   right after `Get-DiscId`, look up the DiscId; if hit, prompt the
+   user (Yes / No / Open in Explorer) before proceeding.
+2. **Slow path — destination-folder probe.** If the JSON index is
+   missing or stale (user moved files around manually), after metadata
+   resolution we compute the would-be destination path and `Test-Path`
+   it. Same prompt.
+
+The session hashtable from D-016 stays in place as the in-memory
+fast cache; the JSON index is its on-disk twin.
+
+**Why JSON index over scanning:** Library may grow to thousands of
+albums on a NAS share. Walking the tree on every disc insert would
+add seconds of latency over SMB. A flat JSON keyed by DiscId is O(1)
+and survives Synology snapshot/restore.
+
+**Edge cases to handle:**
+- ReviewQueue items shouldn't go in the index until they're approved
+  and moved into the real library.
+- "Rip again" (Yes) needs a clear destination strategy —
+  overwrite, side-by-side `(2)` folder, or route to ReviewQueue for
+  manual diff. Default proposal: side-by-side `(2)` so nothing is
+  ever destroyed.
+- Index corruption: read errors fall back to the slow path, never
+  block a rip.
+- Multi-disc sets share TOCs across discs in some pressings; key on
+  full DiscId (which includes track offsets), not just the freedb id.
+
+**Files likely touched:**
+- `src/core/Move-ToLibrary.ps1` — append to index on success.
+- `src/Start-Ripper.ps1` — index lookup right after `Get-DiscId`,
+  before metadata fetch.
+- New `src/core/Get-LibraryDiscIndex.ps1` — read/write/repair the
+  JSON.
+- `tests/Get-LibraryDiscIndex.Tests.ps1` — round-trip + corruption
+  recovery.
+
+**Risk:** Low. Index is advisory; failure modes degrade to current
+behaviour (no detection), never block the rip.
+
+**Estimate:** Small-to-medium. A focused half-day plus tests.
