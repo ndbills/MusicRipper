@@ -673,7 +673,14 @@ function Invoke-GnuDbTextSearchProvider {
         } else {
             "GnuDB text search parse failed: $($_.Exception.Message)"
         }
-        Write-RipperLog WARN 'Search-DiscMetadataByText' $msg
+        # Soft 4xx/5xx is a normal "we tried, GnuDB said no" outcome --
+        # log at INFO to keep the WARN channel for things the user can
+        # actually act on. A real parse failure remains a WARN.
+        if ($isSoft) {
+            Write-RipperLog INFO 'Search-DiscMetadataByText' $msg
+        } else {
+            Write-RipperLog WARN 'Search-DiscMetadataByText' $msg
+        }
         return [pscustomobject]@{
             Source     = 'GnuDB'
             Status     = if ($isSoft) { 'Offline' } else { 'Error' }

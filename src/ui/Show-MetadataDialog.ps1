@@ -363,6 +363,57 @@ function Show-RipperTextSearchDialog {
 
     Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml | Out-Null
 
+    # Compile a tiny IValueConverter once per session that turns a
+    # byte[] (the candidate's CoverArtBytes) into a Frozen BitmapImage
+    # WPF can render. We bind to CoverArtBytes directly with this
+    # converter rather than an Add-Member CoverImage property because
+    # PSObject reflection through TypeDescriptor is unreliable for CLR-
+    # typed values (string note-properties bind fine; BitmapImage ones
+    # surface as null in DataTemplate bindings on some builds).
+    if (-not ('MusicRipper.BytesToImageConverter' -as [type])) {
+        # Resolve the .NET 9 WPF assemblies via real types so Add-Type
+        # doesn't pick up the .NET Framework 4.0 reference assemblies
+        # (which would mismatch with the WPF runtime version PowerShell
+        # 7 actually loads -- "uses 'WindowsBase' which has a higher
+        # version than referenced assembly" build error).
+        $refAsms = @(
+            [System.Windows.Data.IValueConverter].Assembly.Location
+            [System.Windows.Media.Imaging.BitmapImage].Assembly.Location
+            [System.Windows.DependencyObject].Assembly.Location
+        )
+        Add-Type -ReferencedAssemblies $refAsms -TypeDefinition @'
+using System;
+using System.Globalization;
+using System.IO;
+using System.Windows.Data;
+using System.Windows.Media.Imaging;
+
+namespace MusicRipper {
+    public class BytesToImageConverter : IValueConverter {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture) {
+            byte[] bytes = value as byte[];
+            if (bytes == null || bytes.Length == 0) return null;
+            try {
+                BitmapImage bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.DecodePixelWidth = 80;
+                bmp.StreamSource = new MemoryStream(bytes);
+                bmp.EndInit();
+                bmp.Freeze();
+                return bmp;
+            } catch {
+                return null;
+            }
+        }
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) {
+            throw new NotImplementedException();
+        }
+    }
+}
+'@
+    }
+
     $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -426,7 +477,8 @@ function Show-RipperTextSearchDialog {
           <GridViewColumn Header="Cover" Width="68">
             <GridViewColumn.CellTemplate>
               <DataTemplate>
-                <Image Source="{Binding CoverImage}" Width="56" Height="56" Stretch="Uniform"/>
+                <Image Source="{Binding CoverArtBytes, Converter={StaticResource BytesToImg}}"
+                       Width="56" Height="56" Stretch="Uniform"/>
               </DataTemplate>
             </GridViewColumn.CellTemplate>
           </GridViewColumn>
@@ -451,6 +503,12 @@ function Show-RipperTextSearchDialog {
     $reader = [System.Xml.XmlNodeReader]::new(([xml]$xaml))
     $window = [Windows.Markup.XamlReader]::Load($reader)
     if ($Owner) { $window.Owner = $Owner }
+
+    # Register the converter as a window resource so the Cover column's
+    # {StaticResource BytesToImg} reference resolves. We add it after
+    # Load (rather than declaring in XAML) to avoid embedding a CLR
+    # namespace mapping to our dynamically Add-Type'd assembly.
+    $window.Resources.Add('BytesToImg', [MusicRipper.BytesToImageConverter]::new())
 
     $controls = @{}
     foreach ($n in @('ArtistBox','AlbumBox','YearBox','AllProvidersCheck','ProvidersHost',
@@ -481,35 +539,6 @@ function Show-RipperTextSearchDialog {
         LastSearch = $null
     }
 
-    # Helper: pre-bake a Frozen WPF BitmapImage onto each candidate so
-    # the ListView's <Image Source="{Binding CoverImage}"/> binding can
-    # render thumbnails directly. Mutating the candidate (Add-Member)
-    # is fine -- it's the same object the caller of Use selected gets
-    # back, and downstream consumers ignore unknown properties.
-    $bakeCoverImages = {
-        param([object[]]$Cands)
-        foreach ($c in @($Cands)) {
-            if (-not $c) { continue }
-            if ($c.PSObject.Properties.Name -contains 'CoverImage') { continue }
-            $img = $null
-            if (($c.PSObject.Properties.Name -contains 'CoverArtBytes') -and $c.CoverArtBytes) {
-                try {
-                    $bmp = New-Object System.Windows.Media.Imaging.BitmapImage
-                    $bmp.BeginInit()
-                    $bmp.CacheOption     = 'OnLoad'
-                    $bmp.DecodePixelWidth = 80   # thumbnail; saves memory.
-                    $bmp.StreamSource    = [System.IO.MemoryStream]::new([byte[]]$c.CoverArtBytes)
-                    $bmp.EndInit()
-                    $bmp.Freeze()
-                    $img = $bmp
-                } catch {
-                    $img = $null
-                }
-            }
-            $c | Add-Member -NotePropertyName CoverImage -NotePropertyValue $img -Force
-        }
-    }
-
     # If the caller passed a session cache, re-hydrate the controls
     # before wiring up handlers so the user picks up where they left
     # off. The CachedState shape is a hashtable -- see -CachedState
@@ -529,7 +558,6 @@ function Show-RipperTextSearchDialog {
         }
         if ($CachedState.ContainsKey('Candidates') -and $CachedState['Candidates']) {
             $cands = @($CachedState['Candidates'])
-            & $bakeCoverImages $cands
             $controls.ResultsList.ItemsSource = $cands
             if ($CachedState.ContainsKey('StatusText') -and $CachedState['StatusText']) {
                 $controls.StatusText.Text = [string]$CachedState['StatusText']
@@ -605,7 +633,6 @@ function Show-RipperTextSearchDialog {
             if ($result -and $result.PSObject.Properties['Candidates']) {
                 $cands = @($result.Candidates)
             }
-            & $bakeCoverImages $cands
             $controls.ResultsList.ItemsSource = $cands
             $statusMsg = if ($cands.Count -eq 0) {
                 'No matches.'
