@@ -101,7 +101,11 @@ function Get-RipperCoverArtChain {
         }
         if ($resp -and $resp.Bytes -and $resp.Bytes.Length -gt 0) {
             Write-RipperLog INFO 'Get-CoverArt' "Cover-art chain accepted bytes from $($resp.Source)."
-            return $resp.Bytes
+            # Unary-comma wrap so PowerShell's pipeline doesn't unroll the
+            # byte[] into Object[] of individual bytes when this function
+            # returns. The caller unwraps with `,$x`-style indexing or by
+            # accepting the wrapped form -- see Get-RipperBestCoverArt.
+            return ,$resp.Bytes
         }
     }
 

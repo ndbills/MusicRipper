@@ -464,5 +464,9 @@ function Get-RipperBestCoverArt {
     [OutputType([byte[]])]
     param([Parameter(Mandatory)] [pscustomobject]$Candidate)
 
-    Get-RipperCoverArtChain -Candidate $Candidate
+    # Same unary-comma trick as inside Get-RipperCoverArtChain: if we
+    # let the byte[] flow through as a normal return, PowerShell's
+    # pipeline unrolls it into Object[] of individual bytes and the
+    # WPF IValueConverter that expects byte[] gets null.
+    return ,(Get-RipperCoverArtChain -Candidate $Candidate)
 }
