@@ -291,6 +291,39 @@ function Get-RipperDiscMetadata {
         if ($merged) { $allCandidates = @($merged) + $allCandidates }
     }
 
+    # Patch per-track lengths from the disc's own TOC for any provider
+    # that doesn't carry them (CTDB, GnuDB). The TOC is authoritative
+    # anyway — this is purely so the confirm-dialog shows real durations
+    # instead of "0:00" next to every track.
+    $tocLens = @()
+    if ($DiscIdInfo.PSObject.Properties['Tracks'] -and $DiscIdInfo.Tracks) {
+        foreach ($t in $DiscIdInfo.Tracks) {
+            if (-not $t) { continue }
+            if (-not $t.PSObject.Properties['IsAudio'] -or -not $t.IsAudio) { continue }
+            $secs = 0.0
+            if ($t.PSObject.Properties['LengthSeconds'] -and $t.LengthSeconds) {
+                $secs = [double]$t.LengthSeconds
+            } elseif ($t.PSObject.Properties['LengthSectors'] -and $t.LengthSectors) {
+                # CD audio: exactly 75 sectors/sec. Fallback for TOC shapes
+                # that don't pre-compute LengthSeconds (e.g. test fixtures).
+                $secs = [double]$t.LengthSectors / 75.0
+            }
+            $tocLens += [int]($secs * 1000)
+        }
+    }
+    if ($tocLens.Count -gt 0) {
+        foreach ($cand in $allCandidates) {
+            if (-not $cand -or -not $cand.PSObject.Properties['Tracks'] -or -not $cand.Tracks) { continue }
+            for ($i = 0; $i -lt @($cand.Tracks).Count -and $i -lt $tocLens.Count; $i++) {
+                $tr = $cand.Tracks[$i]
+                if (-not $tr -or -not $tr.PSObject.Properties['LengthMs']) { continue }
+                if (-not $tr.LengthMs -or [int]$tr.LengthMs -eq 0) {
+                    $tr.LengthMs = $tocLens[$i]
+                }
+            }
+        }
+    }
+
     $best = $allCandidates[0]
 
     # Cover art for the chosen pick. Module-level helper so the call here
