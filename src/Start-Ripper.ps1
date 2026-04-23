@@ -51,6 +51,7 @@ Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 # are in scope.
 . (Join-Path $repoRoot 'src\core\Get-DiscId.ps1')
 . (Join-Path $repoRoot 'src\core\Get-DiscMetadata.ps1')
+. (Join-Path $repoRoot 'src\core\Search-DiscMetadataByText.ps1')
 . (Join-Path $repoRoot 'src\core\Invoke-Rip.ps1')
 . (Join-Path $repoRoot 'src\core\Test-RipQuality.ps1')
 . (Join-Path $repoRoot 'src\core\Write-Tags.ps1')
@@ -293,7 +294,38 @@ $onResearch = {
     Get-RipperDiscMetadata -DiscIdInfo $disc
 }
 
-$choice = Show-RipperMetadataDialog -Metadata $meta -OnResearch $onResearch
+# Pull the cover-art chain across each text-search hit so the dialog
+# can render an image once the user picks one. Failures are non-fatal
+# (same convention as the disc-id flow): the picked candidate just
+# shows up without a cover.
+$onTextSearch = {
+    param($payload)
+    Write-RipperLog INFO 'Start-Ripper' "Text-search requested: artist='$($payload.Artist)' album='$($payload.Album)' year=$($payload.Year) providers=$(@($payload.Providers) -join ',')"
+    $r = Search-RipperMetadataByText `
+            -Artist    $payload.Artist `
+            -Album     $payload.Album `
+            -Year      $payload.Year `
+            -Providers @($payload.Providers)
+    if ($r -and $r.Candidates) {
+        foreach ($c in @($r.Candidates)) {
+            try {
+                $bytes = Get-RipperBestCoverArt -Candidate $c
+                $c | Add-Member -NotePropertyName CoverArtBytes -NotePropertyValue $bytes -Force
+            } catch {
+                $c | Add-Member -NotePropertyName CoverArtBytes -NotePropertyValue $null -Force
+            }
+        }
+    }
+    $r
+}
+
+$textSearchProviders = @(Get-RipperTextSearchProviderNames)
+
+$choice = Show-RipperMetadataDialog `
+            -Metadata             $meta `
+            -OnResearch           $onResearch `
+            -OnTextSearch         $onTextSearch `
+            -TextSearchProviders  $textSearchProviders
 
 Write-RipperLog INFO 'Start-Ripper' "User chose: $($choice.Action)."
 

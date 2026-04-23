@@ -76,6 +76,7 @@ function ConvertFrom-MusicBrainzDiscIdResponse {
         $Response,
 
         [Parameter(Mandatory)]
+        [AllowEmptyString()]
         [string]$DiscId
     )
 
@@ -487,6 +488,173 @@ function Invoke-MusicBrainzMetadataProvider {
         Status     = $status
         BestMatch  = $best
         Candidates = @($candidates)
+        Diagnostic = $null
+    }
+}
+
+function Invoke-MusicBrainzTextSearchProvider {
+<#
+.SYNOPSIS
+    Provider entry point: search MusicBrainz by free-text artist/album/year
+    and return the uniform provider response shape.
+
+.DESCRIPTION
+    Companion to Invoke-MusicBrainzMetadataProvider. The disc-id-based
+    entry point is used when a CD is in the drive; this one is used by
+    the dialog's "Search by text…" fallback when no disc-id match was
+    found (or when the user wants to override the disc-id pick).
+
+    Two-step lookup:
+        1. /ws/2/release/?query=...&fmt=json&limit=Limit
+           Returns lightweight release stubs (no media/tracks).
+        2. /ws/2/release/{mbid}?inc=artists+recordings+release-groups+labels
+           Fetched for the top -DetailLimit hits to produce the same
+           candidate shape as the disc-id endpoint.
+
+    The detail responses are wrapped into a synthetic `releases` array
+    and run through ConvertFrom-MusicBrainzDiscIdResponse with an empty
+    DiscId — the parser falls through to its "first medium with tracks"
+    branch (no disc-id present), which is exactly what we want.
+
+.PARAMETER Artist
+    Free-text artist (album-artist) query. Optional but at least one of
+    -Artist or -Album must be non-empty.
+
+.PARAMETER Album
+    Free-text release/album title. Optional (see -Artist).
+
+.PARAMETER Year
+    Optional year filter, narrows the Lucene query with `date:YYYY`.
+
+.PARAMETER Limit
+    Max release stubs from the search step. Defaults to 10.
+
+.PARAMETER DetailLimit
+    Max top-N stubs to fetch full detail for. Defaults to 5; raising it
+    multiplies the MB request count (each follow-up costs one throttled
+    request).
+
+.PARAMETER InvokeMb
+    Test seam — scriptblock invoked with -Url instead of the live
+    Invoke-RipperMusicBrainzRequest. Production callers omit this.
+
+.EXAMPLE
+    PS> Invoke-MusicBrainzTextSearchProvider -Artist 'Pink Floyd' -Album 'The Wall'
+#>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [string]$Artist,
+        [string]$Album,
+        [int]$Year,
+        [int]$Limit       = 10,
+        [int]$DetailLimit = 5,
+        [scriptblock]$InvokeMb
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Artist) -and [string]::IsNullOrWhiteSpace($Album)) {
+        return [pscustomobject]@{
+            Source     = 'MusicBrainz'
+            Status     = 'NoMatch'
+            BestMatch  = $null
+            Candidates = @()
+            Diagnostic = 'Text search needs at least an artist or album.'
+        }
+    }
+
+    # Build a Lucene query. Quote each value so spaces inside titles
+    # behave as a phrase, and escape embedded double-quotes per Lucene
+    # syntax (\" inside a quoted phrase).
+    $parts = @()
+    if ($Artist) { $parts += ('artist:"{0}"'  -f ($Artist -replace '"','\"')) }
+    if ($Album)  { $parts += ('release:"{0}"' -f ($Album  -replace '"','\"')) }
+    if ($Year -gt 0) { $parts += ("date:$Year") }
+    $query   = $parts -join ' AND '
+    $encoded = [uri]::EscapeDataString($query)
+    $searchUrl = "https://musicbrainz.org/ws/2/release/?query=$encoded&fmt=json&limit=$Limit"
+
+    $invoke = if ($InvokeMb) { $InvokeMb } else { { param($Url) Invoke-RipperMusicBrainzRequest -Url $Url } }
+
+    Write-RipperLog INFO 'MusicBrainz' "Text search: $query"
+
+    try {
+        $searchResp = & $invoke -Url $searchUrl
+    } catch {
+        $msg = "MusicBrainz text search failed: $($_.Exception.Message)"
+        Write-RipperLog WARN 'MusicBrainz' $msg
+        return [pscustomobject]@{
+            Source     = 'MusicBrainz'
+            Status     = 'Offline'
+            BestMatch  = $null
+            Candidates = @()
+            Diagnostic = $msg
+        }
+    }
+
+    $stubs = @()
+    if ($searchResp -and $searchResp.PSObject.Properties['releases']) { $stubs = @($searchResp.releases) }
+    if ($stubs.Count -eq 0) {
+        Write-RipperLog INFO 'MusicBrainz' "Text search: no releases for '$query'."
+        return [pscustomobject]@{
+            Source     = 'MusicBrainz'
+            Status     = 'NoMatch'
+            BestMatch  = $null
+            Candidates = @()
+            Diagnostic = $null
+        }
+    }
+
+    # Lazy detail fetch for the top N stubs only — each follow-up costs a
+    # throttled request, and the full release record is what carries the
+    # tracks the dialog needs.
+    $details = foreach ($s in ($stubs | Select-Object -First $DetailLimit)) {
+        if (-not $s.id) { continue }
+        $detailUrl = "https://musicbrainz.org/ws/2/release/$($s.id)?inc=artists+recordings+release-groups+labels&fmt=json"
+        try {
+            & $invoke -Url $detailUrl
+        } catch {
+            Write-RipperLog WARN 'MusicBrainz' "Text search: detail fetch failed for $($s.id): $($_.Exception.Message)"
+            $null
+        }
+    }
+    $details = @($details | Where-Object { $_ })
+
+    if ($details.Count -eq 0) {
+        return [pscustomobject]@{
+            Source     = 'MusicBrainz'
+            Status     = 'NoMatch'
+            BestMatch  = $null
+            Candidates = @()
+            Diagnostic = "MusicBrainz returned $($stubs.Count) release stub(s) but no detail records."
+        }
+    }
+
+    # Reuse the disc-id parser. Pass a wrapping object that looks like
+    # the disc-id endpoint shape and an empty DiscId — the parser will
+    # fall through to the "first medium with tracks" branch for each
+    # release, which is the right pick for text-search results.
+    $fakeResp = [pscustomobject]@{ releases = $details }
+    $candidates = ConvertFrom-MusicBrainzDiscIdResponse -Response $fakeResp -DiscId ''
+
+    if (-not $candidates -or @($candidates).Count -eq 0) {
+        return [pscustomobject]@{
+            Source     = 'MusicBrainz'
+            Status     = 'NoMatch'
+            BestMatch  = $null
+            Candidates = @()
+            Diagnostic = $null
+        }
+    }
+
+    $list   = @($candidates)
+    $status = if ($list.Count -gt 1) { 'MultiMatch' } else { 'Match' }
+    Write-RipperLog INFO 'MusicBrainz' "Text search produced $($list.Count) candidate(s); top: '$($list[0].AlbumArtist) - $($list[0].Album)'."
+
+    [pscustomobject]@{
+        Source     = 'MusicBrainz'
+        Status     = $status
+        BestMatch  = $list[0]
+        Candidates = $list
         Diagnostic = $null
     }
 }
