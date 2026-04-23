@@ -423,3 +423,68 @@ to `New-RipperConfigObject` so a fresh config gets it. The dialog
 wrapper accepts `-EjectAfterRip [bool]` and falls back to `$true`
 for pre-5.4 configs in `Start-Ripper.ps1` via
 `if ($cfg.PSObject.Properties['EjectAfterRip']) { ... } else { $true }`.
+
+
+---
+
+## D-014 — Cover-art picker is on-demand, not modal-by-default *(Phase 5.3)*
+
+**Choice:** The confirm dialog keeps auto-picking the first cover-art
+provider that returns bytes (`Get-RipperCoverArtChain`, unchanged).
+A "Change cover…" button under the cover preview opens a sub-modal
+(`Show-RipperCoverArtPicker`) that runs *every* configured provider
+in chain order (`Get-RipperCoverArtCandidates`) and shows each
+non-empty result as a thumbnail the user can pick. Picking one
+swaps the in-memory `CoverArtBytes` on the current candidate so the
+subsequent rip embeds the chosen image. Cancelling the picker is a
+no-op; the auto-picked cover stays.
+
+**Why on-demand:** The common case ("MusicBrainz/CAA returned a
+perfectly fine cover") shouldn't cost the parent an extra click or
+extra network calls. The power-user case ("this CAA cover is the
+wrong edition / low-res / the user hates the Deezer one that won
+the chain") is one click away, no config flag required.
+
+**Rejected:**
+
+- **Always show the picker up-front:** Extra click and latency for
+  the 95% case where the auto-pick is fine.
+- **Config flag `AlwaysShowCoverArtPicker`:** Yet another knob in
+  `config.json` to explain. If a user wants to always pick, they
+  can just click "Change cover…" every time.
+- **Fetch all providers eagerly and only render the picker on
+  demand:** Wastes bandwidth on every rip. The user opens the
+  picker in a tiny fraction of rips.
+
+**Provider contract:** Same shape as D-011
+(`@{Source; Bytes; Url; Diagnostic}`). `Get-RipperCoverArtCandidates`
+returns one entry per provider in chain order, preserving errors on
+the `Diagnostic` field so we could surface them in the UI later.
+
+**Still deferred (recorded here for the next cover-art iteration):**
+
+- **Local file picker** — "Browse…" button in the picker modal that
+  opens `Microsoft.Win32.OpenFileDialog` filtered to jpg/png/webp,
+  reads the bytes, and adds a `(local)` thumbnail. Useful when the
+  user has a scan of the booklet cover that beats every online
+  source. Needs a size/MIME sanity check (reject >5 MB, reject
+  non-image bytes) before we let it ride on the FLAC.
+- **Paste from clipboard** — `[System.Windows.Clipboard]::GetImage()`
+  (or `GetFileDropList` if the user copied a file) wired to a
+  "Paste" button in the picker modal. Adds a `(clipboard)`
+  thumbnail. Parallels the local-file picker but saves the
+  save-and-browse step for users who grabbed an image from a
+  browser.
+- **Drag-and-drop onto the picker modal** — `AllowDrop="True"` on
+  the picker window plus a `PreviewDragOver` / `Drop` handler that
+  accepts a single file (or image data) and adds a `(dropped)`
+  thumbnail. Same validation as local-file.
+
+The three deferred sources would share one code path — a
+`Register-RipperCoverArtPickerUserSource` helper that takes bytes +
+a source label and appends a row to the picker's ItemsSource —
+because they all produce the same `{Source; Bytes; Url=$null;
+Diagnostic=$null}` shape as the network providers. When the time
+comes: add the helper, wire three UI entry points (Button, Button,
+DragDrop) to it, enforce the size/MIME gate in the helper not the
+callers.
