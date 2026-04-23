@@ -661,11 +661,22 @@ function Invoke-GnuDbTextSearchProvider {
     try {
         $hits = ConvertFrom-GnuDbQueryResponse -Text $body
     } catch {
-        $msg = "GnuDB text search parse failed: $($_.Exception.Message)"
+        # GnuDB sometimes responds to `cddb search` with a 4xx-class
+        # CDDB code (e.g. 403 "Please mail info@gnudb.org" rate-limit
+        # / identification gripe). Treat that as a soft Offline so the
+        # other providers' results still surface; a hard Error spooks
+        # the user with red ink even though it's recoverable.
+        $first = ($body -split "`r?`n", 2)[0].Trim()
+        $isSoft = $first -match '^4\d{2}\s' -or $first -match '^5\d{2}\s'
+        $msg = if ($isSoft) {
+            "GnuDB declined the text-search request: $first"
+        } else {
+            "GnuDB text search parse failed: $($_.Exception.Message)"
+        }
         Write-RipperLog WARN 'Search-DiscMetadataByText' $msg
         return [pscustomobject]@{
             Source     = 'GnuDB'
-            Status     = 'Error'
+            Status     = if ($isSoft) { 'Offline' } else { 'Error' }
             BestMatch  = $null
             Candidates = @()
             Diagnostic = $msg

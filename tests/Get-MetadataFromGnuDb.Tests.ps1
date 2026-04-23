@@ -398,6 +398,16 @@ Describe 'Invoke-GnuDbTextSearchProvider (mocked HTTP)' {
         $r.Status | Should -Be 'NoMatch'
     }
 
+    It 'returns Offline (not Error) when GnuDB responds with a 4xx CDDB code' {
+        $fake = {
+            param($Url)
+            [pscustomobject]@{ Content = "403 Please mail to info@gnudb.org with the programe used, to hel`r`np fix issues`r`n" }
+        }
+        $r = Invoke-GnuDbTextSearchProvider -Artist 'X' -Album 'Y' -InvokeWebRequest $fake
+        $r.Status     | Should -Be 'Offline'
+        $r.Diagnostic | Should -Match '403'
+    }
+
     It 'returns Offline on network failure' {
         $fake = { param($Url) throw 'The remote name could not be resolved' }
         $r = Invoke-GnuDbTextSearchProvider -Artist 'X' -InvokeWebRequest $fake
