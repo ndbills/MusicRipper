@@ -152,3 +152,59 @@ Describe 'Get-RipperCoverArtChain dispatch' {
         $bytes | Should -Be ([byte[]]@(1))
     }
 }
+
+Describe 'Get-RipperCoverArtCandidates (picker: all providers, not short-circuit)' {
+
+    BeforeEach {
+        $script:cand = [pscustomobject]@{
+            AlbumArtist='Pink Floyd'; Album='Dark Side'; ReleaseMbid='mb-id'; HasCoverArt=$true
+        }
+    }
+
+    It 'invokes every provider in the list even when earlier ones succeed' {
+        Mock Invoke-CoverArtArchiveProvider     { [pscustomobject]@{ Source='CoverArtArchive'; Bytes=[byte[]]@(1,2); Url='caa'; Diagnostic=$null } }
+        Mock Invoke-ItunesSearchCoverArtProvider { [pscustomobject]@{ Source='iTunesSearch';    Bytes=[byte[]]@(3,4); Url='it';  Diagnostic=$null } }
+        Mock Invoke-DeezerCoverArtProvider       { [pscustomobject]@{ Source='Deezer';          Bytes=[byte[]]@(5,6); Url='dz';  Diagnostic=$null } }
+
+        $results = Get-RipperCoverArtCandidates -Candidate $script:cand -Providers @('CoverArtArchive','iTunesSearch','Deezer')
+        @($results).Count | Should -Be 3
+        Should -Invoke Invoke-CoverArtArchiveProvider     -Times 1
+        Should -Invoke Invoke-ItunesSearchCoverArtProvider -Times 1
+        Should -Invoke Invoke-DeezerCoverArtProvider       -Times 1
+    }
+
+    It 'returns one entry per provider, in the given order, even when some return Bytes=$null' {
+        Mock Invoke-CoverArtArchiveProvider     { [pscustomobject]@{ Source='CoverArtArchive'; Bytes=$null;         Url=$null; Diagnostic='404' } }
+        Mock Invoke-ItunesSearchCoverArtProvider { [pscustomobject]@{ Source='iTunesSearch';    Bytes=[byte[]]@(9,9); Url='it';  Diagnostic=$null } }
+        Mock Invoke-DeezerCoverArtProvider       { [pscustomobject]@{ Source='Deezer';          Bytes=$null;         Url=$null; Diagnostic='no match' } }
+
+        $results = @(Get-RipperCoverArtCandidates -Candidate $script:cand -Providers @('CoverArtArchive','iTunesSearch','Deezer'))
+        $results.Count | Should -Be 3
+        $results[0].Source | Should -Be 'CoverArtArchive'
+        $results[0].Bytes  | Should -BeNullOrEmpty
+        $results[1].Source | Should -Be 'iTunesSearch'
+        $results[1].Bytes  | Should -Be ([byte[]]@(9,9))
+        $results[2].Source | Should -Be 'Deezer'
+        $results[2].Bytes  | Should -BeNullOrEmpty
+    }
+
+    It 'continues past a throwing provider and records the error in the diagnostic' {
+        Mock Invoke-CoverArtArchiveProvider     { throw 'network exploded' }
+        Mock Invoke-ItunesSearchCoverArtProvider { [pscustomobject]@{ Source='iTunesSearch'; Bytes=[byte[]]@(7); Url='it'; Diagnostic=$null } }
+
+        $results = @(Get-RipperCoverArtCandidates -Candidate $script:cand -Providers @('CoverArtArchive','iTunesSearch'))
+        $results.Count | Should -Be 2
+        $results[0].Source     | Should -Be 'CoverArtArchive'
+        $results[0].Bytes      | Should -BeNullOrEmpty
+        $results[0].Diagnostic | Should -Match 'network exploded'
+        $results[1].Bytes      | Should -Be ([byte[]]@(7))
+    }
+
+    It 'emits a WARN-style entry for unknown provider names instead of throwing' {
+        $results = @(Get-RipperCoverArtCandidates -Candidate $script:cand -Providers @('NotARealProvider'))
+        $results.Count | Should -Be 1
+        $results[0].Source     | Should -Be 'NotARealProvider'
+        $results[0].Bytes      | Should -BeNullOrEmpty
+        $results[0].Diagnostic | Should -Match 'Unknown provider'
+    }
+}

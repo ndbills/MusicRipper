@@ -284,6 +284,271 @@ function Format-MetadataCandidateLabel {
     $label
 }
 
+function Show-RipperCoverArtPicker {
+<#
+.SYNOPSIS
+    Show the "Change cover…" modal. Queries every configured cover-art
+    provider for the current candidate, shows a thumbnail per provider
+    that returned bytes, and returns the picked response (or $null on
+    cancel / no-change).
+
+.DESCRIPTION
+    Pipeline position:
+        Sub-modal opened from Show-RipperMetadataDialog when the user
+        clicks "Change cover…". Unlike the default cover-art chain
+        (first-non-empty wins), this picker runs every provider and
+        presents the results side-by-side so the user can compare.
+
+        UI shape:
+            top   - status line ("Looking up cover art…" / "3 of 3
+                    providers returned art" etc)
+            mid   - ListView with a thumbnail-only template (cover
+                    image 180x180 + source caption below)
+            bttm  - Keep current / Use selected / Cancel buttons
+
+.PARAMETER Owner
+    Owner Window for proper modal parenting.
+
+.PARAMETER Candidate
+    The metadata candidate the user is currently viewing. Provider
+    lookups key off its .ReleaseMbid / .AlbumArtist / .Album.
+
+.PARAMETER OnLookup
+    Scriptblock invoked once the modal opens. Receives the candidate
+    and must return an array of cover-art responses
+    (@{Source; Bytes; Url; Diagnostic}) — typically the output of
+    Get-RipperCoverArtCandidates. The modal renders each response
+    that has non-empty Bytes as a pickable thumbnail.
+
+.PARAMETER CurrentBytes
+    Optional byte[] — the image currently bound to the main dialog's
+    cover. When supplied, the modal renders a synthetic "(current)"
+    row at the top so the user can reset to it.
+
+.EXAMPLE
+    PS> $pick = Show-RipperCoverArtPicker -Owner $w -Candidate $vm.Source `
+                    -OnLookup { param($c) Get-RipperCoverArtCandidates -Candidate $c }
+    PS> if ($pick) { $best.CoverArtBytes = $pick.Bytes }
+#>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [System.Windows.Window]$Owner,
+
+        [Parameter(Mandatory)]
+        [pscustomobject]$Candidate,
+
+        [Parameter(Mandatory)]
+        [scriptblock]$OnLookup,
+
+        [byte[]]$CurrentBytes
+    )
+
+    Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml | Out-Null
+
+    # Reuse the BytesToImageConverter compiled by Show-RipperTextSearchDialog.
+    # If that function has never been called in this session we need to
+    # compile it now; the type-existence guard makes it idempotent.
+    if (-not ('MusicRipper.BytesToImageConverter' -as [type])) {
+        $refAsms = @(
+            [System.Windows.Data.IValueConverter].Assembly.Location
+            [System.Windows.Media.Imaging.BitmapImage].Assembly.Location
+            [System.Windows.DependencyObject].Assembly.Location
+            [psobject].Assembly.Location
+        )
+        Add-Type -ReferencedAssemblies $refAsms -TypeDefinition @'
+using System;
+using System.Globalization;
+using System.IO;
+using System.Management.Automation;
+using System.Windows.Data;
+using System.Windows.Media.Imaging;
+
+namespace MusicRipper {
+    public class BytesToImageConverter : IValueConverter {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture) {
+            PSObject pso = value as PSObject;
+            if (pso != null) value = pso.BaseObject;
+            byte[] bytes = value as byte[];
+            if (bytes == null || bytes.Length == 0) return null;
+            try {
+                BitmapImage bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.DecodePixelWidth = 240;
+                bmp.StreamSource = new MemoryStream(bytes);
+                bmp.EndInit();
+                bmp.Freeze();
+                return bmp;
+            } catch {
+                return null;
+            }
+        }
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) {
+            throw new NotImplementedException();
+        }
+    }
+}
+'@
+    }
+
+    $asmName = [MusicRipper.BytesToImageConverter].Assembly.GetName().Name
+    $xaml = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:mr="clr-namespace:MusicRipper;assembly=$asmName"
+        Title="Change cover art" Height="520" Width="780"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
+        FontFamily="Segoe UI" FontSize="13">
+  <Window.Resources>
+    <mr:BytesToImageConverter x:Key="BytesToImg"/>
+  </Window.Resources>
+  <Grid Margin="12">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <TextBlock Grid.Row="0" x:Name="StatusText" Margin="0,0,0,8"
+               Foreground="#444" FontStyle="Italic"
+               Text="Looking up cover art from every provider..."/>
+
+    <ListView Grid.Row="1" x:Name="ThumbsList" SelectionMode="Single"
+              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+              ScrollViewer.VerticalScrollBarVisibility="Auto">
+      <ListView.ItemsPanel>
+        <ItemsPanelTemplate>
+          <WrapPanel Orientation="Horizontal"/>
+        </ItemsPanelTemplate>
+      </ListView.ItemsPanel>
+      <ListView.ItemTemplate>
+        <DataTemplate>
+          <Border BorderBrush="#888" BorderThickness="1" Background="#F8F8F8"
+                  Margin="4" Padding="6" Width="210">
+            <StackPanel>
+              <Border BorderBrush="#CCC" BorderThickness="1" Background="#EEE"
+                      Width="180" Height="180" HorizontalAlignment="Center"
+                      SnapsToDevicePixels="True" UseLayoutRounding="True">
+                <Image Source="{Binding Bytes, Converter={StaticResource BytesToImg}}"
+                       Stretch="Uniform"
+                       RenderOptions.BitmapScalingMode="HighQuality"/>
+              </Border>
+              <TextBlock Text="{Binding Source}" FontWeight="Bold"
+                         HorizontalAlignment="Center" Margin="0,6,0,0"/>
+              <TextBlock Text="{Binding SizeLabel}" Foreground="#666"
+                         HorizontalAlignment="Center" FontSize="11"/>
+            </StackPanel>
+          </Border>
+        </DataTemplate>
+      </ListView.ItemTemplate>
+    </ListView>
+
+    <DockPanel Grid.Row="2" Margin="0,8,0,0" LastChildFill="False">
+      <Button x:Name="CancelButton" Content="Cancel"        DockPanel.Dock="Right" Padding="14,4" MinWidth="110" Margin="6,0,0,0"/>
+      <Button x:Name="UseButton"    Content="Use selected"  DockPanel.Dock="Right" Padding="14,4" MinWidth="130" IsEnabled="False"
+              Background="#0a7" Foreground="White" FontWeight="Bold"/>
+    </DockPanel>
+  </Grid>
+</Window>
+"@
+
+    $reader = [System.Xml.XmlNodeReader]::new(([xml]$xaml))
+    $window = [Windows.Markup.XamlReader]::Load($reader)
+    if ($Owner) { $window.Owner = $Owner }
+
+    # Phase-4 lesson: always install a dispatcher unhandled-exception
+    # sink on any new WPF window so binding / template errors get
+    # logged instead of bubbling as a silent NRE at ShowDialog.
+    $sidecar = Join-Path $env:LOCALAPPDATA 'MusicRipper\logs\cover-picker-dispatcher.log'
+    $window.Dispatcher.add_UnhandledException({
+        param($s, $e)
+        try {
+            $ex = $e.Exception
+            $msg = "`n=== $(Get-Date -Format o) ===`n$($ex.GetType().FullName): $($ex.Message)`n$($ex.StackTrace)"
+            if ($ex.InnerException) {
+                $msg += "`n-- inner: $($ex.InnerException.GetType().FullName): $($ex.InnerException.Message)"
+            }
+            Add-Content -LiteralPath $sidecar -Value $msg -ErrorAction SilentlyContinue
+            try { Write-RipperLog ERROR 'Show-RipperCoverArtPicker' "Dispatcher exception: $($ex.GetType().FullName): $($ex.Message) (sidecar: $sidecar)" } catch {}
+        } catch {}
+        $e.Handled = $true
+    })
+
+    $controls = @{}
+    foreach ($n in @('StatusText','ThumbsList','UseButton','CancelButton')) {
+        $controls[$n] = $window.FindName($n)
+    }
+
+    $state = [pscustomobject]@{ Picked = $null }
+
+    $controls.ThumbsList.Add_SelectionChanged({
+        $controls.UseButton.IsEnabled = ($null -ne $controls.ThumbsList.SelectedItem)
+    }.GetNewClosure())
+
+    $controls.UseButton.Add_Click({
+        $sel = $controls.ThumbsList.SelectedItem
+        if ($sel) {
+            # Strip the PSObject wrapper around the ItemsSource row so
+            # the caller gets the original cover-art response shape.
+            $obj = $sel
+            if ($obj -is [System.Management.Automation.PSObject]) {
+                $obj = $obj.PSObject.BaseObject
+            }
+            $state.Picked = $sel
+            $window.DialogResult = $true
+            $window.Close()
+        }
+    }.GetNewClosure())
+
+    $controls.CancelButton.Add_Click({
+        $state.Picked = $null
+        $window.DialogResult = $false
+        $window.Close()
+    }.GetNewClosure())
+
+    # Fire the lookup once the window is shown so the spinner message
+    # is visible before we start hitting the network. Dispatcher.Invoke
+    # on ContextIdle pattern: the window is up, layout done, now go.
+    $window.Add_ContentRendered({
+        try {
+            $results = & $OnLookup $Candidate
+            $rows = @()
+            if ($CurrentBytes -and $CurrentBytes.Length -gt 0) {
+                $rows += [pscustomobject]@{
+                    Source    = '(current)'
+                    Bytes     = $CurrentBytes
+                    Url       = $null
+                    SizeLabel = "$([math]::Round($CurrentBytes.Length / 1024)) KB"
+                }
+            }
+            foreach ($r in @($results)) {
+                if ($r -and $r.Bytes -and $r.Bytes.Length -gt 0) {
+                    $rows += [pscustomobject]@{
+                        Source    = [string]$r.Source
+                        Bytes     = [byte[]]$r.Bytes
+                        Url       = [string]$r.Url
+                        SizeLabel = "$([math]::Round($r.Bytes.Length / 1024)) KB"
+                    }
+                }
+            }
+            $controls.ThumbsList.ItemsSource = $rows
+            $hitCount = @($results | Where-Object { $_ -and $_.Bytes }).Count
+            $totalCount = @($results).Count
+            $controls.StatusText.Text = if ($rows.Count -eq 0) {
+                'No cover art found from any provider.'
+            } else {
+                "$hitCount of $totalCount provider(s) returned art. Pick one and click Use selected."
+            }
+        } catch {
+            $controls.StatusText.Text = "Cover-art lookup failed: $($_.Exception.Message)"
+        }
+    }.GetNewClosure())
+
+    [void]$window.ShowDialog()
+    return $state.Picked
+}
+
 function Show-RipperTextSearchDialog {
 <#
 .SYNOPSIS
@@ -768,6 +1033,16 @@ function Show-RipperMetadataDialog {
     parent-friendly batch behaviour. Returned on the result object as
     .EjectAfterRip so the caller can honour the user's per-rip choice.
 
+.PARAMETER OnPickCover
+    Phase 5.3. Optional scriptblock invoked when the user clicks
+    "Change cover…". Receives the currently-viewed candidate and must
+    return an array of cover-art responses
+    (@{Source; Bytes; Url; Diagnostic}), typically the output of
+    Get-RipperCoverArtCandidates. If the user picks one, the main
+    dialog updates its cover preview and stashes the new bytes on
+    the candidate's .CoverArtBytes. If not supplied, the button is
+    hidden.
+
 .EXAMPLE
     PS> $r = Show-RipperMetadataDialog -Metadata $meta
     PS> if ($r.Action -eq 'Rip') { Invoke-Rip -Metadata $r.Metadata }
@@ -784,7 +1059,9 @@ function Show-RipperMetadataDialog {
 
         [string[]]$TextSearchProviders,
 
-        [bool]$EjectAfterRip = $true
+        [bool]$EjectAfterRip = $true,
+
+        [scriptblock]$OnPickCover
     )
 
     Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml | Out-Null
@@ -810,12 +1087,16 @@ function Show-RipperMetadataDialog {
         <ColumnDefinition Width="*"/>
       </Grid.ColumnDefinitions>
       <Border Grid.Column="0" BorderBrush="#888" BorderThickness="1" Background="#EEE"
-              Width="220" Height="220" HorizontalAlignment="Left"
+              Width="220" Height="220" HorizontalAlignment="Left" VerticalAlignment="Top"
               SnapsToDevicePixels="True" UseLayoutRounding="True">
         <Image x:Name="CoverImage" Stretch="Uniform"
                RenderOptions.BitmapScalingMode="HighQuality"
                SnapsToDevicePixels="True" UseLayoutRounding="True"/>
       </Border>
+      <Button Grid.Column="0" x:Name="PickCoverButton" Content="Change cover…"
+              HorizontalAlignment="Left" VerticalAlignment="Top" Width="220" Margin="0,226,0,0"
+              Padding="8,4"
+              ToolTip="Look up cover art from every configured provider and pick a different one. The current cover stays selected unless you Use one."/>
       <Grid Grid.Column="1" Margin="12,0,0,0">
         <Grid.RowDefinitions>
           <RowDefinition Height="Auto"/>
@@ -910,7 +1191,7 @@ function Show-RipperMetadataDialog {
     foreach ($name in @(
         'CoverImage','StatusText','CandidateCombo','ResearchButton','TextSearchButton','DiscIdText',
         'AlbumBox','ArtistBox','YearBox','CompilationBox','TracksGrid',
-        'RipButton','ReviewButton','CancelButton','ActionHint','EjectCheck'
+        'RipButton','ReviewButton','CancelButton','ActionHint','EjectCheck','PickCoverButton'
     )) {
         $controls[$name] = $window.FindName($name)
     }
@@ -920,6 +1201,7 @@ function Show-RipperMetadataDialog {
     if (-not $OnTextSearch -or -not $TextSearchProviders -or @($TextSearchProviders).Count -eq 0) {
         $controls.TextSearchButton.Visibility = 'Collapsed'
     }
+    if (-not $OnPickCover)  { $controls.PickCoverButton.Visibility = 'Collapsed' }
 
     # Capture our own helper functions as scriptblocks so the WPF event
     # handlers (which run in a child scope) can invoke them via `& $sb`.
@@ -1162,6 +1444,37 @@ function Show-RipperMetadataDialog {
                 'MusicRipper', 'OK', 'Warning') | Out-Null
         } finally {
             $controls.TextSearchButton.IsEnabled = $true
+        }
+    }.GetNewClosure())
+
+    $controls.PickCoverButton.Add_Click({
+        try {
+            $controls.PickCoverButton.IsEnabled = $false
+            $vm = $state.CurrentVm
+            if (-not $vm) { return }
+            # Current in-memory cover bytes (may have been swapped by a
+            # prior PickCover invocation) get shown as "(current)" so the
+            # user can always compare before committing.
+            $currentBytes = $null
+            if ($vm.Source -and ($vm.Source.PSObject.Properties.Name -contains 'CoverArtBytes') -and $vm.Source.CoverArtBytes) {
+                $currentBytes = [byte[]]$vm.Source.CoverArtBytes
+            }
+            $picked = Show-RipperCoverArtPicker `
+                -Owner        $window `
+                -Candidate    $vm.Source `
+                -OnLookup     $OnPickCover `
+                -CurrentBytes $currentBytes
+            if ($picked -and $picked.Bytes) {
+                # Stash on the underlying candidate so convertFrom picks it
+                # up, and refresh the visible preview immediately.
+                $vm.Source | Add-Member -NotePropertyName CoverArtBytes -NotePropertyValue ([byte[]]$picked.Bytes) -Force
+                & $bindCoverArt $vm.Source
+            }
+        } catch {
+            [System.Windows.MessageBox]::Show("Cover-art picker failed:`n$($_.Exception.Message)",
+                'MusicRipper', 'OK', 'Warning') | Out-Null
+        } finally {
+            $controls.PickCoverButton.IsEnabled = $true
         }
     }.GetNewClosure())
 

@@ -352,11 +352,22 @@ $onTextSearch = {
 
 $textSearchProviders = @(Get-RipperTextSearchProviderNames)
 
+# Phase 5.3: "Change cover…" picker. Runs every configured provider
+# (not short-circuit like Get-RipperBestCoverArt) so the user can
+# compare all available images side-by-side. The dialog hides the
+# button when -OnPickCover is not supplied, so this is purely opt-in.
+$onPickCover = {
+    param($candidate)
+    Write-RipperLog INFO 'Start-Ripper' "Cover-picker requested for '$($candidate.AlbumArtist) / $($candidate.Album)'."
+    Get-RipperCoverArtCandidates -Candidate $candidate
+}
+
 $choice = Show-RipperMetadataDialog `
             -Metadata             $meta `
             -OnResearch           $onResearch `
             -OnTextSearch         $onTextSearch `
             -TextSearchProviders  $textSearchProviders `
+            -OnPickCover          $onPickCover `
             -EjectAfterRip        ($(if ($cfg.PSObject.Properties['EjectAfterRip']) { [bool]$cfg.EjectAfterRip } else { $true }))
 
 Write-RipperLog INFO 'Start-Ripper' "User chose: $($choice.Action) (eject=$($choice.EjectAfterRip))."
