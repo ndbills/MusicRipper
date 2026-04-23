@@ -329,12 +329,61 @@ and `src/core/coverart/Get-CoverArtFromXxx.ps1`.
   outside the "no manual setup" UX goal for parents.
 - **fanart.tv** — needs a project key, and its sweet spot is artist
   backgrounds, not per-album covers.
-- **GnuDB / freedb** — last-mile-relevant for very old / regional
-  discs but the protocol is essentially abandoned and the database
-  is stale.
 - **Apple Music / Last.fm / Spotify / Amazon** — require API keys or
   paid tiers; iTunes Search already covers Apple's catalog without
   auth for our purposes.
 
 Revisit after Phase 6 if rip-failure-by-no-metadata becomes a real
 pattern in the field.
+
+---
+
+## D-012 — Adopt GnuDB as a third metadata provider *(Phase 5.2 follow-on)*
+
+**Reversal of one "deferred" item in D-011.** A live test of an EFY
+2006 VA Christmas compilation hit a gap both MB and CTDB missed:
+MusicBrainz had the release but no disc-id attached (so the
+`/discid/` lookup 404'd), and CTDB had a verification-only row with
+empty album/artist/tracks. The motivation for skipping GnuDB in
+D-011 ("protocol abandoned, database stale") turned out to be
+half-wrong: GnuDB is quiet but still active, owns the freedb catalog
+since Magix retired freedb in 2020, and holds >10M CD entries
+including the long tail of community-submitted / regional discs that
+MB's curation bar keeps out.
+
+**Provider:** `src/core/metadata/Get-MetadataFromGnuDb.ps1`. Uses
+the CDDB HTTP protocol (proto=6, UTF-8) against
+`https://gnudb.gnudb.org/~cddb/cddb.cgi`. Two-step flow:
+
+1. `cddb query <disc-id> <ntrks> <offsets...> <nsecs>` — returns
+   200 (single exact), 210 (exact list), 211 (inexact list), 202
+   (no match).
+2. `cddb read <category> <disc-id>` for the top N matches (default
+   3) — returns xmcd text we parse for DTITLE / DYEAR / DGENRE /
+   TTITLE*n*.
+
+The CDDB1 disc-id is computed locally from `DiscIdInfo.Tracks[]`
+(sum-of-digit checksum of track start seconds, total nsecs,
+track count) so we don't need another CUETools helper.
+
+**Why it slots after CTDB, not before:** CTDB is more likely to have
+accurate per-track timings (it's auto-submitted alongside successful
+rips) and GnuDB's legacy catalog has the most format variation /
+partial entries. Ordering MB → CTDB → GnuDB keeps curated data
+winning conflicts while GnuDB fills the tail.
+
+**Rate-limit discipline:** GnuDB requires a distinct
+`hello=email+host+app+version` on every request or they collapse
+generic clients into one shared quota. We reuse
+`cfg.MusicBrainzUserAgent` (which already has the user's email in
+`( ... )`) and identify as `musicripper/0.1`. One query + up to 3
+reads per disc is well under the per-user quota.
+
+**Client-side filter:** `ConvertFrom-XmcdEntry` returns `$null` for
+entries with blank DTITLE, blank DYEAR, and no TTITLE*n* values — the
+same "verification-only row" pattern that bit us on CTDB (see the
+fix described inline in `Get-MetadataFromCuetoolsDb.ps1`).
+
+**Still deferred:** Discogs, fanart.tv, Apple Music, Last.fm,
+Spotify, Amazon (unchanged from D-011).
+

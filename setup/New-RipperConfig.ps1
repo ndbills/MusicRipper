@@ -120,7 +120,7 @@ if ($syn) {
 # providers we ship later without this script needing to grow a menu.
 # Names that don't match a known provider are accepted but warned about
 # (the orchestrator skips unknowns at runtime with a WARN log line).
-$knownMd  = @('MusicBrainz', 'CuetoolsDb')
+$knownMd  = @('MusicBrainz', 'CuetoolsDb', 'GnuDb')
 $knownCov = @('CoverArtArchive', 'iTunesSearch', 'Deezer')
 
 function Read-ProviderList {

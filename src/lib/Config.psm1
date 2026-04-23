@@ -146,7 +146,7 @@ function New-RipperConfigObject {
         # metadata for releases MB has never indexed. The orchestrator
         # synthesizes a "Merged (MB + CTDB)" candidate when both return
         # matches (MB wins on conflict, CTDB fills nulls).
-        MetadataProviders       = @('MusicBrainz', 'CuetoolsDb')
+        MetadataProviders       = @('MusicBrainz', 'CuetoolsDb', 'GnuDb')
 
         # Phase 5.2: ordered cover-art provider chain. First non-empty
         # bytes win. CAA needs an MB ReleaseMbid; iTunes/Deezer fall back

@@ -67,6 +67,7 @@ Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
 # runtime based on cfg.MetadataProviders.
 . (Join-Path $repoRoot 'src\core\metadata\Get-MetadataFromMusicBrainz.ps1')
 . (Join-Path $repoRoot 'src\core\metadata\Get-MetadataFromCuetoolsDb.ps1')
+. (Join-Path $repoRoot 'src\core\metadata\Get-MetadataFromGnuDb.ps1')
 
 # Cover-art chain orchestrator (CAA -> iTunes -> Deezer by default).
 . (Join-Path $repoRoot 'src\core\coverart\Get-CoverArt.ps1')
@@ -202,8 +203,8 @@ function Get-RipperDiscMetadata {
             # Fallback when no config field is present (e.g. a config.json
             # written before Phase 5.2). Mirror the template default so a
             # missing key behaves the same as the documented out-of-the-box
-            # config — otherwise pre-5.2 users silently lose CTDB.
-            $Providers = @('MusicBrainz', 'CuetoolsDb')
+            # config — otherwise pre-5.2 users silently lose CTDB / GnuDB.
+            $Providers = @('MusicBrainz', 'CuetoolsDb', 'GnuDb')
         }
     }
 
@@ -230,6 +231,24 @@ function Get-RipperDiscMetadata {
                     Invoke-CuetoolsDbMetadataProvider -DiscIdInfo $DiscIdInfo -UserAgent $ua
                 } else {
                     Invoke-CuetoolsDbMetadataProvider -DiscIdInfo $DiscIdInfo
+                }
+            }
+            'GnuDb' {
+                # GnuDB reuses the same MB-shaped UA for its hello= field
+                # (the email in the parens is what actually matters to GnuDB's
+                # rate-limiter). Same cfg-lookup + fallback pattern as CTDB.
+                $ua = $null
+                try {
+                    Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1') -Force
+                    $cfgLocal = Import-RipperConfig
+                    if ($cfgLocal.PSObject.Properties['MusicBrainzUserAgent'] -and $cfgLocal.MusicBrainzUserAgent) {
+                        $ua = [string]$cfgLocal.MusicBrainzUserAgent
+                    }
+                } catch { }
+                if ($ua) {
+                    Invoke-GnuDbMetadataProvider -DiscIdInfo $DiscIdInfo -UserAgent $ua
+                } else {
+                    Invoke-GnuDbMetadataProvider -DiscIdInfo $DiscIdInfo
                 }
             }
             default {
