@@ -809,6 +809,14 @@ function Show-RipperMetadataDialog {
         $controls.CompilationBox.IsChecked = [bool]$vm.IsCompilation
         $controls.TracksGrid.ItemsSource   = $vm.Tracks
         & $bindCoverArt $vm.Source
+        # Reflect the picked candidate's provider in the status strip so
+        # the user always sees which source the currently-selected match
+        # came from (especially after a text-search appends a new row
+        # with a different .Source than the original disc-id pick).
+        $src = if ($vm.Source -and $vm.Source.PSObject.Properties['Source'] -and $vm.Source.Source) {
+            [string]$vm.Source.Source
+        } else { 'unknown source' }
+        $controls.StatusText.Text = "Selected match from $src."
     }
 
     $populateCombo = {
