@@ -24,5 +24,11 @@
   "SynologySyncReviewQueue": false,
 
   "//HasSynologyCredential":   "Flag only — true means a DPAPI-protected PSCredential is on disk in credentials.clixml.",
-  "HasSynologyCredential": false
+  "HasSynologyCredential": false,
+
+"//MetadataProviders":       "Ordered list of disc-id metadata sources tried in priority order. Phase 5.2: MusicBrainz (curated, canonical) then CuetoolsDb (community-submitted) then GnuDb (legacy freedb/CDDB catalog, huge coverage of older and community-submitted discs). When two or more return matches, an extra synthesized 'Merged (...)' candidate is prepended (earlier providers win on conflict, later ones fill nulls). Available: 'MusicBrainz', 'CuetoolsDb', 'GnuDb'. Note: the 'Search by text...' fallback dialog also surfaces text-search-only providers (iTunesSearch, Deezer) regardless of this list.",
+    "MetadataProviders": ["MusicBrainz", "CuetoolsDb", "GnuDb"],
+
+  "//CoverArtProviders":       "Ordered list of cover-art sources. First non-empty bytes win. CoverArtArchive needs a release MBID (so really only fires for MB-derived candidates); iTunesSearch + Deezer fall back to artist+album text search. All three are free / no auth.",
+  "CoverArtProviders": ["CoverArtArchive", "iTunesSearch", "Deezer"]
 }

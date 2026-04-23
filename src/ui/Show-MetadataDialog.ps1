@@ -284,6 +284,435 @@ function Format-MetadataCandidateLabel {
     $label
 }
 
+function Show-RipperTextSearchDialog {
+<#
+.SYNOPSIS
+    Show the "Search by text…" sub-modal and return the user's pick
+    (a single normalized candidate) or $null on cancel.
+
+.DESCRIPTION
+    Pipeline position:
+        Sub-modal opened from Show-RipperMetadataDialog when the user
+        clicks "Search by text…". Lets them type artist/album/year,
+        toggle the providers to search, fire off the lookup, and pick
+        one result. The picked candidate is returned to the caller
+        which appends it to the main dialog's candidate list.
+
+        UI shape (single window):
+            top   - input fields (Artist / Album / Year)
+            mid   - dynamic checkbox row, one per provider, plus an
+                    "All providers" master toggle (default: checked)
+            bttm  - results ListView with Source / Artist / Album /
+                    Year / Tracks columns
+            row   - Search / Use selected / Cancel buttons
+
+.PARAMETER Owner
+    Owner Window for proper modal parenting (centers over the parent
+    and preserves taskbar grouping).
+
+.PARAMETER Providers
+    Names of providers to render as checkboxes, in chain order. Each
+    name appears in the search payload's Providers field when its
+    checkbox is ticked.
+
+.PARAMETER OnSearch
+    Scriptblock invoked when the user clicks "Search". Receives a
+    hashtable @{Artist; Album; Year; Providers} and must return an
+    object with a .Candidates property (the
+    Search-RipperMetadataByText result shape).
+
+.PARAMETER InitialArtist
+    Pre-populates the Artist textbox.
+
+.PARAMETER InitialAlbum
+    Pre-populates the Album textbox.
+
+.PARAMETER InitialYear
+    Pre-populates the Year textbox.
+
+.PARAMETER CachedState
+    Optional. A previous-result snapshot from a prior invocation in
+    the same session, of the shape
+        @{ Artist; Album; Year; Providers; Candidates; StatusText }
+    When supplied, the modal opens with the result list and the
+    Artist/Album/Year/Providers controls all pre-populated as the
+    user left them. Lets the user re-open the modal, see what they
+    last searched, and either pick a different candidate or refine
+    the criteria and re-search.
+
+.EXAMPLE
+    PS> Show-RipperTextSearchDialog -Owner $w -Providers @('MusicBrainz') -OnSearch $cb
+#>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [System.Windows.Window]$Owner,
+
+        [Parameter(Mandatory)]
+        [string[]]$Providers,
+
+        [Parameter(Mandatory)]
+        [scriptblock]$OnSearch,
+
+        [string]$InitialArtist = '',
+        [string]$InitialAlbum  = '',
+        [string]$InitialYear   = '',
+
+        [hashtable]$CachedState
+    )
+
+    Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml | Out-Null
+
+    # Compile a tiny IValueConverter once per session that turns a
+    # byte[] (the candidate's CoverArtBytes) into a Frozen BitmapImage
+    # WPF can render. We bind to CoverArtBytes directly with this
+    # converter rather than an Add-Member CoverImage property because
+    # PSObject reflection through TypeDescriptor is unreliable for CLR-
+    # typed values (string note-properties bind fine; BitmapImage ones
+    # surface as null in DataTemplate bindings on some builds).
+    if (-not ('MusicRipper.BytesToImageConverter' -as [type])) {
+        # Resolve the .NET 9 WPF assemblies via real types so Add-Type
+        # doesn't pick up the .NET Framework 4.0 reference assemblies
+        # (which would mismatch with the WPF runtime version PowerShell
+        # 7 actually loads -- "uses 'WindowsBase' which has a higher
+        # version than referenced assembly" build error).
+        $refAsms = @(
+            [System.Windows.Data.IValueConverter].Assembly.Location
+            [System.Windows.Media.Imaging.BitmapImage].Assembly.Location
+            [System.Windows.DependencyObject].Assembly.Location
+            [psobject].Assembly.Location
+        )
+        Add-Type -ReferencedAssemblies $refAsms -TypeDefinition @'
+using System;
+using System.Globalization;
+using System.IO;
+using System.Management.Automation;
+using System.Windows.Data;
+using System.Windows.Media.Imaging;
+
+namespace MusicRipper {
+    public class BytesToImageConverter : IValueConverter {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture) {
+            // WPF data binding through PSObject's ICustomTypeDescriptor
+            // surfaces NoteProperty values still wrapped in PSObject;
+            // unwrap to the BaseObject before the byte[] cast or it
+            // silently returns null and the thumbnail goes blank.
+            PSObject pso = value as PSObject;
+            if (pso != null) value = pso.BaseObject;
+            byte[] bytes = value as byte[];
+            if (bytes == null || bytes.Length == 0) return null;
+            try {
+                BitmapImage bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.DecodePixelWidth = 80;
+                bmp.StreamSource = new MemoryStream(bytes);
+                bmp.EndInit();
+                bmp.Freeze();
+                return bmp;
+            } catch {
+                return null;
+            }
+        }
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) {
+            throw new NotImplementedException();
+        }
+    }
+}
+'@
+    }
+
+    # The XAML declares the converter in Window.Resources via a
+    # clr-namespace:assembly= mapping to the Add-Type'd assembly above.
+    # This is the only reliable way to make {StaticResource BytesToImg}
+    # resolve from inside a DataTemplate: Window.Resources.Add() after
+    # XamlReader.Load is too late -- DataTemplates resolve StaticResource
+    # against the resource dictionary as it stood at parse time.
+    $asmName = [MusicRipper.BytesToImageConverter].Assembly.GetName().Name
+    $xaml = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:mr="clr-namespace:MusicRipper;assembly=$asmName"
+        Title="Search metadata by text" Height="540" Width="780"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
+        FontFamily="Segoe UI" FontSize="13">
+  <Window.Resources>
+    <mr:BytesToImageConverter x:Key="BytesToImg"/>
+  </Window.Resources>
+  <Grid Margin="12">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <!-- Row 0: input fields -->
+    <Grid Grid.Row="0" Margin="0,0,0,8">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="80"/>
+      </Grid.ColumnDefinitions>
+      <TextBlock Grid.Column="0" Text="Artist:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+      <TextBox   Grid.Column="1" x:Name="ArtistBox" Margin="0,0,12,0"/>
+      <TextBlock Grid.Column="2" Text="Album:"  VerticalAlignment="Center" Margin="0,0,6,0"/>
+      <TextBox   Grid.Column="3" x:Name="AlbumBox"  Margin="0,0,12,0"/>
+      <TextBlock Grid.Column="4" Text="Year:"   VerticalAlignment="Center" Margin="0,0,6,0"/>
+      <TextBox   Grid.Column="5" x:Name="YearBox"/>
+    </Grid>
+
+    <!-- Row 1: provider checkboxes (dynamically populated) -->
+    <DockPanel Grid.Row="1" Margin="0,0,0,8" LastChildFill="True">
+      <TextBlock Text="Providers:" Width="80" VerticalAlignment="Center"/>
+      <CheckBox x:Name="AllProvidersCheck" Content="All providers"
+                VerticalAlignment="Center" Margin="0,0,16,0" IsChecked="True"/>
+      <ItemsControl x:Name="ProvidersHost">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <StackPanel Orientation="Horizontal"/>
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+      </ItemsControl>
+    </DockPanel>
+
+    <!-- Row 2: search button + status -->
+    <DockPanel Grid.Row="2" Margin="0,0,0,8" LastChildFill="True">
+      <Button x:Name="SearchButton" Content="Search" DockPanel.Dock="Right"
+              Padding="14,4" MinWidth="100" IsDefault="True"
+              Background="#0a7" Foreground="White" FontWeight="Bold"/>
+      <TextBlock x:Name="StatusText" VerticalAlignment="Center" Foreground="#444" FontStyle="Italic"
+                 Text="Type at least an artist or an album, then click Search."/>
+    </DockPanel>
+
+    <!-- Row 3: results -->
+    <ListView Grid.Row="3" x:Name="ResultsList" SelectionMode="Single">
+      <ListView.View>
+        <GridView>
+          <GridViewColumn Header="Cover" Width="68">
+            <GridViewColumn.CellTemplate>
+              <DataTemplate>
+                <Image Source="{Binding CoverArtBytes, Converter={StaticResource BytesToImg}}"
+                       Width="56" Height="56" Stretch="Uniform"/>
+              </DataTemplate>
+            </GridViewColumn.CellTemplate>
+          </GridViewColumn>
+          <GridViewColumn Header="Source" Width="100"  DisplayMemberBinding="{Binding Source}"/>
+          <GridViewColumn Header="Artist" Width="190"  DisplayMemberBinding="{Binding AlbumArtist}"/>
+          <GridViewColumn Header="Album"  Width="230"  DisplayMemberBinding="{Binding Album}"/>
+          <GridViewColumn Header="Year"   Width="60"   DisplayMemberBinding="{Binding Year}"/>
+          <GridViewColumn Header="Tracks" Width="60"   DisplayMemberBinding="{Binding TrackCount}"/>
+        </GridView>
+      </ListView.View>
+    </ListView>
+
+    <!-- Row 4: action buttons -->
+    <DockPanel Grid.Row="4" Margin="0,8,0,0" LastChildFill="False">
+      <Button x:Name="CancelButton" Content="Cancel"        DockPanel.Dock="Right" Padding="14,4" MinWidth="110" Margin="6,0,0,0"/>
+      <Button x:Name="UseButton"    Content="Use selected"  DockPanel.Dock="Right" Padding="14,4" MinWidth="130" IsEnabled="False"/>
+    </DockPanel>
+  </Grid>
+</Window>
+"@
+
+    $reader = [System.Xml.XmlNodeReader]::new(([xml]$xaml))
+    $window = [Windows.Markup.XamlReader]::Load($reader)
+    if ($Owner) { $window.Owner = $Owner }
+
+    # Phase-4 lesson: WPF re-raises tick / binding / template errors as
+    # a generic NullReferenceException at the call site of ShowDialog,
+    # making the original failure invisible. Always install a dispatcher
+    # unhandled-exception sink that writes a sidecar log so we can
+    # actually see what blew up. The crash that motivated this was a
+    # template error after Search returned candidates; without this
+    # handler the user just sees the window vanish.
+    $sidecar = Join-Path $env:LOCALAPPDATA 'MusicRipper\logs\text-search-dispatcher.log'
+    $window.Dispatcher.add_UnhandledException({
+        param($s, $e)
+        try {
+            $ex = $e.Exception
+            $msg = "`n=== $(Get-Date -Format o) ===`n$($ex.GetType().FullName): $($ex.Message)`n$($ex.StackTrace)"
+            if ($ex.InnerException) {
+                $msg += "`n-- inner: $($ex.InnerException.GetType().FullName): $($ex.InnerException.Message)`n$($ex.InnerException.StackTrace)"
+            }
+            Add-Content -LiteralPath $sidecar -Value $msg -ErrorAction SilentlyContinue
+            try { Write-RipperLog ERROR 'Show-RipperTextSearchDialog' "Dispatcher exception: $($ex.GetType().FullName): $($ex.Message) (sidecar: $sidecar)" } catch {}
+        } catch {}
+        $e.Handled = $true
+    })
+
+    $controls = @{}
+    foreach ($n in @('ArtistBox','AlbumBox','YearBox','AllProvidersCheck','ProvidersHost',
+                      'SearchButton','StatusText','ResultsList','UseButton','CancelButton')) {
+        $controls[$n] = $window.FindName($n)
+    }
+    $controls.ArtistBox.Text = $InitialArtist
+    $controls.AlbumBox.Text  = $InitialAlbum
+    $controls.YearBox.Text   = $InitialYear
+
+    # Dynamic provider checkboxes — one per name, all checked by default,
+    # and grouped under the "All providers" master toggle.
+    $providerChecks = @{}
+    foreach ($p in $Providers) {
+        $cb = New-Object System.Windows.Controls.CheckBox
+        $cb.Content     = [string]$p
+        $cb.IsChecked   = $true
+        $cb.Margin      = '0,0,12,0'
+        $cb.VerticalAlignment = 'Center'
+        [void]$controls.ProvidersHost.Items.Add($cb)
+        $providerChecks[[string]$p] = $cb
+    }
+
+    $state = [pscustomobject]@{
+        Picked     = $null
+        # Snapshot returned to the caller so it can be passed back as
+        # -CachedState next time the user opens the modal in this session.
+        LastSearch = $null
+    }
+
+    # If the caller passed a session cache, re-hydrate the controls
+    # before wiring up handlers so the user picks up where they left
+    # off. The CachedState shape is a hashtable -- see -CachedState
+    # docstring above.
+    if ($CachedState) {
+        if ($CachedState.ContainsKey('Artist'))   { $controls.ArtistBox.Text = [string]$CachedState['Artist'] }
+        if ($CachedState.ContainsKey('Album'))    { $controls.AlbumBox.Text  = [string]$CachedState['Album']  }
+        if ($CachedState.ContainsKey('Year') -and $CachedState['Year']) {
+            $controls.YearBox.Text = [string]$CachedState['Year']
+        }
+        if ($CachedState.ContainsKey('Providers') -and $CachedState['Providers']) {
+            $checked = @($CachedState['Providers'])
+            foreach ($k in @($providerChecks.Keys)) {
+                $providerChecks[$k].IsChecked = ($checked -contains $k)
+            }
+            $controls.AllProvidersCheck.IsChecked = ($checked.Count -eq $providerChecks.Count)
+        }
+        if ($CachedState.ContainsKey('Candidates') -and $CachedState['Candidates']) {
+            $cands = @($CachedState['Candidates'])
+            $controls.ResultsList.ItemsSource = $cands
+            if ($CachedState.ContainsKey('StatusText') -and $CachedState['StatusText']) {
+                $controls.StatusText.Text = [string]$CachedState['StatusText']
+            } else {
+                $controls.StatusText.Text = "$($cands.Count) cached match(es) — pick one or refine and Search."
+            }
+        }
+    }
+
+    # When "All" toggles, mirror to every provider checkbox. The reverse
+    # path (a provider toggle clearing "All") is handled by individual
+    # handlers below — keeps the master checkbox an honest reflection.
+    $controls.AllProvidersCheck.Add_Click({
+        $on = [bool]$controls.AllProvidersCheck.IsChecked
+        foreach ($k in $providerChecks.Keys) {
+            $providerChecks[$k].IsChecked = $on
+        }
+    }.GetNewClosure())
+    foreach ($k in $providerChecks.Keys) {
+        $providerChecks[$k].Add_Click({
+            $allOn = $true
+            foreach ($kk in $providerChecks.Keys) {
+                if (-not $providerChecks[$kk].IsChecked) { $allOn = $false; break }
+            }
+            $controls.AllProvidersCheck.IsChecked = $allOn
+        }.GetNewClosure())
+    }
+
+    $controls.ResultsList.Add_SelectionChanged({
+        $controls.UseButton.IsEnabled = ($null -ne $controls.ResultsList.SelectedItem)
+    }.GetNewClosure())
+
+    $controls.SearchButton.Add_Click({
+        $artist = ([string]$controls.ArtistBox.Text).Trim()
+        $album  = ([string]$controls.AlbumBox.Text).Trim()
+        $yearText = ([string]$controls.YearBox.Text).Trim()
+        $year = 0
+        if ($yearText -and -not [int]::TryParse($yearText, [ref]$year)) {
+            [System.Windows.MessageBox]::Show('Year must be a number (or left blank).',
+                'MusicRipper', 'OK', 'Warning') | Out-Null
+            return
+        }
+        if ([string]::IsNullOrWhiteSpace($artist) -and [string]::IsNullOrWhiteSpace($album)) {
+            [System.Windows.MessageBox]::Show('Please enter an artist or album to search.',
+                'MusicRipper', 'OK', 'Warning') | Out-Null
+            return
+        }
+        $picked = @()
+        foreach ($k in $providerChecks.Keys) {
+            if ($providerChecks[$k].IsChecked) { $picked += $k }
+        }
+        if ($picked.Count -eq 0) {
+            [System.Windows.MessageBox]::Show('Please pick at least one provider.',
+                'MusicRipper', 'OK', 'Warning') | Out-Null
+            return
+        }
+
+        try {
+            $controls.SearchButton.IsEnabled = $false
+            $controls.StatusText.Text = "Searching $($picked -join ', ')…"
+            $controls.ResultsList.ItemsSource = $null
+            $controls.UseButton.IsEnabled = $false
+
+            $payload = @{
+                Artist    = $artist
+                Album     = $album
+                Year      = $year
+                Providers = $picked
+            }
+            $result = & $OnSearch $payload
+
+            $cands = @()
+            if ($result -and $result.PSObject.Properties['Candidates']) {
+                $cands = @($result.Candidates)
+            }
+            $controls.ResultsList.ItemsSource = $cands
+            $statusMsg = if ($cands.Count -eq 0) {
+                'No matches.'
+            } else {
+                "$($cands.Count) match(es) — pick one and click Use selected."
+            }
+            $controls.StatusText.Text = $statusMsg
+            # Snapshot for the caller's session cache.
+            $state.LastSearch = @{
+                Artist     = $artist
+                Album      = $album
+                Year       = $year
+                Providers  = @($picked)
+                Candidates = @($cands)
+                StatusText = $statusMsg
+            }
+        } catch {
+            $controls.StatusText.Text = "Search failed: $($_.Exception.Message)"
+        } finally {
+            $controls.SearchButton.IsEnabled = $true
+        }
+    }.GetNewClosure())
+
+    $controls.UseButton.Add_Click({
+        $sel = $controls.ResultsList.SelectedItem
+        if ($sel) {
+            $state.Picked = $sel
+            $window.DialogResult = $true
+            $window.Close()
+        }
+    }.GetNewClosure())
+
+    $controls.CancelButton.Add_Click({
+        $state.Picked = $null
+        $window.DialogResult = $false
+        $window.Close()
+    }.GetNewClosure())
+
+    [void]$window.ShowDialog()
+    return @{
+        Picked     = $state.Picked
+        LastSearch = $state.LastSearch
+    }
+}
+
 function Show-RipperMetadataDialog {
 <#
 .SYNOPSIS
@@ -307,6 +736,9 @@ function Show-RipperMetadataDialog {
           "I picked the wrong release, start over."
         - "Re-search MusicBrainz" invokes -OnResearch (if supplied)
           and replaces the dialog's candidate list with the result.
+        - "Search by text…" opens a sub-modal (artist/album/year +
+          per-provider checkboxes) that invokes -OnTextSearch and
+          appends the picked candidate to the dropdown.
 
 .PARAMETER Metadata
     The full result object from Get-RipperDiscMetadata (has .Candidates,
@@ -316,6 +748,19 @@ function Show-RipperMetadataDialog {
     Optional scriptblock invoked when the user clicks "Re-search
     MusicBrainz". Must return a fresh metadata result of the same shape
     as -Metadata. If not supplied, the button is hidden.
+
+.PARAMETER OnTextSearch
+    Optional scriptblock invoked when the user clicks "Search by text…"
+    and submits the sub-modal. Receives a hashtable with keys
+    Artist, Album, Year, Providers and must return a result of the
+    Search-RipperMetadataByText shape (with .Candidates). If not
+    supplied, the button is hidden.
+
+.PARAMETER TextSearchProviders
+    Names of providers (string[]) to render as checkboxes inside the
+    text-search sub-modal. Typically the output of
+    Get-RipperTextSearchProviderNames. Empty/null hides the
+    "Search by text…" button.
 
 .EXAMPLE
     PS> $r = Show-RipperMetadataDialog -Metadata $meta
@@ -327,7 +772,11 @@ function Show-RipperMetadataDialog {
         [Parameter(Mandatory)]
         [pscustomobject]$Metadata,
 
-        [scriptblock]$OnResearch
+        [scriptblock]$OnResearch,
+
+        [scriptblock]$OnTextSearch,
+
+        [string[]]$TextSearchProviders
     )
 
     Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml | Out-Null
@@ -369,8 +818,11 @@ function Show-RipperMetadataDialog {
         <TextBlock Grid.Row="0" x:Name="StatusText" FontWeight="Bold" Margin="0,0,0,6"/>
         <DockPanel Grid.Row="1" Margin="0,0,0,6" LastChildFill="True">
           <TextBlock Text="Match:" Width="80" VerticalAlignment="Center"/>
-          <Button x:Name="ResearchButton" Content="Re-search MusicBrainz"
+          <Button x:Name="ResearchButton"   Content="Re-search MusicBrainz"
                   DockPanel.Dock="Right" Padding="8,2" Margin="6,0,0,0"/>
+          <Button x:Name="TextSearchButton" Content="Search by text…"
+                  DockPanel.Dock="Right" Padding="8,2" Margin="6,0,0,0"
+                  ToolTip="Look up an artist+album by text across the configured metadata providers."/>
           <ComboBox x:Name="CandidateCombo"/>
         </DockPanel>
         <TextBlock Grid.Row="2" x:Name="DiscIdText" Foreground="#666" FontSize="11"/>
@@ -445,14 +897,17 @@ function Show-RipperMetadataDialog {
     # Find named controls.
     $controls = @{}
     foreach ($name in @(
-        'CoverImage','StatusText','CandidateCombo','ResearchButton','DiscIdText',
+        'CoverImage','StatusText','CandidateCombo','ResearchButton','TextSearchButton','DiscIdText',
         'AlbumBox','ArtistBox','YearBox','CompilationBox','TracksGrid',
         'RipButton','ReviewButton','CancelButton','ActionHint'
     )) {
         $controls[$name] = $window.FindName($name)
     }
 
-    if (-not $OnResearch) { $controls.ResearchButton.Visibility = 'Collapsed' }
+    if (-not $OnResearch)   { $controls.ResearchButton.Visibility   = 'Collapsed' }
+    if (-not $OnTextSearch -or -not $TextSearchProviders -or @($TextSearchProviders).Count -eq 0) {
+        $controls.TextSearchButton.Visibility = 'Collapsed'
+    }
 
     # Capture our own helper functions as scriptblocks so the WPF event
     # handlers (which run in a child scope) can invoke them via `& $sb`.
@@ -465,10 +920,15 @@ function Show-RipperMetadataDialog {
 
     # State held in script: locals so closures can capture by reference.
     $state = [pscustomobject]@{
-        Metadata    = $Metadata
-        ViewModels  = @()       # parallel to Metadata.Candidates
-        CurrentVm   = $null
-        Result      = $null     # set by button handlers
+        Metadata        = $Metadata
+        ViewModels      = @()       # parallel to Metadata.Candidates
+        CurrentVm       = $null
+        Result          = $null     # set by button handlers
+        # Per-session cache for the "Search by text..." sub-modal so the
+        # user can re-open it and find their previous criteria + results
+        # intact. Hashtable shape: see Show-RipperTextSearchDialog
+        # -CachedState parameter.
+        TextSearchCache = $null
     }
 
     # Helpers ---------------------------------------------------------------
@@ -510,6 +970,14 @@ function Show-RipperMetadataDialog {
         $controls.CompilationBox.IsChecked = [bool]$vm.IsCompilation
         $controls.TracksGrid.ItemsSource   = $vm.Tracks
         & $bindCoverArt $vm.Source
+        # Reflect the picked candidate's provider in the status strip so
+        # the user always sees which source the currently-selected match
+        # came from (especially after a text-search appends a new row
+        # with a different .Source than the original disc-id pick).
+        $src = if ($vm.Source -and $vm.Source.PSObject.Properties['Source'] -and $vm.Source.Source) {
+            [string]$vm.Source.Source
+        } else { 'unknown source' }
+        $controls.StatusText.Text = "Selected match from $src."
     }
 
     $populateCombo = {
@@ -552,11 +1020,22 @@ function Show-RipperMetadataDialog {
     }
 
     # Status / disc-id strip --------------------------------------------------
+    # Report which source(s) fed the candidate list so Phase 5.2's
+    # provider chain is visible to the user (a GnuDB match used to
+    # label itself "Single MusicBrainz match" — confusing).
+    $sourceLabel = 'MusicBrainz'
+    if (@($state.Metadata.Candidates).Count -gt 0) {
+        $srcs = @($state.Metadata.Candidates |
+                  Where-Object { $_.PSObject.Properties['Source'] -and $_.Source } |
+                  ForEach-Object { [string]$_.Source } |
+                  Select-Object -Unique)
+        if ($srcs.Count -gt 0) { $sourceLabel = $srcs -join ' / ' }
+    }
     $statusText = switch ($state.Metadata.Status) {
-        'Match'       { 'Single MusicBrainz match.' }
-        'MultiMatch'  { "$(@($state.Metadata.Candidates).Count) MusicBrainz matches — pick one." }
-        'NoMatch'     { 'No MusicBrainz match for this disc.' }
-        'Offline'     { 'MusicBrainz offline — placeholder shown.' }
+        'Match'       { "Single $sourceLabel match." }
+        'MultiMatch'  { "$(@($state.Metadata.Candidates).Count) matches from $sourceLabel — pick one." }
+        'NoMatch'     { 'No metadata match for this disc.' }
+        'Offline'     { 'All metadata providers offline — placeholder shown.' }
         default       { "Status: $($state.Metadata.Status)" }
     }
     $controls.StatusText.Text = $statusText
@@ -621,6 +1100,56 @@ function Show-RipperMetadataDialog {
                 'MusicRipper', 'OK', 'Warning') | Out-Null
         } finally {
             $controls.ResearchButton.IsEnabled = $true
+        }
+    }.GetNewClosure())
+
+    $controls.TextSearchButton.Add_Click({
+        try {
+            $controls.TextSearchButton.IsEnabled = $false
+            # Seed the modal with the user's current AlbumArtist/Album/Year
+            # edits — it's the obvious starting point ("the disc-id pick
+            # was wrong, but I know roughly what it should say"). On
+            # subsequent invocations within the same session, pass the
+            # cached state so the user sees their previous results and
+            # criteria intact (and can refine and re-search).
+            $textResult = Show-RipperTextSearchDialog `
+                -Owner       $window `
+                -Providers   $TextSearchProviders `
+                -OnSearch    $OnTextSearch `
+                -InitialArtist ([string]$controls.ArtistBox.Text) `
+                -InitialAlbum  ([string]$controls.AlbumBox.Text) `
+                -InitialYear   ([string]$controls.YearBox.Text) `
+                -CachedState   $state.TextSearchCache
+            # Always update the session cache (even on cancel) so the
+            # criteria the user typed survives until the dialog closes.
+            if ($textResult -and $textResult.LastSearch) {
+                $state.TextSearchCache = $textResult.LastSearch
+            }
+            $picked = if ($textResult) { $textResult.Picked } else { $null }
+            if ($picked) {
+                # Append the picked candidate to the existing list (we want
+                # the disc-id matches to remain visible alongside) and
+                # re-render the dropdown with the new entry selected.
+                $existing = @($state.Metadata.Candidates)
+                $merged   = $existing + @($picked)
+                $state.Metadata = [pscustomobject]@{
+                    DiscId          = $state.Metadata.DiscId
+                    Status          = $state.Metadata.Status
+                    BestMatch       = $picked
+                    Candidates      = $merged
+                    ProviderResults = if ($state.Metadata.PSObject.Properties['ProviderResults']) { $state.Metadata.ProviderResults } else { @() }
+                }
+                & $rebuildViewModels
+                & $populateCombo
+                $newIdx = $controls.CandidateCombo.Items.Count - 1
+                if ($newIdx -ge 0) { $controls.CandidateCombo.SelectedIndex = $newIdx }
+                $controls.RipButton.IsEnabled = $true
+            }
+        } catch {
+            [System.Windows.MessageBox]::Show("Text search failed:`n$($_.Exception.Message)",
+                'MusicRipper', 'OK', 'Warning') | Out-Null
+        } finally {
+            $controls.TextSearchButton.IsEnabled = $true
         }
     }.GetNewClosure())
 

@@ -51,6 +51,7 @@ Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 # are in scope.
 . (Join-Path $repoRoot 'src\core\Get-DiscId.ps1')
 . (Join-Path $repoRoot 'src\core\Get-DiscMetadata.ps1')
+. (Join-Path $repoRoot 'src\core\Search-DiscMetadataByText.ps1')
 . (Join-Path $repoRoot 'src\core\Invoke-Rip.ps1')
 . (Join-Path $repoRoot 'src\core\Test-RipQuality.ps1')
 . (Join-Path $repoRoot 'src\core\Write-Tags.ps1')
@@ -293,7 +294,69 @@ $onResearch = {
     Get-RipperDiscMetadata -DiscIdInfo $disc
 }
 
-$choice = Show-RipperMetadataDialog -Metadata $meta -OnResearch $onResearch
+# Pull the cover-art chain across each text-search hit so the dialog
+# can render an image once the user picks one. Failures are non-fatal
+# (same convention as the disc-id flow): the picked candidate just
+# shows up without a cover.
+#
+# Two-tier strategy:
+#   1. iTunes/Deezer text-search candidates carry an .ArtworkUrl from
+#      their original metadata response (the same response that gave us
+#      the artist/album/tracks). One HTTP GET fetches the bytes — no
+#      AlbumArtist+Album guesswork needed, which is critical for
+#      compilations and multi-artist titles where the re-query would
+#      miss.
+#   2. Anything without an .ArtworkUrl (MusicBrainz, GnuDB) falls
+#      through to the full Get-RipperBestCoverArt provider chain.
+$onTextSearch = {
+    param($payload)
+    Write-RipperLog INFO 'Start-Ripper' "Text-search requested: artist='$($payload.Artist)' album='$($payload.Album)' year=$($payload.Year) providers=$(@($payload.Providers) -join ',')"
+    $r = Search-RipperMetadataByText `
+            -Artist    $payload.Artist `
+            -Album     $payload.Album `
+            -Year      $payload.Year `
+            -Providers @($payload.Providers)
+    if ($r -and $r.Candidates) {
+        foreach ($c in @($r.Candidates)) {
+            $bytes = $null
+            $directUrl = if (($c.PSObject.Properties.Name -contains 'ArtworkUrl') -and $c.ArtworkUrl) {
+                [string]$c.ArtworkUrl
+            } else { $null }
+            if ($directUrl) {
+                try {
+                    $tmp = [System.IO.Path]::GetTempFileName()
+                    try {
+                        Invoke-WebRequest -Uri $directUrl -OutFile $tmp -TimeoutSec 30 -UseBasicParsing | Out-Null
+                        $bytes = [System.IO.File]::ReadAllBytes($tmp)
+                        Write-RipperLog INFO 'Start-Ripper' "Cover-art (direct, $($c.Source)): $($bytes.Length) bytes from $directUrl"
+                    } finally {
+                        Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
+                    }
+                } catch {
+                    Write-RipperLog WARN 'Start-Ripper' "Cover-art direct fetch failed for $($c.Source) '$($c.Album)': $($_.Exception.Message)"
+                    $bytes = $null
+                }
+            }
+            if (-not $bytes) {
+                try {
+                    $bytes = Get-RipperBestCoverArt -Candidate $c
+                } catch {
+                    $bytes = $null
+                }
+            }
+            $c | Add-Member -NotePropertyName CoverArtBytes -NotePropertyValue $bytes -Force
+        }
+    }
+    $r
+}
+
+$textSearchProviders = @(Get-RipperTextSearchProviderNames)
+
+$choice = Show-RipperMetadataDialog `
+            -Metadata             $meta `
+            -OnResearch           $onResearch `
+            -OnTextSearch         $onTextSearch `
+            -TextSearchProviders  $textSearchProviders
 
 Write-RipperLog INFO 'Start-Ripper' "User chose: $($choice.Action)."
 
