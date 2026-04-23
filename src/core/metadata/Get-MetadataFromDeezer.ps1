@@ -107,8 +107,12 @@ function ConvertFrom-DeezerAlbumDetail {
     $label = if ($Response.PSObject.Properties['label']) { [string]$Response.label } else { $null }
     $upc   = if ($Response.PSObject.Properties['upc'])   { [string]$Response.upc }   else { $null }
     $hasArt = $false
+    $artworkUrl = $null
     foreach ($f in 'cover_xl','cover_big','cover_medium','cover') {
-        if ($Response.PSObject.Properties[$f] -and $Response.$f) { $hasArt = $true; break }
+        if ($Response.PSObject.Properties[$f] -and $Response.$f) {
+            $hasArt = $true
+            if (-not $artworkUrl) { $artworkUrl = [string]$Response.$f }
+        }
     }
 
     [pscustomobject]@{
@@ -139,6 +143,7 @@ function ConvertFrom-DeezerAlbumDetail {
         TotalDiscs       = 1
         IsCompilation    = $isCompilation
         HasCoverArt      = $hasArt
+        ArtworkUrl       = $artworkUrl
         Tracks           = @($tracks)
     }
 }

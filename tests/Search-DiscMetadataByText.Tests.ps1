@@ -354,6 +354,8 @@ Describe 'Invoke-ItunesSearchTextSearchProvider' {
         $r.Candidates[0].Tracks         | Should -HaveCount 2
         $r.Candidates[0].Tracks[0].Title    | Should -Be 'In the Flesh?'
         $r.Candidates[0].Tracks[0].LengthMs | Should -Be 199000
+        # ArtworkUrl is the upgraded 600x600 variant of artworkUrl100.
+        $r.Candidates[0].ArtworkUrl     | Should -Be 'http://x/600x600bb.jpg'
         # First call is the search; next two are the lookups.
         $captured.Count | Should -Be 3
         $captured[0]    | Should -Match '/search\?term=Pink%20Floyd'
@@ -465,6 +467,7 @@ Describe 'Invoke-DeezerTextSearchProvider' {
         $r.Candidates[0].Barcode      | Should -Be '00000001'
         $r.Candidates[0].Tracks       | Should -HaveCount 2
         $r.Candidates[0].Tracks[0].LengthMs | Should -Be 199000  # seconds * 1000
+        $r.Candidates[0].ArtworkUrl   | Should -Be 'http://img/xl.jpg'
         # Search url first, then album detail per id, in order.
         $captured.Count | Should -Be 3
         $captured[0]    | Should -Match 'artist%3A'

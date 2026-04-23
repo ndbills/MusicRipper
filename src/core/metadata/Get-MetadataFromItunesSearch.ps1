@@ -113,6 +113,16 @@ function ConvertFrom-ItunesAlbumLookup {
     $trackCount  = if ($album.PSObject.Properties['trackCount']) { [int]$album.trackCount } else { @($tracks).Count }
     $discCount   = if ($album.PSObject.Properties['discCount'])  { [int]$album.discCount }  else { 1 }
 
+    # Carry the artwork URL forward so callers can fetch the image
+    # directly without re-querying iTunes by AlbumArtist+Album (which
+    # often misses for compilation/multi-artist titles). We hand back
+    # the 600x600 variant; high enough quality for the dialog thumbnail
+    # and the embedded FLAC cover, and small enough not to time out.
+    $artworkUrl = $null
+    if ($album.PSObject.Properties['artworkUrl100'] -and $album.artworkUrl100) {
+        $artworkUrl = ([string]$album.artworkUrl100) -replace '100x100bb\.(jpg|png)$', '600x600bb.$1'
+    }
+
     [pscustomobject]@{
         Source           = 'iTunesSearch'
         AlbumArtist      = $albumArtist
@@ -141,6 +151,7 @@ function ConvertFrom-ItunesAlbumLookup {
         TotalDiscs       = $discCount
         IsCompilation    = $isCompilation
         HasCoverArt      = ($album.PSObject.Properties['artworkUrl100'] -and [bool]$album.artworkUrl100)
+        ArtworkUrl       = $artworkUrl
         Tracks           = @($tracks)
     }
 }
