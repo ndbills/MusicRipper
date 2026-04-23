@@ -330,6 +330,16 @@ function Show-RipperTextSearchDialog {
 .PARAMETER InitialYear
     Pre-populates the Year textbox.
 
+.PARAMETER CachedState
+    Optional. A previous-result snapshot from a prior invocation in
+    the same session, of the shape
+        @{ Artist; Album; Year; Providers; Candidates; StatusText }
+    When supplied, the modal opens with the result list and the
+    Artist/Album/Year/Providers controls all pre-populated as the
+    user left them. Lets the user re-open the modal, see what they
+    last searched, and either pick a different candidate or refine
+    the criteria and re-search.
+
 .EXAMPLE
     PS> Show-RipperTextSearchDialog -Owner $w -Providers @('MusicBrainz') -OnSearch $cb
 #>
@@ -346,7 +356,9 @@ function Show-RipperTextSearchDialog {
 
         [string]$InitialArtist = '',
         [string]$InitialAlbum  = '',
-        [string]$InitialYear   = ''
+        [string]$InitialYear   = '',
+
+        [hashtable]$CachedState
     )
 
     Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml | Out-Null
@@ -411,9 +423,16 @@ function Show-RipperTextSearchDialog {
     <ListView Grid.Row="3" x:Name="ResultsList" SelectionMode="Single">
       <ListView.View>
         <GridView>
+          <GridViewColumn Header="Cover" Width="68">
+            <GridViewColumn.CellTemplate>
+              <DataTemplate>
+                <Image Source="{Binding CoverImage}" Width="56" Height="56" Stretch="Uniform"/>
+              </DataTemplate>
+            </GridViewColumn.CellTemplate>
+          </GridViewColumn>
           <GridViewColumn Header="Source" Width="100"  DisplayMemberBinding="{Binding Source}"/>
           <GridViewColumn Header="Artist" Width="190"  DisplayMemberBinding="{Binding AlbumArtist}"/>
-          <GridViewColumn Header="Album"  Width="240"  DisplayMemberBinding="{Binding Album}"/>
+          <GridViewColumn Header="Album"  Width="230"  DisplayMemberBinding="{Binding Album}"/>
           <GridViewColumn Header="Year"   Width="60"   DisplayMemberBinding="{Binding Year}"/>
           <GridViewColumn Header="Tracks" Width="60"   DisplayMemberBinding="{Binding TrackCount}"/>
         </GridView>
@@ -456,7 +475,68 @@ function Show-RipperTextSearchDialog {
     }
 
     $state = [pscustomobject]@{
-        Picked = $null
+        Picked     = $null
+        # Snapshot returned to the caller so it can be passed back as
+        # -CachedState next time the user opens the modal in this session.
+        LastSearch = $null
+    }
+
+    # Helper: pre-bake a Frozen WPF BitmapImage onto each candidate so
+    # the ListView's <Image Source="{Binding CoverImage}"/> binding can
+    # render thumbnails directly. Mutating the candidate (Add-Member)
+    # is fine -- it's the same object the caller of Use selected gets
+    # back, and downstream consumers ignore unknown properties.
+    $bakeCoverImages = {
+        param([object[]]$Cands)
+        foreach ($c in @($Cands)) {
+            if (-not $c) { continue }
+            if ($c.PSObject.Properties.Name -contains 'CoverImage') { continue }
+            $img = $null
+            if (($c.PSObject.Properties.Name -contains 'CoverArtBytes') -and $c.CoverArtBytes) {
+                try {
+                    $bmp = New-Object System.Windows.Media.Imaging.BitmapImage
+                    $bmp.BeginInit()
+                    $bmp.CacheOption     = 'OnLoad'
+                    $bmp.DecodePixelWidth = 80   # thumbnail; saves memory.
+                    $bmp.StreamSource    = [System.IO.MemoryStream]::new([byte[]]$c.CoverArtBytes)
+                    $bmp.EndInit()
+                    $bmp.Freeze()
+                    $img = $bmp
+                } catch {
+                    $img = $null
+                }
+            }
+            $c | Add-Member -NotePropertyName CoverImage -NotePropertyValue $img -Force
+        }
+    }
+
+    # If the caller passed a session cache, re-hydrate the controls
+    # before wiring up handlers so the user picks up where they left
+    # off. The CachedState shape is a hashtable -- see -CachedState
+    # docstring above.
+    if ($CachedState) {
+        if ($CachedState.ContainsKey('Artist'))   { $controls.ArtistBox.Text = [string]$CachedState['Artist'] }
+        if ($CachedState.ContainsKey('Album'))    { $controls.AlbumBox.Text  = [string]$CachedState['Album']  }
+        if ($CachedState.ContainsKey('Year') -and $CachedState['Year']) {
+            $controls.YearBox.Text = [string]$CachedState['Year']
+        }
+        if ($CachedState.ContainsKey('Providers') -and $CachedState['Providers']) {
+            $checked = @($CachedState['Providers'])
+            foreach ($k in @($providerChecks.Keys)) {
+                $providerChecks[$k].IsChecked = ($checked -contains $k)
+            }
+            $controls.AllProvidersCheck.IsChecked = ($checked.Count -eq $providerChecks.Count)
+        }
+        if ($CachedState.ContainsKey('Candidates') -and $CachedState['Candidates']) {
+            $cands = @($CachedState['Candidates'])
+            & $bakeCoverImages $cands
+            $controls.ResultsList.ItemsSource = $cands
+            if ($CachedState.ContainsKey('StatusText') -and $CachedState['StatusText']) {
+                $controls.StatusText.Text = [string]$CachedState['StatusText']
+            } else {
+                $controls.StatusText.Text = "$($cands.Count) cached match(es) — pick one or refine and Search."
+            }
+        }
     }
 
     # When "All" toggles, mirror to every provider checkbox. The reverse
@@ -525,11 +605,22 @@ function Show-RipperTextSearchDialog {
             if ($result -and $result.PSObject.Properties['Candidates']) {
                 $cands = @($result.Candidates)
             }
+            & $bakeCoverImages $cands
             $controls.ResultsList.ItemsSource = $cands
-            $controls.StatusText.Text = if ($cands.Count -eq 0) {
+            $statusMsg = if ($cands.Count -eq 0) {
                 'No matches.'
             } else {
                 "$($cands.Count) match(es) — pick one and click Use selected."
+            }
+            $controls.StatusText.Text = $statusMsg
+            # Snapshot for the caller's session cache.
+            $state.LastSearch = @{
+                Artist     = $artist
+                Album      = $album
+                Year       = $year
+                Providers  = @($picked)
+                Candidates = @($cands)
+                StatusText = $statusMsg
             }
         } catch {
             $controls.StatusText.Text = "Search failed: $($_.Exception.Message)"
@@ -554,7 +645,10 @@ function Show-RipperTextSearchDialog {
     }.GetNewClosure())
 
     [void]$window.ShowDialog()
-    return $state.Picked
+    return @{
+        Picked     = $state.Picked
+        LastSearch = $state.LastSearch
+    }
 }
 
 function Show-RipperMetadataDialog {
@@ -764,10 +858,15 @@ function Show-RipperMetadataDialog {
 
     # State held in script: locals so closures can capture by reference.
     $state = [pscustomobject]@{
-        Metadata    = $Metadata
-        ViewModels  = @()       # parallel to Metadata.Candidates
-        CurrentVm   = $null
-        Result      = $null     # set by button handlers
+        Metadata        = $Metadata
+        ViewModels      = @()       # parallel to Metadata.Candidates
+        CurrentVm       = $null
+        Result          = $null     # set by button handlers
+        # Per-session cache for the "Search by text..." sub-modal so the
+        # user can re-open it and find their previous criteria + results
+        # intact. Hashtable shape: see Show-RipperTextSearchDialog
+        # -CachedState parameter.
+        TextSearchCache = $null
     }
 
     # Helpers ---------------------------------------------------------------
@@ -947,14 +1046,24 @@ function Show-RipperMetadataDialog {
             $controls.TextSearchButton.IsEnabled = $false
             # Seed the modal with the user's current AlbumArtist/Album/Year
             # edits — it's the obvious starting point ("the disc-id pick
-            # was wrong, but I know roughly what it should say").
-            $picked = Show-RipperTextSearchDialog `
+            # was wrong, but I know roughly what it should say"). On
+            # subsequent invocations within the same session, pass the
+            # cached state so the user sees their previous results and
+            # criteria intact (and can refine and re-search).
+            $textResult = Show-RipperTextSearchDialog `
                 -Owner       $window `
                 -Providers   $TextSearchProviders `
                 -OnSearch    $OnTextSearch `
                 -InitialArtist ([string]$controls.ArtistBox.Text) `
                 -InitialAlbum  ([string]$controls.AlbumBox.Text) `
-                -InitialYear   ([string]$controls.YearBox.Text)
+                -InitialYear   ([string]$controls.YearBox.Text) `
+                -CachedState   $state.TextSearchCache
+            # Always update the session cache (even on cancel) so the
+            # criteria the user typed survives until the dialog closes.
+            if ($textResult -and $textResult.LastSearch) {
+                $state.TextSearchCache = $textResult.LastSearch
+            }
+            $picked = if ($textResult) { $textResult.Picked } else { $null }
             if ($picked) {
                 # Append the picked candidate to the existing list (we want
                 # the disc-id matches to remain visible alongside) and
