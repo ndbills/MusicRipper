@@ -13,11 +13,22 @@
 
     Hybrid disc-detection:
         - The dialog renders with two buttons: [Rip Next Disc] [Quit].
-        - In parallel it subscribes to Win32_VolumeChangeEvent
-          (EventType = 2 -> arrival) for the configured drive letter.
-          When a disc arrives the dialog auto-closes with Action='RipNext',
-          so the parent doesn't have to click anything.
+        - In parallel a DispatcherTimer polls [IO.DriveInfo]::IsReady on
+          the configured drive letter every ~1.5s on the UI thread. When
+          IsReady transitions false -> true (a disc was just inserted),
+          the dialog auto-closes with Action='RipNext' so the parent
+          doesn't have to click anything. If a disc is already loaded
+          when the dialog opens (e.g. EjectAfterRip is false), the timer
+          waits for the eject-then-insert transition first.
         - Closing the window via the title-bar X is treated as 'Quit'.
+
+        Why polling instead of Win32_VolumeChangeEvent? The CIM event
+        sink runs in a child runspace where $script: scope does not
+        reach our module variables, and Win32_VolumeChangeEvent is also
+        unreliable for optical media on some Windows builds. A 1.5s
+        DispatcherTimer is bullet-proof, costs ~nothing, and runs on
+        the UI thread so closing the window from the tick handler is
+        safe (no Dispatcher.Invoke marshalling required).
 
     Returns a [pscustomobject] with:
         Action    'RipNext' | 'Quit'
@@ -30,10 +41,9 @@
     so any binding / template error is captured instead of bubbling up as
     a silent NRE at ShowDialog.
 
-    The CIM event subscription is registered with Register-CimIndicationEvent
-    (-SourceIdentifier so we can unregister cleanly in a finally block) and
-    is filtered to the configured drive letter to avoid picking up USB-stick
-    insertions or unrelated volume changes.
+    Auto-detect uses System.Windows.Threading.DispatcherTimer (UI-thread
+    polling of [IO.DriveInfo]::IsReady). Stopped in finally{} regardless
+    of how the window closes.
 #>
 
 function Show-RipperBetweenDiscsDialog {
@@ -168,67 +178,66 @@ function Show-RipperBetweenDiscsDialog {
         $window.Close()
     }.GetNewClosure())
 
-    # --- Hybrid auto-detect via WMI volume-change events ------------------
-    # SourceIdentifier so we can unregister in finally{}. EventType=2 is
-    # arrival ("device added"); the event's TargetInstance.DriveName is
-    # the drive letter with a trailing colon (e.g. "D:").
-    $sourceId = "MusicRipper.BetweenDiscs.$([guid]::NewGuid().ToString('N'))"
-    $registered = $false
+    # --- Hybrid auto-detect via DispatcherTimer polling ------------------
+    # Poll [IO.DriveInfo]::IsReady on the UI thread every 1.5s. Trigger
+    # on a false -> true transition so we don't fire if a disc is already
+    # loaded when the dialog opens (covers EjectAfterRip=$false). Runs on
+    # the UI thread so closing the window from the tick handler doesn't
+    # need Dispatcher.Invoke marshalling.
+    $timer = $null
     if ($DriveLetter) {
         try {
             $letter = ($DriveLetter -replace '[\\\s]+$','')
             if ($letter -notmatch ':$') { $letter = "${letter}:" }
-            $query = "SELECT * FROM Win32_VolumeChangeEvent WHERE EventType = 2"
-            # We can't safely filter to a specific DriveName in the WQL
-            # because some platforms report it on the inserted instance
-            # rather than as a top-level prop -- filter in the action
-            # instead.
-            $script:RipperBetweenDiscsState = $state
-            $script:RipperBetweenDiscsWindow = $window
-            $script:RipperBetweenDiscsLetter = $letter
-            Register-CimIndicationEvent `
-                -SourceIdentifier $sourceId `
-                -Query            $query `
-                -Action {
-                    try {
-                        $ev = $Event.SourceEventArgs.NewEvent
-                        $drv = $null
-                        if ($ev) {
-                            try { $drv = [string]$ev.DriveName } catch {}
-                        }
-                        $want = $script:RipperBetweenDiscsLetter
-                        if (-not $drv -or ($drv -and $drv.ToUpperInvariant() -eq $want.ToUpperInvariant())) {
-                            $st = $script:RipperBetweenDiscsState
-                            $win = $script:RipperBetweenDiscsWindow
-                            $st.Action  = 'RipNext'
-                            $st.Trigger = 'AutoDetected'
-                            # Marshal Close() onto the UI thread.
-                            $win.Dispatcher.Invoke([action]{
-                                try { $win.DialogResult = $true } catch {}
-                                $win.Close()
-                            })
-                        }
-                    } catch {
-                        # Swallow -- we don't want a CIM hiccup to crash
-                        # the dialog. Dispatcher sink will catch UI-side
-                        # issues.
-                    }
-                } | Out-Null
-            $registered = $true
+            $driveInfo = [System.IO.DriveInfo]::new($letter)
+            # Baseline: capture current readiness so we only fire on a
+            # transition. If the drive is empty now, $lastReady=$false and
+            # the next insert wins immediately. If a disc is already in
+            # there, the parent has to eject first (then insert) -- which
+            # is the expected EjectAfterRip=$false flow.
+            $lastReady = $false
+            try { $lastReady = [bool]$driveInfo.IsReady } catch { $lastReady = $false }
+
+            $timer = New-Object System.Windows.Threading.DispatcherTimer
+            $timer.Interval = [TimeSpan]::FromMilliseconds(1500)
+            # Stash everything the tick handler needs on the timer's Tag
+            # so we don't depend on $script: scope (which the tick still
+            # sees, but Tag keeps the dependency explicit).
+            $timer.Tag = [pscustomobject]@{
+                Drive     = $driveInfo
+                LastReady = $lastReady
+                Window    = $window
+                State     = $state
+            }
+            $timer.Add_Tick({
+                $ctx = $this.Tag
+                $now = $false
+                try { $now = [bool]$ctx.Drive.IsReady } catch { $now = $false }
+                if ((-not $ctx.LastReady) -and $now) {
+                    # Transition empty -> ready: a disc just arrived.
+                    $this.Stop()
+                    $ctx.State.Action  = 'RipNext'
+                    $ctx.State.Trigger = 'AutoDetected'
+                    try { $ctx.Window.DialogResult = $true } catch {}
+                    $ctx.Window.Close()
+                    return
+                }
+                $ctx.LastReady = $now
+            })
+            $timer.Start()
         } catch {
-            try { Write-RipperLog WARN 'Show-RipperBetweenDiscsDialog' "WMI subscribe failed: $($_.Exception.Message). Falling back to button-only mode." } catch {}
+            try { Write-RipperLog WARN 'Show-RipperBetweenDiscsDialog' "Drive watcher init failed: $($_.Exception.Message). Falling back to button-only mode." } catch {}
             $watchText.Text = '(Drive watcher unavailable -- click Rip Next Disc when ready.)'
+            $timer = $null
         }
     }
 
     try {
         [void]$window.ShowDialog()
     } finally {
-        if ($registered) {
-            try { Unregister-Event -SourceIdentifier $sourceId -ErrorAction SilentlyContinue } catch {}
-            try { Get-EventSubscriber -SourceIdentifier $sourceId -ErrorAction SilentlyContinue | Unregister-Event -ErrorAction SilentlyContinue } catch {}
+        if ($timer) {
+            try { $timer.Stop() } catch {}
         }
-        Remove-Variable -Name RipperBetweenDiscsState,RipperBetweenDiscsWindow,RipperBetweenDiscsLetter -Scope Script -ErrorAction SilentlyContinue
     }
 
     [pscustomobject]@{
