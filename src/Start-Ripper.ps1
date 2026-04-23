@@ -69,10 +69,13 @@ Write-RipperLog INFO 'Start-Ripper' 'Phase 5 entry: config + disc-id + metadata 
 # Phase 5.7: session-scoped state shared across continuous-mode iterations.
 # Reset implicitly each Start-Ripper launch (script-scope locals).
 #   DiscCount   - 1-based count of disc cycles attempted this session.
-#   RippedDiscs - set keyed by DiscId of MusicBrainz/CTDB ids we've seen
-#                 finish a rip cycle. Used to prompt "you already ripped
-#                 this disc -- rip again or skip?" if the parent re-inserts
-#                 the same CD.
+#   RippedDiscs - hashtable keyed by DiscId. Value is a human-readable
+#                 label ("Artist - Album") captured at end of the rip
+#                 cycle, so the duplicate-disc prompt and skip-summary
+#                 line can show the album name instead of the opaque
+#                 DiscId. Used to prompt "you already ripped this disc
+#                 -- rip again or skip?" if the parent re-inserts the
+#                 same CD.
 #   LastSummary - human-readable outcome of the previous cycle, fed to
 #                 the between-discs dialog so the parent can see it
 #                 without flipping back to the success message box.
@@ -323,18 +326,23 @@ function Invoke-RipperOneDiscCycle {
     # this session, give them a chance to skip rather than silently
     # re-ripping ~12 minutes of audio they already have on disk.
     if ($script:RipperSession.RippedDiscs.ContainsKey($disc.DiscId)) {
+        $priorLabel = $script:RipperSession.RippedDiscs[$disc.DiscId]
+        # Old sessions stored $true; treat any non-string as unknown.
+        if (-not ($priorLabel -is [string]) -or [string]::IsNullOrWhiteSpace($priorLabel)) {
+            $priorLabel = "DiscId $($disc.DiscId)"
+        }
         Add-Type -AssemblyName System.Windows.Forms | Out-Null
         $rc = [System.Windows.Forms.MessageBox]::Show(
-            "You already ripped this disc earlier in this session.`n`nDisc id: $($disc.DiscId)`n`nRip it again? (Yes = re-rip, No = skip and return to the disc-insert prompt.)",
+            "You already ripped this disc earlier in this session.`n`n  $priorLabel`n`nRip it again? (Yes = re-rip, No = skip and return to the disc-insert prompt.)",
             'MusicRipper - Already Ripped This Session',
             [System.Windows.Forms.MessageBoxButtons]::YesNo,
             [System.Windows.Forms.MessageBoxIcon]::Question)
         if ($rc -ne [System.Windows.Forms.DialogResult]::Yes) {
-            Write-RipperLog INFO 'Start-Ripper' "Skipping re-rip of already-seen DiscId $($disc.DiscId)."
+            Write-RipperLog INFO 'Start-Ripper' "Skipping re-rip of already-seen disc: $priorLabel (DiscId $($disc.DiscId))."
             Invoke-RipperEject
-            return _result 'Skipped' "Disc ${cycleNum}: skipped (already ripped this session, DiscId $($disc.DiscId))"
+            return _result 'Skipped' "Disc ${cycleNum}: skipped (already ripped this session: $priorLabel)"
         }
-        Write-RipperLog INFO 'Start-Ripper' "User chose to re-rip already-seen DiscId $($disc.DiscId)."
+        Write-RipperLog INFO 'Start-Ripper' "User chose to re-rip already-seen disc: $priorLabel (DiscId $($disc.DiscId))."
     }
 
     # --- Metadata lookup ---------------------------------------------------
@@ -564,8 +572,15 @@ function Invoke-RipperOneDiscCycle {
                     Show-RipperInfo ($lines -join "`n") 'MusicRipper - Rip Complete' $icon
                     $summary = ($lines -join "`n")
                     # Mark this disc as ripped so a re-insertion offers the
-                    # skip prompt.
-                    $script:RipperSession.RippedDiscs[$disc.DiscId] = $true
+                    # skip prompt. Store a human-readable label rather than
+                    # a bare $true so the prompt can show the album name
+                    # instead of an opaque DiscId.
+                    $priorLabel = if ($m -and $m.AlbumArtist -and $m.Album) {
+                        "$($m.AlbumArtist) - $($m.Album)"
+                    } else {
+                        "DiscId $($disc.DiscId)"
+                    }
+                    $script:RipperSession.RippedDiscs[$disc.DiscId] = $priorLabel
                 }
             }
 
