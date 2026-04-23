@@ -422,12 +422,23 @@ namespace MusicRipper {
 '@
     }
 
-    $xaml = @'
+    # The XAML declares the converter in Window.Resources via a
+    # clr-namespace:assembly= mapping to the Add-Type'd assembly above.
+    # This is the only reliable way to make {StaticResource BytesToImg}
+    # resolve from inside a DataTemplate: Window.Resources.Add() after
+    # XamlReader.Load is too late -- DataTemplates resolve StaticResource
+    # against the resource dictionary as it stood at parse time.
+    $asmName = [MusicRipper.BytesToImageConverter].Assembly.GetName().Name
+    $xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:mr="clr-namespace:MusicRipper;assembly=$asmName"
         Title="Search metadata by text" Height="540" Width="780"
         WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
         FontFamily="Segoe UI" FontSize="13">
+  <Window.Resources>
+    <mr:BytesToImageConverter x:Key="BytesToImg"/>
+  </Window.Resources>
   <Grid Margin="12">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
@@ -506,7 +517,7 @@ namespace MusicRipper {
     </DockPanel>
   </Grid>
 </Window>
-'@
+"@
 
     $reader = [System.Xml.XmlNodeReader]::new(([xml]$xaml))
     $window = [Windows.Markup.XamlReader]::Load($reader)
@@ -533,12 +544,6 @@ namespace MusicRipper {
         } catch {}
         $e.Handled = $true
     })
-
-    # Register the converter as a window resource so the Cover column's
-    # {StaticResource BytesToImg} reference resolves. We add it after
-    # Load (rather than declaring in XAML) to avoid embedding a CLR
-    # namespace mapping to our dynamically Add-Type'd assembly.
-    $window.Resources.Add('BytesToImg', [MusicRipper.BytesToImageConverter]::new())
 
     $controls = @{}
     foreach ($n in @('ArtistBox','AlbumBox','YearBox','AllProvidersCheck','ProvidersHost',
