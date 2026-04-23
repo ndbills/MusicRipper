@@ -16,6 +16,7 @@ Describe 'New-RipperConfigObject' {
         $cfg.SynologySyncReviewQueue | Should -BeFalse
         $cfg.HasSynologyCredential   | Should -BeFalse
         $cfg.EjectAfterRip           | Should -BeTrue
+        $cfg.ContinuousMode          | Should -BeTrue
         { Assert-RipperConfig -Config $cfg } | Should -Not -Throw
     }
 
