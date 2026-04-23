@@ -131,7 +131,12 @@ function Get-RipperTextSearchProviderNames {
         }
     }
 
-    , @($out)
+    # Return as a plain string[] — do NOT use the `, @($out)` "preserve
+    # array" trick here. Casting a nested Object[] of Object[] to
+    # [string[]] downstream collapses the inner array into a single
+    # space-joined string, which is what made the WPF picker render
+    # one CheckBox containing all four provider names.
+    return [string[]]$out
 }
 
 function Search-RipperMetadataByText {
