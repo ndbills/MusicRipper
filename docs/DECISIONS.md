@@ -488,3 +488,176 @@ Diagnostic=$null}` shape as the network providers. When the time
 comes: add the helper, wire three UI entry points (Button, Button,
 DragDrop) to it, enforce the size/MIME gate in the helper not the
 callers.
+
+---
+
+## D-015 — Phase-5 future-feature backlog *(documented Phase 5.3, deferred)*
+
+These three ideas were scoped during the Phase 5.3 review but parked
+for a later round so the user can pick them up against a stable
+phase-5-library base. Each entry has enough detail that a future
+session can resume implementation without re-deriving the design.
+
+### F-1 — Submit disc-id back to providers when no match found
+
+**Problem:** When all providers (MB, GnuDB, CTDB) come up empty for
+a disc, the user types metadata in the text-search modal or just
+sends to ReviewQueue. That correction never flows back upstream, so
+the next person to insert the same disc gets the same NoMatch.
+
+**Approach (sketch):**
+- All three providers accept anonymous submissions:
+  - **MusicBrainz**: open
+    `https://musicbrainz.org/cdtoc/attach?toc=<toc>` in the user's
+    default browser. They attach to an existing release or create
+    one. No API key, no auth.
+  - **GnuDB / freedb**: HTTP `cddb submit` with the xmcd payload.
+    Fully anonymous.
+  - **CoverArtArchive**: piggybacks on the MB submission — no
+    separate path needed.
+  - **CTDB**: `[CUETools.CTDB.CUEToolsDB]::Submit()` via the same
+    .NET API we already use for queries.
+- Where to surface it:
+  - "Submit this disc to MusicBrainz" link in `REVIEW.txt` for
+    UNKNOWN review-queue entries.
+  - "Help others find this disc" button in the text-search modal
+    once the user has picked a candidate they typed in themselves.
+- New file: `src/core/metadata/Submit-DiscId.ps1` with one function
+  per provider. Mirror the provider-chain pattern from D-011.
+- Tests: pure URL/payload construction (don't actually submit in
+  CI). Manual verify with a single throwaway test disc.
+
+**Risk:** GnuDB is on a slow decline (per D-012) so the submit
+endpoint may go away. MB is the safe long-term target; treat the
+others as bonus.
+
+**Estimate:** Small. Maybe a half-day plus manual verification on
+one real submission.
+
+---
+
+### F-2 — Rip-speed mode (Secure / Balanced / Fast)
+
+**Problem:** User reports ~4× average read speed on a drive
+labelled much higher. Current Invoke-Rip.ps1 runs CUETools'
+default Secure profile, which dual-reads every sector and re-reads
+on disagreement. Most modern drives + most modern pressings can go
+faster without sacrificing the "Verified" outcome because
+AccurateRip + CTDB verification is the ground-truth check at the
+end of the rip.
+
+**The relevant CUETools knobs:**
+- `CDDriveReader.CorrectionQuality` — 0=fast/single-read,
+  1=normal, 2=paranoid. Set after `Open()` (Phase 4 lesson).
+- `CDDriveReader.DriveC2ErrorMode` — controls whether the drive's
+  C2 error pointers are used to skip re-reads on clean sectors.
+  Most drives support C2.
+- Cache-flush behaviour — Secure mode flushes between reads to
+  defeat false confirmations from cache. Disabling helps speed
+  but is only safe if the drive is on AccurateRip's
+  "doesn't-lie-about-cache" list.
+- Audio drives often top out at 24-40x even on a 48x-data label
+  because they switch to CAV/CLV for audio.
+
+**Proposed scope (`phase-5.5-rip-speed`):**
+1. **Audit step**: log what `CorrectionQuality`,
+   `DriveC2ErrorMode`, cache-flush settings Invoke-Rip currently
+   passes. (Probably 1 / on / on. Verify.)
+2. **New config field**: `RipSpeed = 'Secure' | 'Balanced' | 'Fast'`,
+   default `'Balanced'`.
+   - **Secure**: today's behaviour exactly. CorrectionQuality=2,
+     no C2 trust, cache flushed.
+   - **Balanced**: CorrectionQuality=1, trust C2 on clean sectors,
+     re-read flagged sectors, cache flushed.
+   - **Fast**: CorrectionQuality=0, single-read everywhere, trust
+     C2 fully, no cache flush. (Optional — Balanced may be enough.)
+3. New-RipperConfig.ps1: top-up + interactive
+   "Secure / Balanced / Fast?" prompt.
+4. Pass-through plumbing in Invoke-Rip.ps1.
+5. Tests: pure config plumbing.
+6. Manual verify: rip the same disc once per setting, compare
+   wall-clock + final Status. Expect Verified across the board on
+   a clean disc.
+
+**Critical guardrail:** AR+CTDB verification stays on at every
+speed setting. A wrong sector shows up as Suspect → ReviewQueue,
+never as silently-bad Verified output. So the user can't lose
+data by picking Fast.
+
+**Estimate:** Medium. The config plumbing is small but you want
+real measurements on multiple discs (clean / scratched / CD-R /
+hybrid SACD) to publish defensible numbers in the docs.
+
+---
+
+### F-3 — On-disc metadata (CD-Text + ISRC) as a metadata source
+
+**Problem:** When the disc-id chain comes up empty, we go straight
+to "type the artist + album in the text-search box". But many
+discs carry on-disc metadata that we never read. CD-Text is on
+roughly 10-30% of commercial CDs (more common in the 2000s, on
+Sony/BMG releases, on jazz/classical, on UK and Japan pressings).
+ISRCs are on 40-60% of commercial CDs and uniquely identify a
+recording — MusicBrainz indexes them.
+
+**On-disc data sources:**
+- **CD-Text** — burned in lead-in subchannel. Carries Album /
+  AlbumPerformer plus per-track Title / Performer. Not on CD-Rs,
+  not on most indie pressings.
+  - Codepage caveat: ASCII or MS-JIS only. Latin-1 / Cyrillic /
+    Greek titles come through as mojibake. Need a charset-detect
+    or "looks wrong, ignore" heuristic.
+- **ISRC** — 12-char per-track recording ID
+  (`CC-XXX-YY-NNNNN`, e.g. `USX9P2512345`). Subchannel-encoded.
+  MB has an ISRC->recording lookup endpoint
+  (`/ws/2/isrc/<isrc>`).
+
+**CUETools surface:**
+`CDDriveReader.TOC` (after `Open()`) exposes `CDTextLength` and
+the per-track `ISRC` field. We already make this Open call in
+`src/core/Get-DiscId.ps1`, so the data is one line of code away.
+
+**Proposed scope (`phase-5.6-on-disc-metadata`):**
+1. Extend `Get-DiscId.ps1` to capture `Toc.CDTextLength > 0` and
+   parse the lead-in CDText payload; capture per-track ISRCs into
+   the disc-info shape returned by `Get-RipperDiscId`.
+2. New file `src/core/metadata/Get-MetadataFromOnDisc.ps1`:
+   a synthetic provider that produces a candidate from CD-Text
+   when present (with `Source='OnDisc'`), and an ISRC-enriched
+   candidate when MB returns a recording for any track's ISRC.
+3. Insert into `MetadataProviders` chain at lowest priority by
+   default — actual disc-id matches always win the ranking.
+4. **NoMatch fallback wiring** in `Start-Ripper.ps1`: when the
+   chain returns Status=NoMatch but on-disc metadata exists,
+   open the text-search modal pre-populated with Artist+Album
+   from CD-Text. User just hits Enter.
+5. Cross-validate: when MB and CD-Text disagree (different album
+   title, different track count), flag the discrepancy in
+   `REVIEW.txt` for the queue case.
+6. Tests: `ConvertFrom-CDText` handles empty / partial /
+   codepage-bad inputs; ISRC parsing rejects malformed strings;
+   fixture-based.
+7. Manual verify: one CD-Text-bearing disc (Sony/BMG 2000s pop
+   is a safe bet) + one without.
+
+**Order suggestion if both 5.5 and 5.6 get scheduled:** do 5.6
+first. On-disc metadata work happens at disc-id read time and
+has zero risk to rip output, while rip-speed touches the actual
+ripper engine and benefits from being on a stable base.
+
+**Estimate:** Medium-large. The CDText codepage handling is the
+fiddly bit. Plan for two fixture-disc reads (with + without
+CD-Text) before merging.
+
+---
+
+**Re-entry checklist (any of F-1 / F-2 / F-3):**
+1. `git checkout phase-5-library` (or main, if 5-library has
+   merged by then) and `git pull`.
+2. Re-read this D-015 entry plus the relevant Phase 5 lessons
+   in `/memories/repo/musicripper-state.md`.
+3. Branch `phase-5.5-rip-speed` / `phase-5.6-on-disc-metadata` /
+   `feat/submit-disc-id` from the current tip.
+4. Confirm current `Show-RipperMetadataDialog` and
+   `Get-RipperDiscMetadata` shapes haven't drifted from what's
+   described above.
