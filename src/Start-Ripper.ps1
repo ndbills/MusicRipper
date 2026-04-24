@@ -323,35 +323,15 @@ function Invoke-RipperOneDiscCycle {
         return _result 'NoDisc' "Disc ${cycleNum}: no disc / drive error -- $errMsg"
     }
 
-    # --- Already-ripped-this-session check (Phase 5.7) --------------------
-    # If the parent re-inserts a disc that already finished a cycle in
-    # this session, give them a chance to skip rather than silently
-    # re-ripping ~12 minutes of audio they already have on disk.
-    if ($script:RipperSession.RippedDiscs.ContainsKey($disc.DiscId)) {
-        $priorLabel = $script:RipperSession.RippedDiscs[$disc.DiscId]
-        # Old sessions stored $true; treat any non-string as unknown.
-        if (-not ($priorLabel -is [string]) -or [string]::IsNullOrWhiteSpace($priorLabel)) {
-            $priorLabel = "DiscId $($disc.DiscId)"
-        }
-        Add-Type -AssemblyName System.Windows.Forms | Out-Null
-        $rc = [System.Windows.Forms.MessageBox]::Show(
-            "You already ripped this disc earlier in this session.`n`n  $priorLabel`n`nRip it again? (Yes = re-rip, No = skip and return to the disc-insert prompt.)",
-            'MusicRipper - Already Ripped This Session',
-            [System.Windows.Forms.MessageBoxButtons]::YesNo,
-            [System.Windows.Forms.MessageBoxIcon]::Question)
-        if ($rc -ne [System.Windows.Forms.DialogResult]::Yes) {
-            Write-RipperLog INFO 'Start-Ripper' "Skipping re-rip of already-seen disc: $priorLabel (DiscId $($disc.DiscId))."
-            Invoke-RipperEject
-            return _result 'Skipped' "Disc ${cycleNum}: skipped (already ripped this session: $priorLabel)"
-        }
-        Write-RipperLog INFO 'Start-Ripper' "User chose to re-rip already-seen disc: $priorLabel (DiscId $($disc.DiscId))."
-    }
-
     # --- Already-in-library check (Phase 5.8) ----------------------------
-    # Look the disc up in the durable cross-session DiscId index. If we
-    # find a hit (and the recorded folder still exists), give the parent
+    # Look the disc up in the durable cross-session DiscId index FIRST. If
+    # we find a hit (and the recorded folder still exists), give the parent
     # a polished three-way prompt instead of silently re-ripping or
-    # crashing later in Move-RipToLibrary's "target exists" throw.
+    # crashing later in Move-RipToLibrary's "target exists" throw. The
+    # library dialog supersedes the in-session Yes/No prompt below: a
+    # library hit always implies an in-session hit (if the user already
+    # ripped it this session), and the library dialog is strictly more
+    # informative (Open folder, RippedAt, side-by-side option).
     #
     # If they choose 'RipAgain' we set $allowSideBySide so post-process
     # routes the new copy to '<Album> (<Year>) [rip 2]' instead of
@@ -386,6 +366,32 @@ function Invoke-RipperOneDiscCycle {
                 return _result 'Skipped' "Disc ${cycleNum}: skipped (already in library: $libLabel)"
             }
         }
+    }
+
+    # --- Already-ripped-this-session fallback (Phase 5.7) ----------------
+    # Library check above is the primary duplicate guard. This fallback
+    # catches discs ripped this session that never made it to the library
+    # (e.g., routed to ReviewQueue, or move-to-library failed) and so are
+    # absent from the DiscId index. Skip if the library dialog already
+    # handled this disc.
+    if (-not $libDup -and $script:RipperSession.RippedDiscs.ContainsKey($disc.DiscId)) {
+        $priorLabel = $script:RipperSession.RippedDiscs[$disc.DiscId]
+        # Old sessions stored $true; treat any non-string as unknown.
+        if (-not ($priorLabel -is [string]) -or [string]::IsNullOrWhiteSpace($priorLabel)) {
+            $priorLabel = "DiscId $($disc.DiscId)"
+        }
+        Add-Type -AssemblyName System.Windows.Forms | Out-Null
+        $rc = [System.Windows.Forms.MessageBox]::Show(
+            "You already ripped this disc earlier in this session.`n`n  $priorLabel`n`nRip it again? (Yes = re-rip, No = skip and return to the disc-insert prompt.)",
+            'MusicRipper - Already Ripped This Session',
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Question)
+        if ($rc -ne [System.Windows.Forms.DialogResult]::Yes) {
+            Write-RipperLog INFO 'Start-Ripper' "Skipping re-rip of already-seen disc: $priorLabel (DiscId $($disc.DiscId))."
+            Invoke-RipperEject
+            return _result 'Skipped' "Disc ${cycleNum}: skipped (already ripped this session: $priorLabel)"
+        }
+        Write-RipperLog INFO 'Start-Ripper' "User chose to re-rip already-seen disc: $priorLabel (DiscId $($disc.DiscId))."
     }
 
     # --- Metadata lookup ---------------------------------------------------
