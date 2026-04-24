@@ -493,8 +493,19 @@ function Invoke-RipperOneDiscCycle {
     Write-RipperLog INFO 'Start-Ripper' "User chose: $($choice.Action) (eject=$($choice.EjectAfterRip))."
 
     switch ($choice.Action) {
-        'Rip' {
+        { $_ -in 'Rip','Review' } {
             $m = $choice.Metadata
+
+            # Phase 5.9: 'Review' runs the full rip pipeline but routes the
+            # finished folder into _ReviewQueue\ regardless of rip quality
+            # (and skips library tagging) so the user can fix metadata in
+            # Picard before promoting it. The route is just a flag passed
+            # to Invoke-RipperPostProcess; everything else (rip, sidecar,
+            # eject, summary dialog, in-session tracking) is identical.
+            $forceReviewQueue = ($choice.Action -eq 'Review')
+            if ($forceReviewQueue) {
+                Write-RipperLog INFO 'Start-Ripper' "User chose Send to Review: $($m.AlbumArtist) - $($m.Album)"
+            }
 
             # Phase 4 rips land in <LibraryRoot>\_inbox\<AlbumArtist> - <Album>\.
             # Phase 5's Move-ToLibrary will relocate from there to the Plex
@@ -562,7 +573,8 @@ function Invoke-RipperOneDiscCycle {
                         -DiscId           $disc.DiscId `
                         -LibraryRoot      $cfg.LibraryRoot `
                         -CoverArtFile     $result.CoverArtFile `
-                        -AllowSideBySide:$allowSideBySide
+                        -AllowSideBySide:$allowSideBySide `
+                        -ForceReviewQueue:$forceReviewQueue
                     $phase5Quality = $pp.Quality
                     $phase5Target  = $pp.Target
                     try { Remove-RipperRipState -RipFolder $pp.Target } catch {
@@ -636,13 +648,6 @@ function Invoke-RipperOneDiscCycle {
 
             _maybeEject $choice
             return _result 'Completed' $summary
-        }
-        'Review' {
-            $m = $choice.Metadata
-            Show-RipperInfo "Marked for Review (Phase 5 routing).`n`nDisc: $($m.AlbumArtist) - $($m.Album)`n`nEjecting now." `
-                'MusicRipper (Phase 3 stub)' 'Information'
-            _maybeEject $choice
-            return _result 'Skipped' "Disc ${cycleNum}: $($m.AlbumArtist) - $($m.Album) -- marked for Review"
         }
         'Cancel' {
             Write-RipperLog INFO 'Start-Ripper' 'User cancelled at confirm dialog. Ejecting.'

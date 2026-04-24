@@ -1032,3 +1032,122 @@ and best-effort failure swallowing.
 
 **Reverse references:** D-017 (the backlog entry that captured the
 problem statement) is now implemented by this decision.
+
+
+## D-019 -- Wire user-driven Send to Review through the rip pipeline (Phase 5.9)
+
+**Status:** Implemented (Phase 5.9).
+**Date:** 2026-04-24.
+
+**Context:** The metadata dialog has had a Send to Review button
+since Phase 3, but its Start-Ripper.ps1 switch arm was a stub: it
+displayed a Phase 3 stub MessageBox and ejected the disc without
+ripping. The intended workflow -- 'I want to fix metadata in Picard
+before this lands in Plex' -- was therefore non-functional.
+
+The supporting plumbing already existed: Invoke-RipperPostProcess,
+Move-RipToLibrary, New-ReviewQueueArtifacts had all handled the
+_ReviewQueue\ path since Phase 5 for *quality-gate-driven* routing
+(SUSPECT/UNKNOWN). Only the user-driven entry point was missing.
+
+**Decision:**
+1. Add a `-ForceReviewQueue` switch to `Invoke-RipperPostProcess`.
+   When set and `Test-RipQuality` reported `Destination=Library`,
+   override to `Destination=ReviewQueue` with a distinct routing
+   prefix `USER-REVIEW` so the folder name distinguishes user
+   intent from auto-quality routing in `_ReviewQueue/`.
+2. If the quality gate already routed to ReviewQueue (Suspect/Unknown),
+   do NOT replace the prefix -- the auto-routing reason is more
+   informative to the human triaging the queue.
+3. Tagging is skipped on the forced review route (same as the
+   auto-routed path): the raw disc state is what a human in Picard
+   wants to see.
+4. The cross-session DiscId index (Phase 5.8) is still NOT updated
+   for review-queue rips, regardless of how they got there. The
+   index represents 'this album is finished and in the library';
+   review-queue entries are drafts.
+5. `Start-Ripper` collapses the `'Rip'` and `'Review'` switch
+   arms into one `{ \$_ -in 'Rip','Review' }` block. The only
+   per-arm difference is a single `\$forceReviewQueue` boolean
+   threaded through to `Invoke-RipperPostProcess`. Sidecar,
+   eject, in-session tracking, and the rip-complete summary
+   dialog are identical (the summary's destination line already
+   reads 'Review queue: ...' because `Quality.Destination` was
+   overridden upstream).
+
+**Why USER-REVIEW (not e.g. MANUAL or DRAFT):** Matches the verb on
+the button (`Send to Review`); short enough to fit Plex/Explorer
+column widths; clearly distinct from the existing `SUSPECT` /
+`UNKNOWN` / `LOWMATCH` prefixes.
+
+**Why keep in-session tracking:** A re-inserted disc that was sent
+to Review still triggers the Phase-5.7 'You already ripped this
+this session' Yes/No prompt. The disc isn't in the durable index
+(D-018), so the in-session check is the only guard. Skipping the
+tracking would silently re-rip on re-insert, which is exactly what
+Phase 5.7 was added to prevent.
+
+**Files changed:**
+- `src/core/Invoke-PostProcess.ps1` -- `-ForceReviewQueue` switch.
+- `src/Start-Ripper.ps1` -- Rip+Review collapsed into one switch arm.
+- `tests/Invoke-PostProcess.Tests.ps1` -- new `ForceReviewQueue`
+  Describe block: routing override, no-double-override, no-tagging,
+  artifacts-emitted, no-index-write.
+- `docs/TROUBLESHOOTING.md` -- when to use Send to Review.
+
+**Reverse references:** Phase 3 stub was introduced by the original
+`confirm-dialog` work; this decision retires the stub.
+
+
+## D-020 -- Honour EjectAfterRip on every disc-disposition path *(Phase 5.10 backlog)*
+
+**Status:** Backlogged for Phase 5.10 (after 5.9 merges).
+**Date:** 2026-04-24.
+
+**Context:** Phase 5.4 added a per-rip `Eject disc when done` checkbox
+in the metadata dialog (sourced from `cfg.EjectAfterRip`) which the
+`Rip`/`Review`/`Cancel` arms in `Start-Ripper.ps1` honour via
+`_maybeEject $choice`. But several earlier short-circuit paths --
+fired before the metadata dialog ever opens -- still call
+`Invoke-RipperEject` unconditionally:
+
+- `Get-RipperDiscId` failure / `NoDisc` (line ~289).
+- Phase-5.8 library duplicate dialog: `Skip` (line ~355) and
+  `default`/unknown action (line ~365).
+- Phase-5.7 in-session duplicate MessageBox: `No` answer (line ~391).
+
+Surfaced during Phase 5.9 verification: `EjectAfterRip = False` in
+config + clicking `No` on the in-session duplicate prompt still
+ejected the disc.
+
+**Decision (deferred):**
+1. The unconditional eject in those paths exists because the user
+   hasn't yet made a per-rip choice (the checkbox lives in the
+   metadata dialog which hasn't opened). Treat `cfg.EjectAfterRip`
+   as the fallback when no per-rip choice exists yet. New helper
+   `_maybeEjectFromConfig` that reads `cfg.EjectAfterRip` (default
+   `True` if missing); replace the four bare `Invoke-RipperEject`
+   calls with it.
+2. Audit other entry points for the same pattern:
+   - `Resume.ps1` orphan-recovery completion path.
+   - Any post-process failure `catch` blocks that eject.
+   - The between-discs dialog `Quit` path.
+   - Tools (`Complete-OrphanedRip`, `Update-AlbumTags`) -- shouldn't
+     touch eject at all, but verify.
+3. Document the contract in a header comment in `Start-Ripper.ps1`:
+   "Anywhere we'd open the tray, defer to `_maybeEject $choice`
+   (per-rip override) or `_maybeEjectFromConfig` (no per-rip choice
+   available)."
+4. Add a small Pester test that asserts `Invoke-RipperEject` is the
+   ONLY function in `src/Start-Ripper.ps1` that calls
+   `[mciSendString]` etc. -- everything else routes through the
+   helpers (regression prevention).
+
+**Why not in Phase 5.9:** 5.9 is scoped to wiring `Send to Review`;
+the eject paths are pre-existing behaviour and unchanged by 5.9. No
+data loss risk -- just a UX inconsistency. Cleanly separable into
+its own small phase.
+
+**Reverse references:** Eject-toggle was introduced in
+`9835d1e feat(eject): per-rip eject toggle in confirm dialog (Phase 5.4)`;
+this decision completes the audit that should have accompanied it.

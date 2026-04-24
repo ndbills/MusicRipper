@@ -140,7 +140,7 @@ function New-RipperReviewQueueFolderName {
     [CmdletBinding()]
     [OutputType([string])]
     param(
-        [Parameter(Mandatory)] [ValidateSet('UNKNOWN','LOWMATCH','SUSPECT','MANUAL')]
+        [Parameter(Mandatory)] [ValidateSet('UNKNOWN','LOWMATCH','SUSPECT','MANUAL','USER-REVIEW')]
         [string]$Prefix,
         [Parameter(Mandatory)] [string]$DiscId,
         $Metadata,

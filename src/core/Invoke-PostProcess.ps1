@@ -45,12 +45,25 @@ function Invoke-RipperPostProcess {
         [Parameter(Mandatory)] [string]   $DiscId,
         [Parameter(Mandatory)] [string]   $LibraryRoot,
         [Parameter()]          [string]   $CoverArtFile,
-        [switch]                          $AllowSideBySide
+        [switch]                          $AllowSideBySide,
+        [switch]                          $ForceReviewQueue
     )
 
     $quality = Test-RipQuality -LogPath $LogFile
     Write-RipperLog INFO 'PostProcess' `
         "Quality gate: $($quality.Status) -> $($quality.Destination) (prefix='$($quality.RoutingPrefix)')"
+
+    # Phase 5.9: user-driven "Send to Review" overrides the quality gate.
+    # The rip itself may be Verified, but the user wants to fix metadata
+    # in Picard before it lands in the library. Use a distinct routing
+    # prefix so it's obvious in _ReviewQueue\ that this was a user choice
+    # (vs. SUSPECT/UNKNOWN routed automatically by quality).
+    if ($ForceReviewQueue -and $quality.Destination -ne 'ReviewQueue') {
+        Write-RipperLog INFO 'PostProcess' `
+            "ForceReviewQueue: overriding $($quality.Destination)/'$($quality.RoutingPrefix)' -> ReviewQueue/'USER-REVIEW'."
+        $quality.Destination   = 'ReviewQueue'
+        $quality.RoutingPrefix = 'USER-REVIEW'
+    }
 
     if ($quality.Destination -eq 'Library') {
         $tagArgs = @{
