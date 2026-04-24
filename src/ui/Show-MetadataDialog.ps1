@@ -451,9 +451,11 @@ namespace MusicRipper {
     </ListView>
 
     <DockPanel Grid.Row="2" Margin="0,8,0,0" LastChildFill="False">
-      <Button x:Name="CancelButton" Content="Cancel"        DockPanel.Dock="Right" Padding="14,4" MinWidth="110" Margin="6,0,0,0"/>
+      <Button x:Name="CancelButton" Content="Cancel"        DockPanel.Dock="Right" Padding="14,4" MinWidth="110" Margin="6,0,0,0"
+              ToolTip="Keep the cover art that was already selected. Nothing changes."/>
       <Button x:Name="UseButton"    Content="Use selected"  DockPanel.Dock="Right" Padding="14,4" MinWidth="130" IsEnabled="False"
-              Background="#0a7" Foreground="White" FontWeight="Bold"/>
+              Background="#0a7" Foreground="White" FontWeight="Bold"
+              ToolTip="Use the highlighted cover for this album."/>
     </DockPanel>
   </Grid>
 </Window>
@@ -755,7 +757,8 @@ namespace MusicRipper {
     <DockPanel Grid.Row="2" Margin="0,0,0,8" LastChildFill="True">
       <Button x:Name="SearchButton" Content="Search" DockPanel.Dock="Right"
               Padding="14,4" MinWidth="100" IsDefault="True"
-              Background="#0a7" Foreground="White" FontWeight="Bold"/>
+              Background="#0a7" Foreground="White" FontWeight="Bold"
+              ToolTip="Search every configured metadata provider (MusicBrainz, iTunes, Deezer) for matching releases."/>
       <TextBlock x:Name="StatusText" VerticalAlignment="Center" Foreground="#444" FontStyle="Italic"
                  Text="Type at least an artist or an album, then click Search."/>
     </DockPanel>
@@ -783,8 +786,10 @@ namespace MusicRipper {
 
     <!-- Row 4: action buttons -->
     <DockPanel Grid.Row="4" Margin="0,8,0,0" LastChildFill="False">
-      <Button x:Name="CancelButton" Content="Cancel"        DockPanel.Dock="Right" Padding="14,4" MinWidth="110" Margin="6,0,0,0"/>
-      <Button x:Name="UseButton"    Content="Use selected"  DockPanel.Dock="Right" Padding="14,4" MinWidth="130" IsEnabled="False"/>
+      <Button x:Name="CancelButton" Content="Cancel"        DockPanel.Dock="Right" Padding="14,4" MinWidth="110" Margin="6,0,0,0"
+              ToolTip="Close this search window without changing the metadata."/>
+      <Button x:Name="UseButton"    Content="Use selected"  DockPanel.Dock="Right" Padding="14,4" MinWidth="130" IsEnabled="False"
+              ToolTip="Replace the disc's metadata with the highlighted result and return to the rip dialog."/>
     </DockPanel>
   </Grid>
 </Window>
@@ -1114,7 +1119,8 @@ function Show-RipperMetadataDialog {
         <DockPanel Grid.Row="1" Margin="0,0,0,6" LastChildFill="True">
           <TextBlock Text="Match:" Width="80" VerticalAlignment="Center"/>
           <Button x:Name="ResearchButton"   Content="Re-search MusicBrainz"
-                  DockPanel.Dock="Right" Padding="8,2" Margin="6,0,0,0"/>
+                  DockPanel.Dock="Right" Padding="8,2" Margin="6,0,0,0"
+                  ToolTip="Look up this disc again on MusicBrainz by its disc id. Use after fixing a network problem or after submitting the disc id."/>
           <Button x:Name="TextSearchButton" Content="Search by text…"
                   DockPanel.Dock="Right" Padding="8,2" Margin="6,0,0,0"
                   ToolTip="Look up an artist+album by text across the configured metadata providers."/>

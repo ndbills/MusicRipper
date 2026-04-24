@@ -114,16 +114,19 @@ function Show-RipperDuplicateDiscDialog {
     <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
       <Button x:Name="OpenFolderButton"
               Content="Open folder..."
-              Width="130" Height="34" Margin="0,0,10,0"/>
+              Width="130" Height="34" Margin="0,0,10,0"
+              ToolTip="Open the existing album folder in File Explorer so you can confirm it's there. The dialog stays open."/>
       <Button x:Name="SkipButton"
               Content="Skip rip"
               Width="120" Height="34" Margin="0,0,10,0"
-              IsCancel="True"/>
+              IsCancel="True"
+              ToolTip="Don't rip this disc. Ejects the CD and returns to the disc-insert prompt. (Same as pressing Esc or closing the window.)"/>
       <Button x:Name="RipAgainButton"
               Content="Rip again (keep both)"
               Width="180" Height="34"
               IsDefault="True"
-              Background="#0a7" Foreground="White" FontWeight="Bold"/>
+              Background="#0a7" Foreground="White" FontWeight="Bold"
+              ToolTip="Rip this disc again as a side-by-side copy. The new rip lands in '<Album> [rip 2]' so it doesn't overwrite the existing one."/>
     </StackPanel>
   </Grid>
 </Window>
