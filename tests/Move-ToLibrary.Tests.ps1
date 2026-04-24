@@ -244,4 +244,32 @@ Describe 'Move-RipToLibrary (integration)' {
               -Metadata (New-FakeMetadata) -Quality (New-FakeQuality) -DiscId 'd' } |
             Should -Throw '*not found*'
     }
+
+    It '-AllowSideBySide picks ` [rip 2]` when the target exists' {
+        Move-RipToLibrary -RipFolder $script:rip -LibraryRoot $script:lib `
+            -Metadata (New-FakeMetadata) -Quality (New-FakeQuality) -DiscId 'd' | Out-Null
+
+        Seed-RipFolder $script:rip
+        $r = Move-RipToLibrary -RipFolder $script:rip -LibraryRoot $script:lib `
+                 -Metadata (New-FakeMetadata) -Quality (New-FakeQuality) -DiscId 'd' `
+                 -AllowSideBySide
+        $r.IsSideBySide | Should -BeTrue
+        $r.Target       | Should -Match '\[rip 2\]$'
+        Test-Path -LiteralPath $r.Target | Should -BeTrue
+    }
+
+    It '-AllowSideBySide escalates to ` [rip 3]` when [rip 2] also exists' {
+        Move-RipToLibrary -RipFolder $script:rip -LibraryRoot $script:lib `
+            -Metadata (New-FakeMetadata) -Quality (New-FakeQuality) -DiscId 'd' | Out-Null
+        Seed-RipFolder $script:rip
+        Move-RipToLibrary -RipFolder $script:rip -LibraryRoot $script:lib `
+            -Metadata (New-FakeMetadata) -Quality (New-FakeQuality) -DiscId 'd' `
+            -AllowSideBySide | Out-Null
+
+        Seed-RipFolder $script:rip
+        $r = Move-RipToLibrary -RipFolder $script:rip -LibraryRoot $script:lib `
+                 -Metadata (New-FakeMetadata) -Quality (New-FakeQuality) -DiscId 'd' `
+                 -AllowSideBySide
+        $r.Target | Should -Match '\[rip 3\]$'
+    }
 }

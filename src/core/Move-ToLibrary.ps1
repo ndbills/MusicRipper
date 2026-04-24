@@ -278,9 +278,18 @@ function Move-RipToLibrary {
 .PARAMETER Force
     When set, an existing target directory is overwritten file-by-file.
 
+.PARAMETER AllowSideBySide
+    When set, an existing target directory triggers a side-by-side
+    fallback: the rip lands in `<Album> (<Year>) [rip 2]` (then
+    `[rip 3]`, etc.). Square brackets keep the suffix from being
+    parsed as a year by Plex's filename heuristics. Used when the
+    Phase-5.8 duplicate-disc dialog confirms the user wants to keep
+    both copies.
+
 .NOTES
     Returns:
-        { Source, Target, IsReviewQueue, IsMultiDisc, FilesMoved, ElapsedMs }
+        { Source, Target, IsReviewQueue, IsMultiDisc, IsSideBySide,
+          FilesMoved, ElapsedMs }
 #>
     [CmdletBinding(SupportsShouldProcess)]
     [OutputType([pscustomobject])]
@@ -290,7 +299,8 @@ function Move-RipToLibrary {
         [Parameter(Mandatory)] $Metadata,
         [Parameter(Mandatory)] $Quality,
         [Parameter(Mandatory)] [string]$DiscId,
-        [switch]$Force
+        [switch]$Force,
+        [switch]$AllowSideBySide
     )
 
     if (-not (Test-Path -LiteralPath $RipFolder -PathType Container)) {
@@ -312,8 +322,28 @@ function Move-RipToLibrary {
         $isMultiDisc = $true
     }
 
+    $isSideBySide = $false
     if ((Test-Path -LiteralPath $target) -and -not $Force -and -not $isMultiDisc) {
-        throw "Target directory already exists (use -Force to overlay): $target"
+        if ($AllowSideBySide -and -not $isReviewQueue) {
+            # Pick the next free `[rip N]` suffix. Plex parses the
+            # `(<year>)` segment as the album year; square brackets are
+            # ignored by its filename heuristics, so `[rip 2]` is safe.
+            $orig = $target
+            for ($n = 2; $n -lt 100; $n++) {
+                $candidate = "$orig [rip $n]"
+                if (-not (Test-Path -LiteralPath $candidate)) {
+                    $target       = $candidate
+                    $isSideBySide = $true
+                    Write-RipperLog INFO 'Move-ToLibrary' "Side-by-side: '$orig' exists, using '$target'."
+                    break
+                }
+            }
+            if (-not $isSideBySide) {
+                throw "Side-by-side fallback exhausted (>= 99 copies?) for: $orig"
+            }
+        } else {
+            throw "Target directory already exists (use -Force to overlay or -AllowSideBySide for `[rip N]` fallback): $target"
+        }
     }
 
     Write-RipperLog INFO 'Move-ToLibrary' "Moving $RipFolder -> $target (review=$isReviewQueue, multiDisc=$isMultiDisc)."
@@ -349,6 +379,7 @@ function Move-RipToLibrary {
         Target        = $target
         IsReviewQueue = $isReviewQueue
         IsMultiDisc   = $isMultiDisc
+        IsSideBySide  = $isSideBySide
         FilesMoved    = $filesMoved
         ElapsedMs     = [int]$sw.Elapsed.TotalMilliseconds
     }

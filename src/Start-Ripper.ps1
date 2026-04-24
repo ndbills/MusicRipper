@@ -56,12 +56,14 @@ Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 . (Join-Path $repoRoot 'src\core\Test-RipQuality.ps1')
 . (Join-Path $repoRoot 'src\core\Write-Tags.ps1')
 . (Join-Path $repoRoot 'src\core\Move-ToLibrary.ps1')
+. (Join-Path $repoRoot 'src\core\Get-LibraryDiscIndex.ps1')
 . (Join-Path $repoRoot 'src\core\New-ReviewQueueArtifacts.ps1')
 . (Join-Path $repoRoot 'src\core\Invoke-PostProcess.ps1')
 . (Join-Path $repoRoot 'src\core\Resume.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-MetadataDialog.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-RipProgress.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-BetweenDiscsDialog.ps1')
+. (Join-Path $repoRoot 'src\ui\Show-DuplicateDiscDialog.ps1')
 
 $logPath = Start-RipperLog -Context 'start-ripper'
 Write-RipperLog INFO 'Start-Ripper' 'Phase 5 entry: config + disc-id + metadata + confirm + rip + quality/tag/move.'
@@ -345,6 +347,47 @@ function Invoke-RipperOneDiscCycle {
         Write-RipperLog INFO 'Start-Ripper' "User chose to re-rip already-seen disc: $priorLabel (DiscId $($disc.DiscId))."
     }
 
+    # --- Already-in-library check (Phase 5.8) ----------------------------
+    # Look the disc up in the durable cross-session DiscId index. If we
+    # find a hit (and the recorded folder still exists), give the parent
+    # a polished three-way prompt instead of silently re-ripping or
+    # crashing later in Move-RipToLibrary's "target exists" throw.
+    #
+    # If they choose 'RipAgain' we set $allowSideBySide so post-process
+    # routes the new copy to '<Album> (<Year>) [rip 2]' instead of
+    # colliding with the original.
+    $allowSideBySide = $false
+    try {
+        $libDup = Find-RipperLibraryDiscIndexEntry -LibraryRoot $cfg.LibraryRoot -DiscId $disc.DiscId
+    } catch {
+        Write-RipperLog WARN 'Start-Ripper' "DiscId index lookup failed (advisory): $($_.Exception.Message)"
+        $libDup = $null
+    }
+    if ($libDup) {
+        $libLabel = if ($libDup.PSObject.Properties['Label'] -and $libDup.Label) { [string]$libDup.Label } else { "DiscId $($disc.DiscId)" }
+        $libPath  = [string]$libDup.Path
+        $libRipAt = if ($libDup.PSObject.Properties['RippedAt']) { $libDup.RippedAt } else { $null }
+        Write-RipperLog INFO 'Start-Ripper' "DiscId $($disc.DiscId) already in library: $libLabel ($libPath)."
+        $dup = Show-RipperDuplicateDiscDialog -AlbumLabel $libLabel -AlbumPath $libPath -RippedAt $libRipAt
+        switch ($dup.Action) {
+            'Skip' {
+                Write-RipperLog INFO 'Start-Ripper' "User skipped already-in-library disc: $libLabel."
+                Invoke-RipperEject
+                return _result 'Skipped' "Disc ${cycleNum}: skipped (already in library: $libLabel)"
+            }
+            'RipAgain' {
+                Write-RipperLog INFO 'Start-Ripper' "User chose to re-rip already-in-library disc side-by-side: $libLabel."
+                $allowSideBySide = $true
+            }
+            default {
+                # Defensive: future actions land here. Treat as Skip.
+                Write-RipperLog WARN 'Start-Ripper' "Duplicate-disc dialog returned unknown action '$($dup.Action)'; treating as Skip."
+                Invoke-RipperEject
+                return _result 'Skipped' "Disc ${cycleNum}: skipped (already in library: $libLabel)"
+            }
+        }
+    }
+
     # --- Metadata lookup ---------------------------------------------------
     try {
         $meta = Get-RipperDiscMetadata -DiscIdInfo $disc
@@ -507,12 +550,13 @@ function Invoke-RipperOneDiscCycle {
                 }
                 try {
                     $pp = Invoke-RipperPostProcess `
-                        -RipFolder    $result.OutputDir `
-                        -LogFile      $result.LogFile `
-                        -Metadata     $m `
-                        -DiscId       $disc.DiscId `
-                        -LibraryRoot  $cfg.LibraryRoot `
-                        -CoverArtFile $result.CoverArtFile
+                        -RipFolder        $result.OutputDir `
+                        -LogFile          $result.LogFile `
+                        -Metadata         $m `
+                        -DiscId           $disc.DiscId `
+                        -LibraryRoot      $cfg.LibraryRoot `
+                        -CoverArtFile     $result.CoverArtFile `
+                        -AllowSideBySide:$allowSideBySide
                     $phase5Quality = $pp.Quality
                     $phase5Target  = $pp.Target
                     try { Remove-RipperRipState -RipFolder $pp.Target } catch {

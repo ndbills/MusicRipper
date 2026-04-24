@@ -44,7 +44,8 @@ function Invoke-RipperPostProcess {
         [Parameter(Mandatory)] [object]   $Metadata,
         [Parameter(Mandatory)] [string]   $DiscId,
         [Parameter(Mandatory)] [string]   $LibraryRoot,
-        [Parameter()]          [string]   $CoverArtFile
+        [Parameter()]          [string]   $CoverArtFile,
+        [switch]                          $AllowSideBySide
     )
 
     $quality = Test-RipQuality -LogPath $LogFile
@@ -64,13 +65,32 @@ function Invoke-RipperPostProcess {
     }
 
     $move = Move-RipToLibrary `
-        -RipFolder   $RipFolder `
-        -LibraryRoot $LibraryRoot `
-        -Metadata    $Metadata `
-        -Quality     $quality `
-        -DiscId      $DiscId
+        -RipFolder        $RipFolder `
+        -LibraryRoot      $LibraryRoot `
+        -Metadata         $Metadata `
+        -Quality          $quality `
+        -DiscId           $DiscId `
+        -AllowSideBySide:$AllowSideBySide
     Write-RipperLog INFO 'PostProcess' `
-        "Moved to: $($move.Target) (review=$($move.IsReviewQueue), files=$($move.FilesMoved))"
+        "Moved to: $($move.Target) (review=$($move.IsReviewQueue), files=$($move.FilesMoved), sideBySide=$($move.IsSideBySide))"
+
+    # Phase 5.8: record Library moves in the cross-session DiscId index.
+    # Best-effort -- failure here must not undo the move (we already
+    # have the rip on disk; the index is advisory).
+    if (-not $move.IsReviewQueue) {
+        try {
+            $year  = if ($Metadata.PSObject.Properties['Year'] -and $Metadata.Year) { " ($([int]$Metadata.Year))" } else { '' }
+            $label = "$($Metadata.AlbumArtist) - $($Metadata.Album)$year"
+            Add-RipperLibraryDiscIndexEntry `
+                -LibraryRoot $LibraryRoot `
+                -DiscId      $DiscId `
+                -Path        $move.Target `
+                -Label       $label `
+                -Source      'library' | Out-Null
+        } catch {
+            Write-RipperLog WARN 'PostProcess' "DiscId index write failed (advisory): $($_.Exception.Message)"
+        }
+    }
 
     if ($move.IsReviewQueue) {
         $logFileName = Split-Path -Leaf $LogFile
