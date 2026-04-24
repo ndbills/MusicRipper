@@ -251,3 +251,38 @@ want MusicRipper to re-rip the disc cleanly), delete the matching
 top-level key from the JSON and save. Stale entries (folder no longer
 exists on disk) are filtered out automatically at lookup time, so the
 file is forgiving of out-of-band library changes.
+
+### When should I click "Send to Review" instead of "Rip"? (Phase 5.9)
+The metadata dialog has three buttons: **Rip**, **Send to Review**,
+**Cancel**. Both Rip and Send to Review actually rip the CD; the
+difference is where the finished folder lands and whether the FLACs
+get tagged.
+
+Use **Rip** when the metadata in the dialog is correct -- the rip
+goes straight into the Plex layout under `<LibraryRoot>` with full
+Picard-style tags (album artist sorts, MusicBrainz IDs, ReplayGain,
+embedded cover art, etc.) and gets recorded in the cross-session
+duplicate-disc index.
+
+Use **Send to Review** when:
+- the disc's track titles look wrong and you want to fix them in
+  Picard before they reach Plex,
+- MusicBrainz returned the wrong release and the text-search results
+  weren't right either,
+- the disc is a private/unreleased pressing that needs hand-tagging,
+- you want to compare against a different release before committing
+  the album to the library.
+
+The rip lands in `<LibraryRoot>\_ReviewQueue\USER-REVIEW - <Artist> - <Album> - <DiscId>\`
+with the raw CUETools tags (TITLE/ARTIST/ALBUM/TRACKNUMBER only),
+plus a `REVIEW.txt` describing why it's there and a single-file FLAC
+image you can drag into foobar2000 for inspection. The `USER-REVIEW`
+prefix distinguishes 'I sent this here on purpose' from
+auto-routed `SUSPECT` / `UNKNOWN` / `LOWMATCH` rips. The disc is
+**not** added to the duplicate-disc index, so re-inserting it later
+will offer a fresh metadata search rather than a 'this is already in
+your library' prompt.
+
+When you've finished fixing tags in Picard, promote the album with
+`./src/tools/Move-FromReviewQueue.ps1 <folder>` (or do it by hand;
+the layout is identical to the main library).

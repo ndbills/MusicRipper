@@ -210,3 +210,79 @@ Describe 'Invoke-RipperPostProcess (failure surface)' {
             Should -Throw -ExpectedMessage '*simulated quality-gate failure*'
     }
 }
+
+Describe 'Invoke-RipperPostProcess (-ForceReviewQueue, Phase 5.9)' {
+    BeforeEach {
+        # Quality gate says Verified/Library — exactly the case where
+        # ForceReviewQueue must override and route to ReviewQueue.
+        Mock -CommandName Test-RipQuality -MockWith {
+            [pscustomobject]@{
+                Status        = 'Verified'
+                Destination   = 'Library'
+                RoutingPrefix = ''
+            }
+        }
+        Mock -CommandName Invoke-RipperWriteTags -MockWith { $null }
+        Mock -CommandName Move-RipToLibrary -MockWith {
+            @{
+                Target        = 'C:\Library\_ReviewQueue\USER-REVIEW - Mormon Tabernacle Choir - Spirit of the Season - discABC'
+                IsReviewQueue = $true
+                IsSideBySide  = $false
+                FilesMoved    = 5
+            }
+        }
+        Mock -CommandName Write-RipperReviewTxt          -MockWith { $null }
+        Mock -CommandName New-RipperReviewImage          -MockWith { $null }
+        Mock -CommandName Add-RipperLibraryDiscIndexEntry -MockWith { $null }
+    }
+
+    It 'overrides quality-gate routing to ReviewQueue with USER-REVIEW prefix' {
+        Invoke-RipperPostProcess -RipFolder 'C:\rip' -LogFile 'C:\rip\album.log' `
+            -Metadata (New-FakeMetadata) -DiscId 'discABC' -LibraryRoot 'C:\Library' `
+            -ForceReviewQueue | Out-Null
+        Should -Invoke -CommandName Move-RipToLibrary -Times 1 -Exactly -ParameterFilter {
+            $Quality.Destination -eq 'ReviewQueue' -and $Quality.RoutingPrefix -eq 'USER-REVIEW'
+        }
+    }
+
+    It 'skips library tagging when forced to review' {
+        Invoke-RipperPostProcess -RipFolder 'C:\rip' -LogFile 'C:\rip\album.log' `
+            -Metadata (New-FakeMetadata) -DiscId 'discABC' -LibraryRoot 'C:\Library' `
+            -ForceReviewQueue | Out-Null
+        Should -Invoke -CommandName Invoke-RipperWriteTags -Times 0 -Exactly
+    }
+
+    It 'emits review artifacts (REVIEW.txt + single-file image)' {
+        Invoke-RipperPostProcess -RipFolder 'C:\rip' -LogFile 'C:\rip\album.log' `
+            -Metadata (New-FakeMetadata) -DiscId 'discABC' -LibraryRoot 'C:\Library' `
+            -ForceReviewQueue | Out-Null
+        Should -Invoke -CommandName Write-RipperReviewTxt -Times 1 -Exactly
+        Should -Invoke -CommandName New-RipperReviewImage -Times 1 -Exactly
+    }
+
+    It 'does NOT add the disc to the cross-session DiscId index' {
+        Invoke-RipperPostProcess -RipFolder 'C:\rip' -LogFile 'C:\rip\album.log' `
+            -Metadata (New-FakeMetadata) -DiscId 'discABC' -LibraryRoot 'C:\Library' `
+            -ForceReviewQueue | Out-Null
+        Should -Invoke -CommandName Add-RipperLibraryDiscIndexEntry -Times 0 -Exactly
+    }
+
+    It 'does not double-override when quality already routed to ReviewQueue' {
+        # Suspect rip + ForceReviewQueue: keep the original SUSPECT prefix,
+        # don't replace it with USER-REVIEW (the auto-routing reason is
+        # more useful to the human triaging the queue).
+        Mock -CommandName Test-RipQuality -MockWith {
+            [pscustomobject]@{
+                Status        = 'Suspect'
+                Destination   = 'ReviewQueue'
+                RoutingPrefix = 'SUSPECT'
+            }
+        }
+        Invoke-RipperPostProcess -RipFolder 'C:\rip' -LogFile 'C:\rip\album.log' `
+            -Metadata (New-FakeMetadata) -DiscId 'discABC' -LibraryRoot 'C:\Library' `
+            -ForceReviewQueue | Out-Null
+        Should -Invoke -CommandName Move-RipToLibrary -Times 1 -Exactly -ParameterFilter {
+            $Quality.RoutingPrefix -eq 'SUSPECT'
+        }
+    }
+}

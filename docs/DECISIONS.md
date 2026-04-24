@@ -1032,3 +1032,68 @@ and best-effort failure swallowing.
 
 **Reverse references:** D-017 (the backlog entry that captured the
 problem statement) is now implemented by this decision.
+
+
+## D-019 -- Wire user-driven Send to Review through the rip pipeline (Phase 5.9)
+
+**Status:** Implemented (Phase 5.9).
+**Date:** 2026-04-24.
+
+**Context:** The metadata dialog has had a Send to Review button
+since Phase 3, but its Start-Ripper.ps1 switch arm was a stub: it
+displayed a Phase 3 stub MessageBox and ejected the disc without
+ripping. The intended workflow -- 'I want to fix metadata in Picard
+before this lands in Plex' -- was therefore non-functional.
+
+The supporting plumbing already existed: Invoke-RipperPostProcess,
+Move-RipToLibrary, New-ReviewQueueArtifacts had all handled the
+_ReviewQueue\ path since Phase 5 for *quality-gate-driven* routing
+(SUSPECT/UNKNOWN). Only the user-driven entry point was missing.
+
+**Decision:**
+1. Add a `-ForceReviewQueue` switch to `Invoke-RipperPostProcess`.
+   When set and `Test-RipQuality` reported `Destination=Library`,
+   override to `Destination=ReviewQueue` with a distinct routing
+   prefix `USER-REVIEW` so the folder name distinguishes user
+   intent from auto-quality routing in `_ReviewQueue/`.
+2. If the quality gate already routed to ReviewQueue (Suspect/Unknown),
+   do NOT replace the prefix -- the auto-routing reason is more
+   informative to the human triaging the queue.
+3. Tagging is skipped on the forced review route (same as the
+   auto-routed path): the raw disc state is what a human in Picard
+   wants to see.
+4. The cross-session DiscId index (Phase 5.8) is still NOT updated
+   for review-queue rips, regardless of how they got there. The
+   index represents 'this album is finished and in the library';
+   review-queue entries are drafts.
+5. `Start-Ripper` collapses the `'Rip'` and `'Review'` switch
+   arms into one `{ \$_ -in 'Rip','Review' }` block. The only
+   per-arm difference is a single `\$forceReviewQueue` boolean
+   threaded through to `Invoke-RipperPostProcess`. Sidecar,
+   eject, in-session tracking, and the rip-complete summary
+   dialog are identical (the summary's destination line already
+   reads 'Review queue: ...' because `Quality.Destination` was
+   overridden upstream).
+
+**Why USER-REVIEW (not e.g. MANUAL or DRAFT):** Matches the verb on
+the button (`Send to Review`); short enough to fit Plex/Explorer
+column widths; clearly distinct from the existing `SUSPECT` /
+`UNKNOWN` / `LOWMATCH` prefixes.
+
+**Why keep in-session tracking:** A re-inserted disc that was sent
+to Review still triggers the Phase-5.7 'You already ripped this
+this session' Yes/No prompt. The disc isn't in the durable index
+(D-018), so the in-session check is the only guard. Skipping the
+tracking would silently re-rip on re-insert, which is exactly what
+Phase 5.7 was added to prevent.
+
+**Files changed:**
+- `src/core/Invoke-PostProcess.ps1` -- `-ForceReviewQueue` switch.
+- `src/Start-Ripper.ps1` -- Rip+Review collapsed into one switch arm.
+- `tests/Invoke-PostProcess.Tests.ps1` -- new `ForceReviewQueue`
+  Describe block: routing override, no-double-override, no-tagging,
+  artifacts-emitted, no-index-write.
+- `docs/TROUBLESHOOTING.md` -- when to use Send to Review.
+
+**Reverse references:** Phase 3 stub was introduced by the original
+`confirm-dialog` work; this decision retires the stub.
