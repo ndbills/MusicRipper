@@ -1097,3 +1097,57 @@ Phase 5.7 was added to prevent.
 
 **Reverse references:** Phase 3 stub was introduced by the original
 `confirm-dialog` work; this decision retires the stub.
+
+
+## D-020 -- Honour EjectAfterRip on every disc-disposition path *(Phase 5.10 backlog)*
+
+**Status:** Backlogged for Phase 5.10 (after 5.9 merges).
+**Date:** 2026-04-24.
+
+**Context:** Phase 5.4 added a per-rip `Eject disc when done` checkbox
+in the metadata dialog (sourced from `cfg.EjectAfterRip`) which the
+`Rip`/`Review`/`Cancel` arms in `Start-Ripper.ps1` honour via
+`_maybeEject $choice`. But several earlier short-circuit paths --
+fired before the metadata dialog ever opens -- still call
+`Invoke-RipperEject` unconditionally:
+
+- `Get-RipperDiscId` failure / `NoDisc` (line ~289).
+- Phase-5.8 library duplicate dialog: `Skip` (line ~355) and
+  `default`/unknown action (line ~365).
+- Phase-5.7 in-session duplicate MessageBox: `No` answer (line ~391).
+
+Surfaced during Phase 5.9 verification: `EjectAfterRip = False` in
+config + clicking `No` on the in-session duplicate prompt still
+ejected the disc.
+
+**Decision (deferred):**
+1. The unconditional eject in those paths exists because the user
+   hasn't yet made a per-rip choice (the checkbox lives in the
+   metadata dialog which hasn't opened). Treat `cfg.EjectAfterRip`
+   as the fallback when no per-rip choice exists yet. New helper
+   `_maybeEjectFromConfig` that reads `cfg.EjectAfterRip` (default
+   `True` if missing); replace the four bare `Invoke-RipperEject`
+   calls with it.
+2. Audit other entry points for the same pattern:
+   - `Resume.ps1` orphan-recovery completion path.
+   - Any post-process failure `catch` blocks that eject.
+   - The between-discs dialog `Quit` path.
+   - Tools (`Complete-OrphanedRip`, `Update-AlbumTags`) -- shouldn't
+     touch eject at all, but verify.
+3. Document the contract in a header comment in `Start-Ripper.ps1`:
+   "Anywhere we'd open the tray, defer to `_maybeEject $choice`
+   (per-rip override) or `_maybeEjectFromConfig` (no per-rip choice
+   available)."
+4. Add a small Pester test that asserts `Invoke-RipperEject` is the
+   ONLY function in `src/Start-Ripper.ps1` that calls
+   `[mciSendString]` etc. -- everything else routes through the
+   helpers (regression prevention).
+
+**Why not in Phase 5.9:** 5.9 is scoped to wiring `Send to Review`;
+the eject paths are pre-existing behaviour and unchanged by 5.9. No
+data loss risk -- just a UX inconsistency. Cleanly separable into
+its own small phase.
+
+**Reverse references:** Eject-toggle was introduced in
+`9835d1e feat(eject): per-rip eject toggle in confirm dialog (Phase 5.4)`;
+this decision completes the audit that should have accompanied it.
