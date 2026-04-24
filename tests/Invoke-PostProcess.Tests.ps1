@@ -19,9 +19,10 @@ BeforeAll {
     # then overrides them with the route-specific behavior.
     function script:Test-RipQuality { param($LogPath) }
     function script:Invoke-RipperWriteTags { param($RipFolder,$Metadata,$DiscId,$CoverArtBytes) }
-    function script:Move-RipToLibrary { param($RipFolder,$LibraryRoot,$Metadata,$Quality,$DiscId) }
+    function script:Move-RipToLibrary { param($RipFolder,$LibraryRoot,$Metadata,$Quality,$DiscId,[switch]$AllowSideBySide) }
     function script:Write-RipperReviewTxt { param($ReviewFolder,$Quality,$Metadata,$DiscId,$LogFileName) }
     function script:New-RipperReviewImage { param($ReviewFolder,$Metadata,$DiscId) }
+    function script:Add-RipperLibraryDiscIndexEntry { param($LibraryRoot,$DiscId,$Path,$Label,$Source) }
 
     . (Join-Path $repoRoot 'src\core\Invoke-PostProcess.ps1')
 
@@ -57,11 +58,13 @@ Describe 'Invoke-RipperPostProcess (library route)' {
             @{
                 Target        = 'C:\Library\Mormon Tabernacle Choir\Spirit of the Season (2007)'
                 IsReviewQueue = $false
+                IsSideBySide  = $false
                 FilesMoved    = 5
             }
         }
         Mock -CommandName Write-RipperReviewTxt    -MockWith { $null }
         Mock -CommandName New-RipperReviewImage    -MockWith { $null }
+        Mock -CommandName Add-RipperLibraryDiscIndexEntry -MockWith { $null }
     }
 
     It 'returns Quality, Move, Target, IsReviewQueue' {
@@ -112,6 +115,33 @@ Describe 'Invoke-RipperPostProcess (library route)' {
             -not $PSBoundParameters.ContainsKey('CoverArtBytes')
         }
     }
+
+    It 'records the rip in the cross-session DiscId index (Phase 5.8)' {
+        Invoke-RipperPostProcess -RipFolder 'C:\rip' -LogFile 'C:\rip\album.log' `
+            -Metadata (New-FakeMetadata) -DiscId 'discABC' -LibraryRoot 'C:\Library' | Out-Null
+        Should -Invoke -CommandName Add-RipperLibraryDiscIndexEntry -Times 1 -Exactly -ParameterFilter {
+            $DiscId -eq 'discABC' -and
+            $Path -eq 'C:\Library\Mormon Tabernacle Choir\Spirit of the Season (2007)' -and
+            $Label -eq 'Mormon Tabernacle Choir - Spirit of the Season (2007)' -and
+            $Source -eq 'library'
+        }
+    }
+
+    It 'forwards -AllowSideBySide to Move-RipToLibrary' {
+        Invoke-RipperPostProcess -RipFolder 'C:\rip' -LogFile 'C:\rip\album.log' `
+            -Metadata (New-FakeMetadata) -DiscId 'discABC' -LibraryRoot 'C:\Library' `
+            -AllowSideBySide | Out-Null
+        Should -Invoke -CommandName Move-RipToLibrary -Times 1 -Exactly -ParameterFilter {
+            $AllowSideBySide -eq $true
+        }
+    }
+
+    It 'swallows index-write failures (best effort)' {
+        Mock -CommandName Add-RipperLibraryDiscIndexEntry -MockWith { throw 'simulated NAS write failure' }
+        { Invoke-RipperPostProcess -RipFolder 'C:\rip' -LogFile 'C:\rip\album.log' `
+            -Metadata (New-FakeMetadata) -DiscId 'discABC' -LibraryRoot 'C:\Library' } |
+            Should -Not -Throw
+    }
 }
 
 Describe 'Invoke-RipperPostProcess (review route)' {
@@ -128,11 +158,13 @@ Describe 'Invoke-RipperPostProcess (review route)' {
             @{
                 Target        = 'C:\Library\_ReviewQueue\SUSPECT - X - Y - z'
                 IsReviewQueue = $true
+                IsSideBySide  = $false
                 FilesMoved    = 5
             }
         }
         Mock -CommandName Write-RipperReviewTxt    -MockWith { $null }
         Mock -CommandName New-RipperReviewImage    -MockWith { $null }
+        Mock -CommandName Add-RipperLibraryDiscIndexEntry -MockWith { $null }
     }
 
     It 'reports IsReviewQueue=$true and the review-queue target' {
@@ -161,6 +193,12 @@ Describe 'Invoke-RipperPostProcess (review route)' {
         Should -Invoke -CommandName Write-RipperReviewTxt -Times 1 -Exactly -ParameterFilter {
             $LogFileName -eq 'My Album.log'
         }
+    }
+
+    It 'does NOT index review-queue rips (Phase 5.8)' {
+        Invoke-RipperPostProcess -RipFolder 'C:\rip' -LogFile 'C:\rip\album.log' `
+            -Metadata (New-FakeMetadata) -DiscId 'discABC' -LibraryRoot 'C:\Library' | Out-Null
+        Should -Invoke -CommandName Add-RipperLibraryDiscIndexEntry -Times 0 -Exactly
     }
 }
 

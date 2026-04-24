@@ -123,10 +123,12 @@ function Show-RipperBetweenDiscsDialog {
 
     <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
       <Button x:Name="QuitButton"     Content="Quit"
-              Width="120" Height="34" Margin="0,0,10,0"/>
+              Width="120" Height="34" Margin="0,0,10,0"
+              ToolTip="Stop ripping and close MusicRipper."/>
       <Button x:Name="RipNextButton"  Content="Rip Next Disc"
               Width="160" Height="34" IsDefault="True"
-              Background="#0a7" Foreground="White" FontWeight="Bold"/>
+              Background="#0a7" Foreground="White" FontWeight="Bold"
+              ToolTip="Continue with the next CD. Insert it into the drive when prompted."/>
     </StackPanel>
   </Grid>
 </Window>

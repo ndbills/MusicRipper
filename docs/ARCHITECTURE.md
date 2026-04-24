@@ -59,11 +59,13 @@ the first thing to update.
 | `src/core/Write-Tags.ps1`          | 5     | Vorbis tags, ReplayGain, embedded cover via metaflac.   |
 | `src/core/Move-ToLibrary.ps1`      | 5     | Plex layout + sanitization + `_ReviewQueue/` routing.   |
 | `src/core/New-ReviewQueueArtifacts.ps1` | 5 | `REVIEW.txt` + single-file `_image/<Album>.flac+cue`. |
+| `src/core/Get-LibraryDiscIndex.ps1` | 5.8  | Read/write the `<LibraryRoot>\.musicripper\discids.json` cross-session DiscId index. |
 | `src/postprocessors/*.ps1`         | 6     | Optional OneDrive / Synology mirror.                   |
 | `src/tools/Move-FromReviewQueue.ps1` | 7   | Promote a fixed-up review-queue album into the library. |
 | `src/tools/Complete-OrphanedRip.ps1` | 5   | Manual finish for an orphaned rip folder (sidecar or `-DiscId`). |
 | `src/tools/Show-FlacTags.ps1`      | 5     | Dump Vorbis comments + PICTURE summary for a file/folder. |
 | `src/tools/Update-AlbumTags.ps1`   | 5     | Re-tag an existing album in place; looks up MB by ALBUMID/DISCID/text. |
+| `src/tools/Build-LibraryDiscIndex.ps1` | 5.8 | One-shot seed of `discids.json` from existing library FLACs (uses MUSICBRAINZ_DISCID tag). |
 | `Install-MusicRipper.ps1` (root)   | 7     | One-shot self-installer.                               |
 
 ## State on disk
@@ -74,6 +76,13 @@ the first thing to update.
 ├── credentials.clixml    # DPAPI-protected NAS PSCredential, if any
 └── logs\                 # one .log per setup or rip run
     └── <yyyyMMdd-HHmmss>-<context>.log
+
+<LibraryRoot>\
+└── .musicripper\
+    └── discids.json      # Phase 5.8: DiscId -> {Path, Label, RippedAt, Source}
+                          # cross-session duplicate-rip index.
+                          # Auto-populated on every successful rip; seed an
+                          # existing library with src/tools/Build-LibraryDiscIndex.ps1.
 ```
 
 ## Cross-cutting policies

@@ -197,3 +197,57 @@ By default the tool also preserves each file's `LastWriteTime` and
 timestamps of tagged files" option). Pass `-PreserveTimestamps:$false`
 if you actually want the OS to bump the mtimes (e.g. so a sync tool
 re-uploads).
+
+### "I re-inserted a CD I already ripped — what should happen?"
+Phase 5.8 added cross-session duplicate detection. Every successful
+rip records its MusicBrainz disc id in
+`<LibraryRoot>\.musicripper\discids.json`. When you insert a disc that
+already has an entry there, you get a three-way prompt before any
+ripping starts:
+
+- **Skip rip** — eject and return to the disc-insert screen (default
+  on Esc / window close).
+- **Open folder...** — open the existing album in Explorer so you can
+  confirm it's the same album (the dialog stays open).
+- **Rip again (keep both)** — re-rip the disc side-by-side. The new
+  copy lands in `<Album> (<Year>) [rip 2]` (then `[rip 3]`, etc.) so
+  it never overwrites the original. Square brackets are used so Plex's
+  year heuristic doesn't get confused.
+
+If MusicRipper *doesn't* warn you about a disc you know is already in
+the library, see the next section about seeding.
+
+### Seeding the duplicate-disc index for a pre-existing library
+The `discids.json` index is built up automatically as you rip discs
+with Phase 5.8 or later. If you already have a library full of FLACs
+ripped with an earlier version (or with Picard / EAC), seed it once:
+
+```powershell
+./src/tools/Build-LibraryDiscIndex.ps1
+```
+
+It walks `<LibraryRoot>` (skips `_ReviewQueue\` and `.musicripper\`),
+reads the `MUSICBRAINZ_DISCID` Vorbis tag from one FLAC per album
+folder, and writes one entry per disc into `discids.json`. By default
+it merges with whatever's already there; pass `-Force` to wipe and
+rebuild from scratch. Pass `-LibraryRoot <path>` to point at a
+specific tree instead of the one in your `config.json`.
+
+Albums without a `MUSICBRAINZ_DISCID` tag are skipped (they can't
+participate in duplicate detection until they're re-tagged with
+`./src/tools/Update-AlbumTags.ps1`). Multi-disc releases get one
+entry per disc.
+
+### "How do I see what's in the duplicate-disc index?"
+It's a plain JSON file you can open in any editor:
+
+```powershell
+Get-Content "$((Import-RipperConfig).LibraryRoot)\.musicripper\discids.json" |
+    ConvertFrom-Json
+```
+
+To remove an entry (e.g., you deleted the album folder by hand and
+want MusicRipper to re-rip the disc cleanly), delete the matching
+top-level key from the JSON and save. Stale entries (folder no longer
+exists on disk) are filtered out automatically at lookup time, so the
+file is forgiving of out-of-band library changes.

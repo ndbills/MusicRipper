@@ -946,3 +946,89 @@ and survives Synology snapshot/restore.
 behaviour (no detection), never block the rip.
 
 **Estimate:** Small-to-medium. A focused half-day plus tests.
+
+
+---
+
+## D-018 — Cross-session duplicate-rip detection (Phase 5.8)
+
+**Status:** Implemented. Realises the F-1 layer of D-017.
+
+**What it does:** Before any disc is ripped, MusicRipper consults a
+durable JSON index at `<LibraryRoot>\.musicripper\discids.json` mapping
+DiscId -> { Path, Label, RippedAt, Source }. On a hit (and the
+recorded folder still exists), a polished WPF dialog
+(`Show-RipperDuplicateDiscDialog`) offers three actions:
+
+- **Skip rip** (default + Esc): eject + return to between-discs.
+- **Open folder...**: `Invoke-Item` the prior album path; dialog
+  stays open so the parent can decide after looking.
+- **Rip again (keep both)**: proceed with the rip; the new copy
+  lands side-by-side as `<Album> (<Year>) [rip 2]` (then `[rip 3]`
+  ...) via `Move-RipToLibrary -AllowSideBySide`.
+
+**Why the index file (vs. `Test-Path` on the destination):** the
+album folder layout depends on metadata that hasn't been resolved yet
+at the early-check point; we want to short-circuit before paying the
+~5s metadata round-trip. The index keys on DiscId, which is known the
+moment `Get-DiscId` returns. The slow-path `Test-Path` collision is
+still caught by `Move-RipToLibrary`'s "target exists" throw at the
+end of the rip -- belt and braces.
+
+**Why JSON (vs. SQLite, walking the tree):** O(1) lookup, no native
+dependency, survives Synology snapshots, human-inspectable. Library
+size doesn't matter -- index size is one line per album, growing at
+the rate of the user's ripping cadence.
+
+**Square brackets in the side-by-side suffix:** `[rip N]` because
+Plex's filename heuristics treat parenthesised tokens like `(2)` as
+year/disambiguation, but ignore square-bracket tokens. Verified on
+the Plex naming spec.
+
+**Index hygiene:**
+- Only `Library` moves are indexed; `_ReviewQueue` items stay out
+  until they're approved into the real library (future work).
+- Stale entries (folder deleted/moved) return `$null` from
+  `Find-RipperLibraryDiscIndexEntry` so the dialog only fires on
+  actionable hits.
+- Read errors (corrupt JSON, missing file, NAS unreachable) degrade
+  to "no record found" with a WARN log -- the index is advisory
+  and never blocks a rip.
+- Writes are atomic: `Set-Content` to `<file>.tmp`, `Move-Item` to
+  the real path; failure cleans the tmp.
+- Index writes from `Invoke-RipperPostProcess` are best-effort
+  (try/catch -> WARN). A NAS write failure must not undo the move
+  -- the rip is already on disk.
+
+**Optional seeding tool:** `src/tools/Build-LibraryDiscIndex.ps1`
+walks the library, reads `MUSICBRAINZ_DISCID` via `metaflac`, and
+populates the index. Idempotent (skips entries already present
+unless `-Force`). Not required by the runtime: the index will fill
+itself one rip at a time. Surfaced for users who want detection of
+existing albums right away.
+
+**Tests:** 11 Pester cases in `tests/Get-LibraryDiscIndex.Tests.ps1`
+cover round-trip, corruption recovery, stale-entry filtering,
+upsert, multi-entry preservation, and missing-file behaviour. Plus
+two new `tests/Move-ToLibrary.Tests.ps1` cases for `[rip 2]` /
+`[rip 3]` selection, and three new `tests/Invoke-PostProcess.Tests.ps1`
+cases for index-write call shape, `-AllowSideBySide` forwarding,
+and best-effort failure swallowing.
+
+**Files added:**
+- `src/core/Get-LibraryDiscIndex.ps1` -- read/write/find primitives.
+- `src/ui/Show-DuplicateDiscDialog.ps1` -- WPF three-way prompt.
+- `src/tools/Build-LibraryDiscIndex.ps1` -- optional one-shot
+  rebuild from `MUSICBRAINZ_DISCID` tags.
+- `tests/Get-LibraryDiscIndex.Tests.ps1`.
+
+**Files changed:**
+- `src/core/Move-ToLibrary.ps1` -- new `-AllowSideBySide` switch +
+  `IsSideBySide` field on the result.
+- `src/core/Invoke-PostProcess.ps1` -- writes the index on
+  `Library` route (best-effort), forwards `-AllowSideBySide`.
+- `src/Start-Ripper.ps1` -- early dup-check + side-by-side flag
+  threaded into the post-process call.
+
+**Reverse references:** D-017 (the backlog entry that captured the
+problem statement) is now implemented by this decision.
