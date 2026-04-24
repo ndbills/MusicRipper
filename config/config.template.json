@@ -24,5 +24,17 @@
   "SynologySyncReviewQueue": false,
 
   "//HasSynologyCredential":   "Flag only — true means a DPAPI-protected PSCredential is on disk in credentials.clixml.",
-  "HasSynologyCredential": false
+  "HasSynologyCredential": false,
+
+"//MetadataProviders":       "Ordered list of disc-id metadata sources tried in priority order. Phase 5.2: MusicBrainz (curated, canonical) then CuetoolsDb (community-submitted) then GnuDb (legacy freedb/CDDB catalog, huge coverage of older and community-submitted discs). When two or more return matches, an extra synthesized 'Merged (...)' candidate is prepended (earlier providers win on conflict, later ones fill nulls). Available: 'MusicBrainz', 'CuetoolsDb', 'GnuDb'. Note: the 'Search by text...' fallback dialog also surfaces text-search-only providers (iTunesSearch, Deezer) regardless of this list.",
+    "MetadataProviders": ["MusicBrainz", "CuetoolsDb", "GnuDb"],
+
+  "//CoverArtProviders":       "Ordered list of cover-art sources. First non-empty bytes win. CoverArtArchive needs a release MBID (so really only fires for MB-derived candidates); iTunesSearch + Deezer fall back to artist+album text search. All three are free / no auth.",
+  "CoverArtProviders": ["CoverArtArchive", "iTunesSearch", "Deezer"],
+
+  "//EjectAfterRip":           "Phase 5.4: if true, eject the disc after the rip / review / cancel flow finishes. Default true preserves the parent-friendly batch behaviour. The confirm dialog also exposes a per-rip checkbox seeded from this value.",
+  "EjectAfterRip": true,
+
+  "//ContinuousMode":          "Phase 5.7: if true, MusicRipper keeps running after each disc and shows a between-discs dialog (Rip Next / Quit). Inserting a new disc auto-selects Rip Next. Default true so a parent can rip a stack of CDs without re-launching (one UAC prompt per session). Set false to restore the one-disc-per-launch flow.",
+  "ContinuousMode": true
 }

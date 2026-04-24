@@ -257,7 +257,7 @@ function Show-RipperRipProgress {
     # key. Simpler than a ManualResetEvent for our "latest wins" progress
     # pattern.
     $state = [hashtable]::Synchronized(@{
-        Cancel         = $false        # UI -> rip
+        Cancel         = $false        # UI -> rip (read live by the rip runspace via a scriptblock callback)
         Progress       = $null         # rip -> UI (hashtable from Invoke-RipperRip OnProgress)
         RipResult      = $null         # rip -> UI, set at end
         RipError       = $null         # rip -> UI if it threw
@@ -302,14 +302,18 @@ function Show-RipperRipProgress {
                 # exactly what we want for a 10 Hz readout.
                 $state['Progress'] = $payload
             }
-            $cancelHolder = ,$false
-            $cancelRef    = [ref]$cancelHolder[0]
+            # Cancellation: pass a scriptblock so the rip loop reads the
+            # live $state['Cancel'] flag every iteration. A [ref] would
+            # snapshot the boolean (PowerShell's [ref] of an indexed value
+            # captures the current value, not a live address), so the UI
+            # thread's flip would never be visible inside the rip.
+            $cancelCheck = { [bool]$state['Cancel'] }.GetNewClosure()
             $r = Invoke-RipperRip `
                     -DiscIdInfo $DiscIdInfo `
                     -Metadata $Metadata `
                     -OutputRoot $OutputRoot `
                     -OnProgress $progressCb `
-                    -CancelRequested $cancelRef `
+                    -CancelRequested $cancelCheck `
                     -ContactNetwork $ContactNetwork
             $state['RipResult'] = $r
         } catch {

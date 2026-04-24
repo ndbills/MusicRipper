@@ -23,7 +23,7 @@ OneDrive and Synology NAS sync post-processors.
 | 2     | Disc identification & metadata           | ✅ complete    |
 | 3     | Confirmation UI                          | ✅ complete    |
 | 4     | Rip engine                               | ✅ complete    |
-| 5     | Quality gate, tagging, library layout    | ⏳ not started |
+| 5     | Quality gate, tagging, library layout    | ✅ complete    |
 | 6     | Optional post-processors (OneDrive, NAS) | ⏳ not started |
 | 7     | Polish, packaging, parent-friendly UX    | ⏳ not started |
 
@@ -39,15 +39,18 @@ After that, the Desktop shortcut **"Rip a CD"** is the entry point.
 It identifies the disc, queries MusicBrainz, pops the confirm dialog,
 and (on **Rip**) performs a secure FLAC rip with live progress, an
 AccurateRip / CTDB verification pass, and an EAC-style CUE + log.
-Ripped albums stage to `<LibraryRoot>\_inbox\` until Phase 5 routes
-them to the library or `_ReviewQueue/`.
+Clean rips are tagged (full Vorbis set + embedded cover + ReplayGain)
+and filed under `<LibraryRoot>\<AlbumArtist>\<Album> (<Year>)\`.
+Suspect rips, low-confidence MusicBrainz matches, and unknown discs
+route to `<LibraryRoot>\_ReviewQueue\` with a `REVIEW.txt` and a
+single-file `_image\<Album>.flac` for inspection.
 
 ## Directory map
 
 ```
 MusicRipper/
 ├── setup/                          # One-time, run as admin
-│   ├── Install-Dependencies.ps1    # winget: PS7, CUETools, Picard
+│   ├── Install-Dependencies.ps1    # winget: PS7, CUETools, Xiph.FLAC, Picard
 │   ├── Register-Drive.ps1          # Detect drive + AccurateRip offset
 │   ├── New-RipperConfig.ps1        # Create per-machine config.json
 │   └── Install-Shortcut.ps1        # Desktop shortcut "Rip a CD"

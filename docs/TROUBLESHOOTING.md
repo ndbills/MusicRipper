@@ -83,3 +83,206 @@ No internet, MusicBrainz is down (`https://status.musicbrainz.org`),
 or the rate limit kicked in. Tool retries on the next disc; the
 current disc still rips (Phase 5+) but goes to `_ReviewQueue/` with
 placeholder tags.
+
+## Tagging & library files (Phase 5)
+
+### Why does Phase 5 "re-tag" files that already have tags?
+CUETools' encoder writes a **minimal** Vorbis comment block during the
+rip (TITLE / ARTIST / ALBUM / TRACKNUMBER) — enough to identify the
+file in isolation, not enough for a real music library. Phase 5
+(`src/core/Write-Tags.ps1`) wipes those minimal tags and writes the
+full Plex/MusicBrainz Picard set:
+
+- `ALBUMARTIST` (Plex needs this distinct from `ARTIST` for compilation
+  grouping; without it, every track on a Various Artists disc shows up
+  as a separate "album" in your library).
+- `ALBUMARTISTS` / `ARTISTS` — multi-value forms (one tag line per
+  credited artist, no joinphrases). Picard always writes these.
+- `ALBUMARTISTSORT` / `ARTISTSORT` — sort-name forms so clients file
+  "The Beatles" under B and "Lowell Mason" under M.
+- `TRACKTOTAL`, `DISCNUMBER`, `DISCTOTAL` (multi-disc set support).
+- `DATE`, `ORIGINALDATE`, `ORIGINALYEAR`, `GENRE`, `COMPILATION`.
+- `RELEASESTATUS`, `RELEASETYPE`, `RELEASECOUNTRY`, `SCRIPT`,
+  `LANGUAGE`, `MEDIA`, `LABEL`, `CATALOGNUMBER`, `BARCODE`, `ASIN` —
+  the full Picard release-level descriptor set.
+- `MUSICBRAINZ_DISCID`, `MUSICBRAINZ_ALBUMID`, `MUSICBRAINZ_ALBUMARTISTID`,
+  `MUSICBRAINZ_ARTISTID`, `MUSICBRAINZ_TRACKID` (recording id),
+  `MUSICBRAINZ_RELEASETRACKID` (per-release track id; Picard's
+  confusingly-named "MusicBrainz Track Id"), `MUSICBRAINZ_RELEASEGROUPID`
+  — so Picard / Plex can re-match without re-querying MusicBrainz.
+- Embedded `PICTURE` block (front cover) on every track. The
+  `cover.jpg` sidecar alone is not enough; Plex mobile/Roku display
+  the embedded picture, not the sidecar.
+- `REPLAYGAIN_TRACK_GAIN/PEAK` per track + `REPLAYGAIN_ALBUM_GAIN/PEAK`
+  across the disc. CUETools has **no .NET API** for ReplayGain at all;
+  if you skip Phase 5, volume normalization in Plex/foobar2000 will
+  not work.
+
+This is exactly what you'd do by dragging the rip folder into
+MusicBrainz Picard after a CUETools / EAC rip — most online "rip for
+Plex" guides assume you'll do the Picard step manually. We just
+automated it.
+
+### Windows Explorer shows blank Title/Artist/Album columns
+Windows 11's built-in FLAC property handler is unreliable and
+frequently shows blank columns even when the tags are perfectly
+written. F5 won't help — there is no cache to invalidate, the handler
+just doesn't read those Vorbis comment layouts.
+
+Verify the file is actually fine:
+
+```powershell
+./src/tools/Show-FlacTags.ps1 'E:\digitize\MusicRipper\<artist>\<album>'
+```
+
+If that prints a populated 20-line VORBIS_COMMENT block, the file is
+golden — Plex, foobar2000, MusicBee, Picard, VLC, MediaInfo will all
+read it correctly.
+
+To also fix Explorer, install [Icaros](https://shark007.net/Icaros.html)
+(free shell extension; gives FLAC files real Title/Album/Artist/Length
+columns and album-art thumbnails). This is a Windows-side cosmetic
+fix; nothing to change in MusicRipper.
+
+### "My rip crashed mid-flow — what happens to the partial folder?"
+Commit C added a `_ripper-state.json` sidecar that's written after the
+rip completes but before post-process moves the folder. On the next
+launch of `Start-Ripper.ps1`, the orphan-recovery prompt offers to
+finish those rips automatically (Yes = process all / No = skip /
+Cancel = quit).
+
+For pre-sidecar orphans (rips from before commit C, or sidecars
+manually deleted), use the manual tool:
+
+```powershell
+./src/tools/Complete-OrphanedRip.ps1 `
+    -RipFolder 'E:\digitize\MusicRipper\_inbox\<orphan folder>' `
+    -DiscId    '<musicbrainz disc id>'
+```
+
+The MusicBrainz disc id is in the first few lines of the rip log
+inside the orphan folder, and on `https://musicbrainz.org/cdtoc/<id>`.
+
+### "An older rip is missing tags Picard would set (sort names, ASIN, etc.)"
+The Phase-5 tag set has grown over time. Older rips were tagged
+against an earlier schema and are missing fields like `ALBUMARTISTSORT`,
+`ARTISTS`, `MEDIA`, `MUSICBRAINZ_RELEASETRACKID`, `ORIGINALDATE`,
+`RELEASESTATUS`, `LABEL`, etc. To bring an existing album up to the
+current schema without re-ripping the disc:
+
+```powershell
+./src/tools/Update-AlbumTags.ps1 'E:\digitize\MusicRipper\<artist>\<album>'
+```
+
+Lookup ladder (first hit wins, all rate-limited per MusicBrainz's
+1 req/sec policy):
+
+1. `-ReleaseMbid <mbid>` argument (explicit override)
+2. `MUSICBRAINZ_ALBUMID` tag on track 1 (preferred)
+3. `MUSICBRAINZ_DISCID` tag on track 1
+4. Text search on `ALBUMARTIST` + `ALBUM` (best-effort fallback)
+
+Audio is never re-encoded — `metaflac` edits in place against the
+padding the encoder reserved at rip time. Cover art is preserved by
+default; pass `-RefreshCoverArt` to also re-pull from Cover Art
+Archive. Pass `-SkipReplayGain` if you don't need the analysis pass
+to re-run.
+
+If the tool refuses with a track-count mismatch, that usually means a
+multi-disc release whose `MUSICBRAINZ_DISCID` tag is missing or wrong.
+Re-run with an explicit `-ReleaseMbid` pointing at the correct medium.
+
+By default the tool also preserves each file's `LastWriteTime` and
+`CreationTime` across the rewrite (matches Picard's "Preserve
+timestamps of tagged files" option). Pass `-PreserveTimestamps:$false`
+if you actually want the OS to bump the mtimes (e.g. so a sync tool
+re-uploads).
+
+### "I re-inserted a CD I already ripped — what should happen?"
+Phase 5.8 added cross-session duplicate detection. Every successful
+rip records its MusicBrainz disc id in
+`<LibraryRoot>\.musicripper\discids.json`. When you insert a disc that
+already has an entry there, you get a three-way prompt before any
+ripping starts:
+
+- **Skip rip** — eject and return to the disc-insert screen (default
+  on Esc / window close).
+- **Open folder...** — open the existing album in Explorer so you can
+  confirm it's the same album (the dialog stays open).
+- **Rip again (keep both)** — re-rip the disc side-by-side. The new
+  copy lands in `<Album> (<Year>) [rip 2]` (then `[rip 3]`, etc.) so
+  it never overwrites the original. Square brackets are used so Plex's
+  year heuristic doesn't get confused.
+
+If MusicRipper *doesn't* warn you about a disc you know is already in
+the library, see the next section about seeding.
+
+### Seeding the duplicate-disc index for a pre-existing library
+The `discids.json` index is built up automatically as you rip discs
+with Phase 5.8 or later. If you already have a library full of FLACs
+ripped with an earlier version (or with Picard / EAC), seed it once:
+
+```powershell
+./src/tools/Build-LibraryDiscIndex.ps1
+```
+
+It walks `<LibraryRoot>` (skips `_ReviewQueue\` and `.musicripper\`),
+reads the `MUSICBRAINZ_DISCID` Vorbis tag from one FLAC per album
+folder, and writes one entry per disc into `discids.json`. By default
+it merges with whatever's already there; pass `-Force` to wipe and
+rebuild from scratch. Pass `-LibraryRoot <path>` to point at a
+specific tree instead of the one in your `config.json`.
+
+Albums without a `MUSICBRAINZ_DISCID` tag are skipped (they can't
+participate in duplicate detection until they're re-tagged with
+`./src/tools/Update-AlbumTags.ps1`). Multi-disc releases get one
+entry per disc.
+
+### "How do I see what's in the duplicate-disc index?"
+It's a plain JSON file you can open in any editor:
+
+```powershell
+Get-Content "$((Import-RipperConfig).LibraryRoot)\.musicripper\discids.json" |
+    ConvertFrom-Json
+```
+
+To remove an entry (e.g., you deleted the album folder by hand and
+want MusicRipper to re-rip the disc cleanly), delete the matching
+top-level key from the JSON and save. Stale entries (folder no longer
+exists on disk) are filtered out automatically at lookup time, so the
+file is forgiving of out-of-band library changes.
+
+### When should I click "Send to Review" instead of "Rip"? (Phase 5.9)
+The metadata dialog has three buttons: **Rip**, **Send to Review**,
+**Cancel**. Both Rip and Send to Review actually rip the CD; the
+difference is where the finished folder lands and whether the FLACs
+get tagged.
+
+Use **Rip** when the metadata in the dialog is correct -- the rip
+goes straight into the Plex layout under `<LibraryRoot>` with full
+Picard-style tags (album artist sorts, MusicBrainz IDs, ReplayGain,
+embedded cover art, etc.) and gets recorded in the cross-session
+duplicate-disc index.
+
+Use **Send to Review** when:
+- the disc's track titles look wrong and you want to fix them in
+  Picard before they reach Plex,
+- MusicBrainz returned the wrong release and the text-search results
+  weren't right either,
+- the disc is a private/unreleased pressing that needs hand-tagging,
+- you want to compare against a different release before committing
+  the album to the library.
+
+The rip lands in `<LibraryRoot>\_ReviewQueue\USER-REVIEW - <Artist> - <Album> - <DiscId>\`
+with the raw CUETools tags (TITLE/ARTIST/ALBUM/TRACKNUMBER only),
+plus a `REVIEW.txt` describing why it's there and a single-file FLAC
+image you can drag into foobar2000 for inspection. The `USER-REVIEW`
+prefix distinguishes 'I sent this here on purpose' from
+auto-routed `SUSPECT` / `UNKNOWN` / `LOWMATCH` rips. The disc is
+**not** added to the duplicate-disc index, so re-inserting it later
+will offer a fresh metadata search rather than a 'this is already in
+your library' prompt.
+
+When you've finished fixing tags in Picard, promote the album with
+`./src/tools/Move-FromReviewQueue.ps1 <folder>` (or do it by hand;
+the layout is identical to the main library).

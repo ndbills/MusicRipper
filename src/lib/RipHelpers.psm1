@@ -54,21 +54,30 @@ function New-RipperTrackFileName {
     Build a Windows-safe per-track FLAC filename for one track of an album.
 
 .DESCRIPTION
-    Output pattern (matches the de-facto standard most music libraries
-    expect: Plex, Navidrome, Jellyfin, Foobar):
+    Output pattern (matches the Plex naming convention
+    https://support.plex.tv/articles/200265296-adding-music-media-from-folders/):
 
-        "<NN> - <Title>.flac"                       (single-artist album)
-        "<NN> - <Artist> - <Title>.flac"            (compilation: per-track
-                                                     artist differs from
-                                                     the album artist)
+        "<NN> - <Title>.flac"           (single-disc)
+        "<D><NN> - <Title>.flac"        (multi-disc; e.g. 101 / 202 / 1015)
+
+    Per-track artist is NEVER embedded in the filename, even on
+    compilations. Plex (and Navidrome / Jellyfin / Foobar) reads the
+    per-track artist from the ARTIST Vorbis tag, not the filename.
+    Their own example for `Guardians of the Galaxy - Awesome Mix Vol. 1`
+    shows plain `01 - Hooked On A Feeling.mp3`.
 
     Where:
+        D      = disc number (omitted entirely when TotalDiscs <= 1).
+                 Width = digits in TotalDiscs, minimum 1. So a 2-disc
+                 set gets "1"/"2"; a 12-disc box set gets "01".."12".
         NN     = zero-padded track number (width = digits in TotalTracks,
                  minimum 2). So a 9-track album gets "01..09"; a 12-track
                  album gets "01..12"; a 100-track box set gets "001..100".
         Title  = the user-confirmed track title (post-sanitization).
-        Artist = the user-confirmed per-track artist (post-sanitization),
-                 only included when -IsCompilation is set.
+
+    Plex's exact multi-disc example: "/Pink Floyd/The Wall/101 - In the Flesh.mp3",
+    "102 - The Thin Ice.mp3", "201 - Hey You.mp3" — all flat at album root,
+    no Disc N\ subfolder.
 
     Sanitization rules (per-segment, applied to Artist and Title separately
     so a slash in a title can't escape into the path):
@@ -93,23 +102,29 @@ function New-RipperTrackFileName {
     Total audio tracks on the disc (controls zero-padding width).
 
 .PARAMETER Artist
-    Per-track artist (post-edit). Only used when -IsCompilation is set.
+    Accepted but ignored. Retained for backward-compatibility with
+    callers built before the Plex-spec alignment; the per-track artist
+    belongs in the ARTIST Vorbis tag, not the filename.
 
 .PARAMETER IsCompilation
-    Switch. When set, prepends "<Artist> - " between the track number and
-    the title. Mirrors the disc's IsCompilation flag in the metadata
-    object — but we accept it as an explicit parameter (not derived) so
-    a caller who wants per-track-artist filenames on a non-compilation
-    can opt in.
+    Accepted but ignored. See -Artist.
+
+.PARAMETER DiscNumber
+    1-based disc number for multi-disc sets. Ignored when TotalDiscs
+    is not supplied or is <= 1.
+
+.PARAMETER TotalDiscs
+    Total disc count for multi-disc sets. When > 1, the disc number is
+    prepended to the track number (Plex spec).
 
 .EXAMPLE
     PS> New-RipperTrackFileName -TrackNumber 3 -Title 'Hey Jude' -TotalTracks 12
     03 - Hey Jude.flac
 
 .EXAMPLE
-    PS> New-RipperTrackFileName -TrackNumber 1 -Title 'AC/DC: Live' `
-            -TotalTracks 9 -Artist 'AC/DC' -IsCompilation
-    01 - AC DC - AC DC  Live.flac
+    PS> New-RipperTrackFileName -TrackNumber 5 -Title 'Hey You' `
+            -TotalTracks 13 -DiscNumber 2 -TotalDiscs 2
+    205 - Hey You.flac
 #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -118,21 +133,24 @@ function New-RipperTrackFileName {
         [Parameter(Mandatory)] [AllowEmptyString()] [string]$Title,
         [Parameter(Mandatory)] [ValidateRange(1, 9999)] [int]$TotalTracks,
         [string]$Artist,
-        [switch]$IsCompilation
+        [switch]$IsCompilation,
+        [ValidateRange(1, 999)] [int]$DiscNumber = 1,
+        [ValidateRange(1, 999)] [int]$TotalDiscs = 1
     )
 
-    $width  = [Math]::Max(2, ([string]$TotalTracks).Length)
-    $numStr = $TrackNumber.ToString("D$width")
+    $trackWidth = [Math]::Max(2, ([string]$TotalTracks).Length)
+    $trackStr   = $TrackNumber.ToString("D$trackWidth")
 
-    $titleSafe  = _SanitizeTrackField -Value $Title
-    $parts = @($numStr, '-', $titleSafe)
-
-    if ($IsCompilation) {
-        $artistSafe = _SanitizeTrackField -Value $Artist
-        $parts = @($numStr, '-', $artistSafe, '-', $titleSafe)
+    $numStr = if ($TotalDiscs -gt 1) {
+        $discWidth = ([string]$TotalDiscs).Length
+        $discStr   = $DiscNumber.ToString("D$discWidth")
+        "$discStr$trackStr"
+    } else {
+        $trackStr
     }
 
-    "$($parts -join ' ').flac"
+    $titleSafe = _SanitizeTrackField -Value $Title
+    "$numStr - $titleSafe.flac"
 }
 
 function _SanitizeTrackField {

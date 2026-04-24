@@ -140,6 +140,34 @@ function New-RipperConfigObject {
         # True iff a PSCredential is on disk in credentials.clixml (DPAPI).
         # Flag only — never store the cleartext or even the username here.
         HasSynologyCredential   = $false
+
+        # Phase 5.2: ordered metadata-provider chain. MusicBrainz is the
+        # canonical curated source; CTDB carries community-submitted
+        # metadata for releases MB has never indexed. The orchestrator
+        # synthesizes a "Merged (MB + CTDB)" candidate when both return
+        # matches (MB wins on conflict, CTDB fills nulls).
+        MetadataProviders       = @('MusicBrainz', 'CuetoolsDb', 'GnuDb')
+
+        # Phase 5.2: ordered cover-art provider chain. First non-empty
+        # bytes win. CAA needs an MB ReleaseMbid; iTunes/Deezer fall back
+        # to artist+album text search. All three are free / no auth.
+        CoverArtProviders       = @('CoverArtArchive', 'iTunesSearch', 'Deezer')
+
+        # Phase 5.4: eject the optical drive after the rip / review /
+        # cancel flow finishes. Default true preserves the existing
+        # parent-friendly batch behaviour. Set false when you're
+        # iterating on metadata or testing -- the dialog also exposes a
+        # per-rip checkbox seeded from this value.
+        EjectAfterRip           = $true
+
+        # Phase 5.7: keep the application running between discs so the
+        # parent can rip an entire stack without re-launching (and re-
+        # answering the UAC prompt). After each rip a between-discs
+        # dialog offers "Rip Next" / "Quit"; if a disc arrives via WMI
+        # while the dialog is open it auto-selects "Rip Next". Logs
+        # rotate per disc (each iteration calls Start-RipperLog again).
+        # Set false to restore the one-disc-per-launch flow.
+        ContinuousMode          = $true
     }
 }
 

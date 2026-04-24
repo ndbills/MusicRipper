@@ -8,13 +8,22 @@
 
     Installs:
         - Microsoft.PowerShell  (PS7 — the runtime everything else expects)
-        - gchudov.CUETools      (the rip engine + metaflac.exe)
+        - gchudov.CUETools      (the rip engine; .NET DLLs only — see below)
+        - Xiph.FLAC             (provides metaflac.exe for tagging + ReplayGain;
+                                 see docs/DECISIONS.md D-009)
         - MusicBrainz.Picard    (manual re-tagging tool for _ReviewQueue)
 
     Note on the CUETools id: the publisher's winget package id is
     `gchudov.CUETools` (the upstream maintainer's GitHub handle), NOT
     `CUETools.CUETools` as the website-style name might suggest. Verified
     via `winget search CUETools`.
+
+    Note on Xiph.FLAC: the original Phase 1 plan assumed `metaflac.exe`
+    shipped with CUETools — it does NOT (verified by inspecting the
+    portable winget package, which contains only .NET DLLs + the GUI
+    rippers). Phase 5 needs metaflac for FLAC tag writes, cover-art
+    embedding, and ReplayGain analysis (the only canonical RG impl).
+    See docs/DECISIONS.md D-009 for rejected alternatives.
 
 .EXAMPLE
     PS> ./setup/Install-Dependencies.ps1
@@ -39,6 +48,7 @@ if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
 $packages = @(
     'Microsoft.PowerShell',
     'gchudov.CUETools',
+    'Xiph.FLAC',
     'MusicBrainz.Picard'
 )
 

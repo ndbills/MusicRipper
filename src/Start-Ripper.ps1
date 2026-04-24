@@ -1,14 +1,16 @@
 <#
 .SYNOPSIS
-    Entry point parents click. Phases 1-3: config check, disc-id read,
-    MusicBrainz lookup, confirmation dialog.
+    Entry point parents click. Phases 1-5: config check, disc-id read,
+    MusicBrainz lookup, confirmation dialog, secure rip, quality gate,
+    tag + ReplayGain, library/_ReviewQueue placement.
 
 .DESCRIPTION
     Pipeline position:
-        Top of the daily-flow sequence. In later phases this will:
-            ... -> Show-MetadataDialog -> Invoke-Rip (Phase 4) ->
-            Test-RipQuality -> Write-Tags -> Move-ToLibrary ->
-            post-processors -> eject.
+        Top of the daily-flow sequence:
+            ... -> Show-MetadataDialog -> Invoke-Rip ->
+            Test-RipQuality -> Write-Tags (library only) ->
+            Move-ToLibrary -> Write-RipperReviewTxt +
+            New-RipperReviewImage (review queue only) -> eject.
 
     Current behavior:
         - Loads config; aborts gracefully if missing.
@@ -45,16 +47,45 @@ Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1')  -Force
 Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
 Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 
-# Dot-source the Phase 2/3/4 core scripts and dialogs so their functions
+# Dot-source the Phase 2/3/4/5 core scripts and dialogs so their functions
 # are in scope.
 . (Join-Path $repoRoot 'src\core\Get-DiscId.ps1')
 . (Join-Path $repoRoot 'src\core\Get-DiscMetadata.ps1')
+. (Join-Path $repoRoot 'src\core\Search-DiscMetadataByText.ps1')
 . (Join-Path $repoRoot 'src\core\Invoke-Rip.ps1')
+. (Join-Path $repoRoot 'src\core\Test-RipQuality.ps1')
+. (Join-Path $repoRoot 'src\core\Write-Tags.ps1')
+. (Join-Path $repoRoot 'src\core\Move-ToLibrary.ps1')
+. (Join-Path $repoRoot 'src\core\Get-LibraryDiscIndex.ps1')
+. (Join-Path $repoRoot 'src\core\New-ReviewQueueArtifacts.ps1')
+. (Join-Path $repoRoot 'src\core\Invoke-PostProcess.ps1')
+. (Join-Path $repoRoot 'src\core\Resume.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-MetadataDialog.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-RipProgress.ps1')
+. (Join-Path $repoRoot 'src\ui\Show-BetweenDiscsDialog.ps1')
+. (Join-Path $repoRoot 'src\ui\Show-DuplicateDiscDialog.ps1')
 
 $logPath = Start-RipperLog -Context 'start-ripper'
-Write-RipperLog INFO 'Start-Ripper' 'Phase 4 entry: config + disc-id + metadata + confirm + rip.'
+Write-RipperLog INFO 'Start-Ripper' 'Phase 5 entry: config + disc-id + metadata + confirm + rip + quality/tag/move.'
+
+# Phase 5.7: session-scoped state shared across continuous-mode iterations.
+# Reset implicitly each Start-Ripper launch (script-scope locals).
+#   DiscCount   - 1-based count of disc cycles attempted this session.
+#   RippedDiscs - hashtable keyed by DiscId. Value is a human-readable
+#                 label ("Artist - Album") captured at end of the rip
+#                 cycle, so the duplicate-disc prompt and skip-summary
+#                 line can show the album name instead of the opaque
+#                 DiscId. Used to prompt "you already ripped this disc
+#                 -- rip again or skip?" if the parent re-inserts the
+#                 same CD.
+#   LastSummary - human-readable outcome of the previous cycle, fed to
+#                 the between-discs dialog so the parent can see it
+#                 without flipping back to the success message box.
+$script:RipperSession = [pscustomobject]@{
+    DiscCount   = 0
+    RippedDiscs = @{}
+    LastSummary = ''
+}
 
 # --- Helpers ---------------------------------------------------------------
 function Show-RipperInfo([string]$msg, [string]$title = 'MusicRipper', [string]$icon = 'Information') {
@@ -140,162 +171,550 @@ if (-not (Test-Path -LiteralPath $configPath)) {
 }
 $cfg = Import-RipperConfig
 
-# --- Read disc -------------------------------------------------------------
-# If the tray was left open, close it first so the user doesn't get an
-# immediate "no disc" error. After a close, the drive needs a beat to spin
-# up and report the TOC, so we retry a few times on transient "not ready"
-# errors before giving up.
-Close-RipperTray
+# --- Dependency check -----------------------------------------------------
+# We do this BEFORE any disc work because a missing metaflac.exe would
+# only surface AFTER the rip (Phase 5 needs it for tagging + ReplayGain),
+# wasting an 11-minute rip. Idempotent flow: if anything is missing,
+# offer to run setup/Install-Dependencies.ps1 in-place, then ask the
+# user to relaunch. A subsequent launch finds everything and proceeds.
+$deps = Test-RipperDependencies
+if (-not $deps.Ok) {
+    $list   = ($deps.Missing | ForEach-Object { "  - $($_.Name)  (winget id: $($_.WingetId))" }) -join "`n"
+    $names  = ($deps.Missing.Name) -join ', '
+    Write-RipperLog WARN 'Start-Ripper' "Missing dependencies: $names"
 
-$disc          = $null
-$lastDiscError = $null
-for ($attempt = 1; $attempt -le 5; $attempt++) {
-    try {
-        $disc = Get-RipperDiscId
-        break
-    } catch {
-        $lastDiscError = $_
-        $msg = $_.Exception.Message
-        if ($msg -match 'not ready|medium not present|tray open|no disc') {
-            Write-RipperLog INFO 'Start-Ripper' "Drive not ready (attempt $attempt/5); waiting for spin-up."
-            Start-Sleep -Seconds 2
-            continue
-        }
-        # Non-transient error: don't burn retries on it.
-        break
+    Add-Type -AssemblyName System.Windows.Forms | Out-Null
+    $rc = [System.Windows.Forms.MessageBox]::Show(
+        "MusicRipper needs the following tools, which aren't installed yet:`n`n$list`n`nInstall them now via winget? (you may see an admin elevation prompt)",
+        'MusicRipper - Missing Dependencies',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Warning)
+
+    if ($rc -ne [System.Windows.Forms.DialogResult]::Yes) {
+        Write-RipperLog WARN 'Start-Ripper' 'User declined dependency install.'
+        Show-RipperInfo "MusicRipper can't continue without those tools.`n`nRun setup\Install-Dependencies.ps1 manually when ready, then re-launch." `
+            'MusicRipper' 'Information'
+        Stop-RipperLog
+        return
     }
-}
 
-if (-not $disc) {
-    Write-RipperLog WARN 'Start-Ripper' "Disc-id failed: $($lastDiscError.Exception.Message)"
-    Show-RipperInfo "No disc / drive error:`n`n  $($lastDiscError.Exception.Message)`n`nInsert a CD and try again." `
-        'MusicRipper' 'Warning'
+    $installScript = Join-Path $repoRoot 'setup\Install-Dependencies.ps1'
+    Write-RipperLog INFO 'Start-Ripper' "Running $installScript"
+    try {
+        & $installScript
+    } catch {
+        Write-RipperLog ERROR 'Start-Ripper' "Install-Dependencies failed: $($_.Exception.Message)"
+        Show-RipperInfo "Dependency install failed:`n`n  $($_.Exception.Message)`n`nSee log:`n  $logPath" `
+            'MusicRipper - Install Failed' 'Error'
+        Stop-RipperLog
+        return
+    }
+
+    Write-RipperLog INFO 'Start-Ripper' 'Dependency installer finished. Asking user to relaunch.'
+    Show-RipperInfo "Dependencies installed.`n`nPlease re-launch MusicRipper to continue." `
+        'MusicRipper' 'Information'
     Stop-RipperLog
     return
 }
 
-# --- Metadata lookup -------------------------------------------------------
-try {
-    $meta = Get-RipperDiscMetadata -DiscIdInfo $disc
-} catch {
-    Write-RipperLog WARN 'Start-Ripper' "Metadata failed: $($_.Exception.Message)"
-    # Synthesize an Offline-style result so the dialog still comes up and
-    # the user can route to Review.
-    $meta = [pscustomobject]@{
-        DiscId     = $disc.DiscId
-        Status     = 'Offline'
-        BestMatch  = $null
-        Candidates = @()
+# --- Resume orphaned rips --------------------------------------------------
+# Any folder under <LibraryRoot>\_inbox\ that still has _ripper-state.json
+# is a rip whose post-process never finished (crash, power loss, manual exit
+# between Invoke-Rip and Invoke-RipperPostProcess). Offer to finish them now
+# before touching the drive — running the disc-id step would be wasted work
+# if the user wants to bail out and recover by hand instead.
+$orphans = @(Find-RipperOrphanedRips -LibraryRoot $cfg.LibraryRoot)
+if ($orphans.Count -gt 0) {
+    $names = ($orphans | ForEach-Object { "  - $(Split-Path -Leaf $_.Folder)" }) -join "`n"
+    Write-RipperLog INFO 'Start-Ripper' "Found $($orphans.Count) orphaned rip(s)."
+
+    Add-Type -AssemblyName System.Windows.Forms | Out-Null
+    $rc = [System.Windows.Forms.MessageBox]::Show(
+        "MusicRipper found $($orphans.Count) unfinished rip(s) in your inbox:`n`n$names`n`nFinish them now? (Tag, ReplayGain, and move to your library / review queue.)`n`nYes = process them all`nNo  = skip and continue with today's disc`nCancel = quit",
+        'MusicRipper - Resume Unfinished Rips',
+        [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
+        [System.Windows.Forms.MessageBoxIcon]::Question)
+
+    if ($rc -eq [System.Windows.Forms.DialogResult]::Cancel) {
+        Write-RipperLog INFO 'Start-Ripper' 'User cancelled at orphan-resume prompt.'
+        Stop-RipperLog
+        return
+    }
+    if ($rc -eq [System.Windows.Forms.DialogResult]::Yes) {
+        $resumeFails = @()
+        foreach ($orphan in $orphans) {
+            try {
+                $rpp = Resume-RipperOrphan -RipFolder $orphan.Folder -LibraryRoot $cfg.LibraryRoot
+                Write-RipperLog INFO 'Start-Ripper' "Resumed orphan -> $($rpp.Target)"
+            } catch {
+                Write-RipperLog ERROR 'Start-Ripper' "Resume failed for $($orphan.Folder): $($_.Exception.Message)"
+                $resumeFails += [pscustomobject]@{ Folder = $orphan.Folder; Error = $_.Exception.Message }
+            }
+        }
+        if ($resumeFails.Count -gt 0) {
+            $failList = ($resumeFails | ForEach-Object { "  - $(Split-Path -Leaf $_.Folder): $($_.Error)" }) -join "`n"
+            Show-RipperInfo "Some orphan rips could not be finished:`n`n$failList`n`nThe sidecars are still in place — try again next launch, or use src\tools\Complete-OrphanedRip.ps1." `
+                'MusicRipper - Resume Issues' 'Warning'
+        }
+    } else {
+        Write-RipperLog INFO 'Start-Ripper' 'User chose to skip orphan resume.'
     }
 }
 
-# --- Phase 3: confirmation dialog ------------------------------------------
-$onResearch = {
-    Write-RipperLog INFO 'Start-Ripper' "Re-search MusicBrainz requested for $($disc.DiscId)."
-    Get-RipperDiscMetadata -DiscIdInfo $disc
-}
+# --- Per-disc cycle (Phase 5.7) -------------------------------------------
+# Returns a [pscustomobject] with:
+#   Outcome  -- 'Completed' | 'Cancelled' | 'NoDisc' | 'Failed' | 'Skipped'
+#   Summary  -- short multi-line summary fed to the between-discs dialog
+# Never throws; per-disc failures end with a message box and return so the
+# outer loop can show the next-disc prompt instead of the script crashing.
+function Invoke-RipperOneDiscCycle {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param()
 
-$choice = Show-RipperMetadataDialog -Metadata $meta -OnResearch $onResearch
+    $script:RipperSession.DiscCount++
+    $cycleNum = $script:RipperSession.DiscCount
 
-Write-RipperLog INFO 'Start-Ripper' "User chose: $($choice.Action)."
+    function _result([string]$Outcome, [string]$Summary) {
+        [pscustomobject]@{ Outcome = $Outcome; Summary = $Summary }
+    }
 
-switch ($choice.Action) {
-    'Rip' {
-        $m = $choice.Metadata
-
-        # Phase 4 rips land in <LibraryRoot>\_inbox\<AlbumArtist> - <Album>\.
-        # Phase 5's Move-ToLibrary will relocate from there to the Plex
-        # layout (or _ReviewQueue\) once rip quality is known. Keeping the
-        # staging area under LibraryRoot keeps everything on one volume so
-        # the move is a rename (fast), not a copy.
-        $inboxRoot = Join-Path $cfg.LibraryRoot '_inbox'
-        if (-not (Test-Path -LiteralPath $inboxRoot)) {
-            New-Item -ItemType Directory -Path $inboxRoot -Force | Out-Null
-        }
-
-        Write-RipperLog INFO 'Start-Ripper' `
-            "Starting rip: $($m.AlbumArtist) - $($m.Album) -> $inboxRoot"
-
-        try {
-            $result = Show-RipperRipProgress `
-                -DiscIdInfo $disc `
-                -Metadata $m `
-                -OutputRoot $inboxRoot `
-                -ContactNetwork $true
-        } catch {
-            Write-RipperLog ERROR 'Start-Ripper' "Rip threw: $($_.Exception.Message)"
-            Show-RipperInfo "Rip failed:`n`n  $($_.Exception.Message)`n`nSee log:`n  $logPath" `
-                'MusicRipper - Rip Failed' 'Error'
-            Invoke-RipperEject
-            Stop-RipperLog
+    function _maybeEject($Choice) {
+        # Honour the per-rip eject decision the user just made in the dialog
+        # (seeded from cfg.EjectAfterRip but flippable via the checkbox).
+        if ($Choice -and $Choice.PSObject.Properties['EjectAfterRip'] -and -not $Choice.EjectAfterRip) {
+            Write-RipperLog INFO 'Start-Ripper' 'Skipping eject (per-rip checkbox unchecked).'
             return
         }
+        Invoke-RipperEject
+    }
 
-        if (-not $result) {
-            # Progress window closed before the rip started — rare but
-            # survivable. Treat like a cancel.
-            Write-RipperLog WARN 'Start-Ripper' 'Rip returned $null (window closed early).'
-            Invoke-RipperEject
+    # --- Read disc ---------------------------------------------------------
+    # If the tray was left open, close it first so the user doesn't get an
+    # immediate "no disc" error. After a close, the drive needs a beat to spin
+    # up and report the TOC, so we retry a few times on transient "not ready"
+    # errors before giving up.
+    Close-RipperTray
+
+    $disc          = $null
+    $lastDiscError = $null
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        try {
+            $disc = Get-RipperDiscId
+            break
+        } catch {
+            $lastDiscError = $_
+            $msg = $_.Exception.Message
+            if ($msg -match 'not ready|medium not present|tray open|no disc') {
+                Write-RipperLog INFO 'Start-Ripper' "Drive not ready (attempt $attempt/5); waiting for spin-up."
+                Start-Sleep -Seconds 2
+                continue
+            }
+            # Non-transient error: don't burn retries on it.
             break
         }
+    }
 
-        Write-RipperLog INFO 'Start-Ripper' `
-            "Rip finished: Status=$($result.Status) FailedSectors=$($result.FailedSectors) Output=$($result.OutputDir)"
+    if (-not $disc) {
+        $errMsg = if ($lastDiscError) { $lastDiscError.Exception.Message } else { 'unknown' }
+        Write-RipperLog WARN 'Start-Ripper' "Disc-id failed: $errMsg"
+        Show-RipperInfo "No disc / drive error:`n`n  $errMsg`n`nInsert a CD and try again." `
+            'MusicRipper' 'Warning'
+        return _result 'NoDisc' "Disc ${cycleNum}: no disc / drive error -- $errMsg"
+    }
 
-        # Build summary text per the Invoke-RipperRip contract. We surface
-        # Status prominently because that's what Phase 5 routing will
-        # branch on (Verified/ProbablyGood -> library, Suspect/NotInDatabase
-        # -> _ReviewQueue).
-        switch ($result.Status) {
-            'Cancelled' {
-                Show-RipperInfo "Rip cancelled. Partial files were removed." `
-                    'MusicRipper' 'Information'
+    # --- Already-in-library check (Phase 5.8) ----------------------------
+    # Look the disc up in the durable cross-session DiscId index FIRST. If
+    # we find a hit (and the recorded folder still exists), give the parent
+    # a polished three-way prompt instead of silently re-ripping or
+    # crashing later in Move-RipToLibrary's "target exists" throw. The
+    # library dialog supersedes the in-session Yes/No prompt below: a
+    # library hit always implies an in-session hit (if the user already
+    # ripped it this session), and the library dialog is strictly more
+    # informative (Open folder, RippedAt, side-by-side option).
+    #
+    # If they choose 'RipAgain' we set $allowSideBySide so post-process
+    # routes the new copy to '<Album> (<Year>) [rip 2]' instead of
+    # colliding with the original.
+    $allowSideBySide = $false
+    try {
+        $libDup = Find-RipperLibraryDiscIndexEntry -LibraryRoot $cfg.LibraryRoot -DiscId $disc.DiscId
+    } catch {
+        Write-RipperLog WARN 'Start-Ripper' "DiscId index lookup failed (advisory): $($_.Exception.Message)"
+        $libDup = $null
+    }
+    if ($libDup) {
+        $libLabel = if ($libDup.PSObject.Properties['Label'] -and $libDup.Label) { [string]$libDup.Label } else { "DiscId $($disc.DiscId)" }
+        $libPath  = [string]$libDup.Path
+        $libRipAt = if ($libDup.PSObject.Properties['RippedAt']) { $libDup.RippedAt } else { $null }
+        Write-RipperLog INFO 'Start-Ripper' "DiscId $($disc.DiscId) already in library: $libLabel ($libPath)."
+        $dup = Show-RipperDuplicateDiscDialog -AlbumLabel $libLabel -AlbumPath $libPath -RippedAt $libRipAt
+        switch ($dup.Action) {
+            'Skip' {
+                Write-RipperLog INFO 'Start-Ripper' "User skipped already-in-library disc: $libLabel."
+                Invoke-RipperEject
+                return _result 'Skipped' "Disc ${cycleNum}: skipped (already in library: $libLabel)"
             }
-            'Failed' {
-                $err = ($result.Errors -join "`n  ")
-                Show-RipperInfo "Rip failed.`n`n  $err`n`nSee log:`n  $logPath" `
-                    'MusicRipper - Rip Failed' 'Error'
+            'RipAgain' {
+                Write-RipperLog INFO 'Start-Ripper' "User chose to re-rip already-in-library disc side-by-side: $libLabel."
+                $allowSideBySide = $true
             }
             default {
-                $ar    = $result.AccurateRip
-                $ctdb  = $result.Ctdb
-                $lines = @(
-                    "Status: $($result.Status)"
-                    ""
-                    "  $($m.AlbumArtist) - $($m.Album)"
-                    "  $($m.TrackCount) track(s) - $([int][Math]::Round($result.ElapsedSeconds / 60))m $([int]($result.ElapsedSeconds % 60))s"
-                    ""
-                    "AccurateRip: $($ar.Status)$(if ($null -ne $ar.MinConfidence) { " (min confidence $($ar.MinConfidence))" })"
-                    "CTDB:        $($ctdb.Status)$(if ($null -ne $ctdb.MinConfidence) { " (confidence $($ctdb.MinConfidence))" })"
-                    "Re-read sectors: $($result.FailedSectors)"
-                    ""
-                    "Output: $($result.OutputDir)"
-                )
-                if ($result.HtoaWarning) { $lines += @("", "Note: $($result.HtoaWarning)") }
-                if ($result.Errors -and $result.Errors.Count -gt 0) {
-                    $lines += @("", "Warnings:") + ($result.Errors | ForEach-Object { "  - $_" })
-                }
-                $icon = switch ($result.Status) {
-                    'Verified'      { 'Information' }
-                    'ProbablyGood'  { 'Information' }
-                    default         { 'Warning' }   # Suspect / NotInDatabase
-                }
-                Show-RipperInfo ($lines -join "`n") 'MusicRipper - Rip Complete' $icon
+                # Defensive: future actions land here. Treat as Skip.
+                Write-RipperLog WARN 'Start-Ripper' "Duplicate-disc dialog returned unknown action '$($dup.Action)'; treating as Skip."
+                Invoke-RipperEject
+                return _result 'Skipped' "Disc ${cycleNum}: skipped (already in library: $libLabel)"
             }
         }
+    }
 
-        Invoke-RipperEject
+    # --- Already-ripped-this-session fallback (Phase 5.7) ----------------
+    # Library check above is the primary duplicate guard. This fallback
+    # catches discs ripped this session that never made it to the library
+    # (e.g., routed to ReviewQueue, or move-to-library failed) and so are
+    # absent from the DiscId index. Skip if the library dialog already
+    # handled this disc.
+    if (-not $libDup -and $script:RipperSession.RippedDiscs.ContainsKey($disc.DiscId)) {
+        $priorLabel = $script:RipperSession.RippedDiscs[$disc.DiscId]
+        # Old sessions stored $true; treat any non-string as unknown.
+        if (-not ($priorLabel -is [string]) -or [string]::IsNullOrWhiteSpace($priorLabel)) {
+            $priorLabel = "DiscId $($disc.DiscId)"
+        }
+        Add-Type -AssemblyName System.Windows.Forms | Out-Null
+        $rc = [System.Windows.Forms.MessageBox]::Show(
+            "You already ripped this disc earlier in this session.`n`n  $priorLabel`n`nRip it again? (Yes = re-rip, No = skip and return to the disc-insert prompt.)",
+            'MusicRipper - Already Ripped This Session',
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Question)
+        if ($rc -ne [System.Windows.Forms.DialogResult]::Yes) {
+            Write-RipperLog INFO 'Start-Ripper' "Skipping re-rip of already-seen disc: $priorLabel (DiscId $($disc.DiscId))."
+            Invoke-RipperEject
+            return _result 'Skipped' "Disc ${cycleNum}: skipped (already ripped this session: $priorLabel)"
+        }
+        Write-RipperLog INFO 'Start-Ripper' "User chose to re-rip already-seen disc: $priorLabel (DiscId $($disc.DiscId))."
     }
-    'Review' {
-        $m = $choice.Metadata
-        Show-RipperInfo "Marked for Review (Phase 5 routing).`n`nDisc: $($m.AlbumArtist) - $($m.Album)`n`nEjecting now." `
-            'MusicRipper (Phase 3 stub)' 'Information'
-        Invoke-RipperEject
+
+    # --- Metadata lookup ---------------------------------------------------
+    try {
+        $meta = Get-RipperDiscMetadata -DiscIdInfo $disc
+    } catch {
+        Write-RipperLog WARN 'Start-Ripper' "Metadata failed: $($_.Exception.Message)"
+        # Synthesize an Offline-style result so the dialog still comes up and
+        # the user can route to Review.
+        $meta = [pscustomobject]@{
+            DiscId     = $disc.DiscId
+            Status     = 'Offline'
+            BestMatch  = $null
+            Candidates = @()
+        }
     }
-    'Cancel' {
-        Write-RipperLog INFO 'Start-Ripper' 'User cancelled at confirm dialog. Ejecting.'
-        Invoke-RipperEject
+
+    # --- Phase 3: confirmation dialog -------------------------------------
+    $onResearch = {
+        Write-RipperLog INFO 'Start-Ripper' "Re-search MusicBrainz requested for $($disc.DiscId)."
+        Get-RipperDiscMetadata -DiscIdInfo $disc
+    }.GetNewClosure()
+
+    # Pull the cover-art chain across each text-search hit so the dialog
+    # can render an image once the user picks one. Failures are non-fatal
+    # (same convention as the disc-id flow): the picked candidate just
+    # shows up without a cover.
+    #
+    # Two-tier strategy:
+    #   1. iTunes/Deezer text-search candidates carry an .ArtworkUrl from
+    #      their original metadata response (the same response that gave us
+    #      the artist/album/tracks). One HTTP GET fetches the bytes -- no
+    #      AlbumArtist+Album guesswork needed, which is critical for
+    #      compilations and multi-artist titles where the re-query would
+    #      miss.
+    #   2. Anything without an .ArtworkUrl (MusicBrainz, GnuDB) falls
+    #      through to the full Get-RipperBestCoverArt provider chain.
+    $onTextSearch = {
+        param($payload)
+        Write-RipperLog INFO 'Start-Ripper' "Text-search requested: artist='$($payload.Artist)' album='$($payload.Album)' year=$($payload.Year) providers=$(@($payload.Providers) -join ',')"
+        $r = Search-RipperMetadataByText `
+                -Artist    $payload.Artist `
+                -Album     $payload.Album `
+                -Year      $payload.Year `
+                -Providers @($payload.Providers)
+        if ($r -and $r.Candidates) {
+            foreach ($c in @($r.Candidates)) {
+                $bytes = $null
+                $directUrl = if (($c.PSObject.Properties.Name -contains 'ArtworkUrl') -and $c.ArtworkUrl) {
+                    [string]$c.ArtworkUrl
+                } else { $null }
+                if ($directUrl) {
+                    try {
+                        $tmp = [System.IO.Path]::GetTempFileName()
+                        try {
+                            Invoke-WebRequest -Uri $directUrl -OutFile $tmp -TimeoutSec 30 -UseBasicParsing | Out-Null
+                            $bytes = [System.IO.File]::ReadAllBytes($tmp)
+                            Write-RipperLog INFO 'Start-Ripper' "Cover-art (direct, $($c.Source)): $($bytes.Length) bytes from $directUrl"
+                        } finally {
+                            Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
+                        }
+                    } catch {
+                        Write-RipperLog WARN 'Start-Ripper' "Cover-art direct fetch failed for $($c.Source) '$($c.Album)': $($_.Exception.Message)"
+                        $bytes = $null
+                    }
+                }
+                if (-not $bytes) {
+                    try {
+                        $bytes = Get-RipperBestCoverArt -Candidate $c
+                    } catch {
+                        $bytes = $null
+                    }
+                }
+                $c | Add-Member -NotePropertyName CoverArtBytes -NotePropertyValue $bytes -Force
+            }
+        }
+        $r
     }
+
+    $textSearchProviders = @(Get-RipperTextSearchProviderNames)
+
+    # Phase 5.3: "Change cover..." picker. Runs every configured provider
+    # (not short-circuit like Get-RipperBestCoverArt) so the user can
+    # compare all available images side-by-side.
+    $onPickCover = {
+        param($candidate)
+        Write-RipperLog INFO 'Start-Ripper' "Cover-picker requested for '$($candidate.AlbumArtist) / $($candidate.Album)'."
+        Get-RipperCoverArtCandidates -Candidate $candidate
+    }
+
+    $choice = Show-RipperMetadataDialog `
+                -Metadata             $meta `
+                -OnResearch           $onResearch `
+                -OnTextSearch         $onTextSearch `
+                -TextSearchProviders  $textSearchProviders `
+                -OnPickCover          $onPickCover `
+                -EjectAfterRip        ($(if ($cfg.PSObject.Properties['EjectAfterRip']) { [bool]$cfg.EjectAfterRip } else { $true }))
+
+    Write-RipperLog INFO 'Start-Ripper' "User chose: $($choice.Action) (eject=$($choice.EjectAfterRip))."
+
+    switch ($choice.Action) {
+        { $_ -in 'Rip','Review' } {
+            $m = $choice.Metadata
+
+            # Phase 5.9: 'Review' runs the full rip pipeline but routes the
+            # finished folder into _ReviewQueue\ regardless of rip quality
+            # (and skips library tagging) so the user can fix metadata in
+            # Picard before promoting it. The route is just a flag passed
+            # to Invoke-RipperPostProcess; everything else (rip, sidecar,
+            # eject, summary dialog, in-session tracking) is identical.
+            $forceReviewQueue = ($choice.Action -eq 'Review')
+            if ($forceReviewQueue) {
+                Write-RipperLog INFO 'Start-Ripper' "User chose Send to Review: $($m.AlbumArtist) - $($m.Album)"
+            }
+
+            # Phase 4 rips land in <LibraryRoot>\_inbox\<AlbumArtist> - <Album>\.
+            # Phase 5's Move-ToLibrary will relocate from there to the Plex
+            # layout (or _ReviewQueue\) once rip quality is known. Keeping the
+            # staging area under LibraryRoot keeps everything on one volume so
+            # the move is a rename (fast), not a copy.
+            $inboxRoot = Join-Path $cfg.LibraryRoot '_inbox'
+            if (-not (Test-Path -LiteralPath $inboxRoot)) {
+                New-Item -ItemType Directory -Path $inboxRoot -Force | Out-Null
+            }
+
+            Write-RipperLog INFO 'Start-Ripper' `
+                "Starting rip: $($m.AlbumArtist) - $($m.Album) -> $inboxRoot"
+
+            try {
+                $result = Show-RipperRipProgress `
+                    -DiscIdInfo $disc `
+                    -Metadata $m `
+                    -OutputRoot $inboxRoot `
+                    -ContactNetwork $true
+            } catch {
+                Write-RipperLog ERROR 'Start-Ripper' "Rip threw: $($_.Exception.Message)"
+                Show-RipperInfo "Rip failed:`n`n  $($_.Exception.Message)`n`nSee log:`n  $(Get-RipperLogPath)" `
+                    'MusicRipper - Rip Failed' 'Error'
+                _maybeEject $choice
+                return _result 'Failed' "Disc ${cycleNum}: $($m.AlbumArtist) - $($m.Album) -- rip threw: $($_.Exception.Message)"
+            }
+
+            if (-not $result) {
+                # Progress window closed before the rip started -- rare but
+                # survivable. Treat like a cancel.
+                Write-RipperLog WARN 'Start-Ripper' 'Rip returned $null (window closed early).'
+                _maybeEject $choice
+                return _result 'Cancelled' "Disc ${cycleNum}: $($m.AlbumArtist) - $($m.Album) -- progress window closed early"
+            }
+
+            Write-RipperLog INFO 'Start-Ripper' `
+                "Rip finished: Status=$($result.Status) FailedSectors=$($result.FailedSectors) Output=$($result.OutputDir)"
+
+            # --- Phase 5: quality gate -> tag -> move -> review artifacts -
+            # Only run the post-rip pipeline on rips that actually produced
+            # output. Cancelled/Failed rips fall through to the user dialog
+            # without further processing.
+            $phase5Target  = $null
+            $phase5Quality = $null
+            if ($result.Status -ne 'Cancelled' -and $result.Status -ne 'Failed') {
+                # Drop a sidecar BEFORE running post-process so a crash mid-tag
+                # leaves the next launch enough breadcrumbs to finish the job.
+                try {
+                    $coverLeaf = if ($result.CoverArtFile) { Split-Path -Leaf $result.CoverArtFile } else { $null }
+                    Write-RipperRipState `
+                        -RipFolder        $result.OutputDir `
+                        -DiscId           $disc.DiscId `
+                        -Metadata         $m `
+                        -LogFileName      (Split-Path -Leaf $result.LogFile) `
+                        -CoverArtFileName $coverLeaf | Out-Null
+                } catch {
+                    Write-RipperLog WARN 'Start-Ripper' "Sidecar write failed: $($_.Exception.Message)"
+                }
+                try {
+                    $pp = Invoke-RipperPostProcess `
+                        -RipFolder        $result.OutputDir `
+                        -LogFile          $result.LogFile `
+                        -Metadata         $m `
+                        -DiscId           $disc.DiscId `
+                        -LibraryRoot      $cfg.LibraryRoot `
+                        -CoverArtFile     $result.CoverArtFile `
+                        -AllowSideBySide:$allowSideBySide `
+                        -ForceReviewQueue:$forceReviewQueue
+                    $phase5Quality = $pp.Quality
+                    $phase5Target  = $pp.Target
+                    try { Remove-RipperRipState -RipFolder $pp.Target } catch {
+                        Write-RipperLog WARN 'Start-Ripper' "Sidecar cleanup failed: $($_.Exception.Message)"
+                    }
+                } catch {
+                    Write-RipperLog ERROR 'Start-Ripper' "Phase 5 pipeline failed: $($_.Exception.Message)"
+                    Show-RipperInfo "Rip succeeded but post-processing failed:`n`n  $($_.Exception.Message)`n`nThe raw rip is still at:`n  $($result.OutputDir)`n`nSee log:`n  $(Get-RipperLogPath)" `
+                        'MusicRipper - Post-Processing Failed' 'Warning'
+                    _maybeEject $choice
+                    return _result 'Failed' "Disc ${cycleNum}: $($m.AlbumArtist) - $($m.Album) -- post-process failed: $($_.Exception.Message)"
+                }
+            }
+
+            switch ($result.Status) {
+                'Cancelled' {
+                    Show-RipperInfo "Rip cancelled. Partial files were removed." `
+                        'MusicRipper' 'Information'
+                    $summary = "Disc ${cycleNum}: $($m.AlbumArtist) - $($m.Album) -- cancelled"
+                }
+                'Failed' {
+                    $err = ($result.Errors -join "`n  ")
+                    Show-RipperInfo "Rip failed.`n`n  $err`n`nSee log:`n  $(Get-RipperLogPath)" `
+                        'MusicRipper - Rip Failed' 'Error'
+                    $summary = "Disc ${cycleNum}: $($m.AlbumArtist) - $($m.Album) -- failed: $err"
+                }
+                default {
+                    $ar    = $result.AccurateRip
+                    $ctdb  = $result.Ctdb
+                    $destLine = if ($phase5Target) {
+                        $kind = if ($phase5Quality -and $phase5Quality.Destination -eq 'ReviewQueue') { 'Review queue' } else { 'Library' }
+                        "${kind}: $phase5Target"
+                    } else {
+                        "Output: $($result.OutputDir)"
+                    }
+                    $lines = @(
+                        "Status: $($result.Status)"
+                        ""
+                        "  $($m.AlbumArtist) - $($m.Album)"
+                        "  $($m.TrackCount) track(s) - $([int][Math]::Round($result.ElapsedSeconds / 60))m $([int]($result.ElapsedSeconds % 60))s"
+                        ""
+                        "AccurateRip: $($ar.Status)$(if ($null -ne $ar.MinConfidence) { " (min confidence $($ar.MinConfidence))" })"
+                        "CTDB:        $($ctdb.Status)$(if ($null -ne $ctdb.MinConfidence) { " (confidence $($ctdb.MinConfidence))" })"
+                        "Re-read sectors: $($result.FailedSectors)"
+                        ""
+                        $destLine
+                    )
+                    if ($result.HtoaWarning) { $lines += @("", "Note: $($result.HtoaWarning)") }
+                    if ($result.Errors -and $result.Errors.Count -gt 0) {
+                        $lines += @("", "Warnings:") + ($result.Errors | ForEach-Object { "  - $_" })
+                    }
+                    $icon = switch ($result.Status) {
+                        'Verified'      { 'Information' }
+                        'ProbablyGood'  { 'Information' }
+                        default         { 'Warning' }
+                    }
+                    Show-RipperInfo ($lines -join "`n") 'MusicRipper - Rip Complete' $icon
+                    $summary = ($lines -join "`n")
+                    # Mark this disc as ripped so a re-insertion offers the
+                    # skip prompt. Store a human-readable label rather than
+                    # a bare $true so the prompt can show the album name
+                    # instead of an opaque DiscId.
+                    $priorLabel = if ($m -and $m.AlbumArtist -and $m.Album) {
+                        "$($m.AlbumArtist) - $($m.Album)"
+                    } else {
+                        "DiscId $($disc.DiscId)"
+                    }
+                    $script:RipperSession.RippedDiscs[$disc.DiscId] = $priorLabel
+                }
+            }
+
+            _maybeEject $choice
+            return _result 'Completed' $summary
+        }
+        'Cancel' {
+            Write-RipperLog INFO 'Start-Ripper' 'User cancelled at confirm dialog. Ejecting.'
+            _maybeEject $choice
+            return _result 'Cancelled' "Disc ${cycleNum}: cancelled at metadata confirmation"
+        }
+    }
+
+    # Defensive default (shouldn't reach here -- every switch arm returns).
+    return _result 'Cancelled' "Disc ${cycleNum}: unknown outcome"
 }
 
+# --- Outer continuous-mode loop (Phase 5.7) -------------------------------
+# When ContinuousMode is true (default), we keep the application running
+# between discs so the parent can rip a stack of CDs without re-launching
+# (and re-answering the UAC prompt). After each per-disc cycle we show the
+# Show-RipperBetweenDiscsDialog: it offers Rip Next / Quit and also auto-
+# selects Rip Next if a new disc arrives via WMI volume-change events.
+#
+# Logging: each iteration calls Start-RipperLog with a fresh per-disc
+# context, so %LOCALAPPDATA%\MusicRipper\logs\ gets one timestamped file
+# per disc. Move-ToLibrary's existing Copy-RipperLog call sees whichever
+# log was active at the moment it ran, so the album folder ends up with
+# its own per-disc log copy. The session-level setup log started above
+# remains valid until the loop's first iteration rotates it.
+$continuousMode = if ($cfg.PSObject.Properties['ContinuousMode']) { [bool]$cfg.ContinuousMode } else { $true }
+Write-RipperLog INFO 'Start-Ripper' "ContinuousMode = $continuousMode"
+
+do {
+    # Rotate the log: stop the previous (setup or per-disc) log and open a
+    # fresh per-disc file. The per-disc log captures everything from disc-id
+    # read through eject for THIS disc only -- great for forensic review.
+    Stop-RipperLog
+    $perDiscLog = Start-RipperLog -Context "rip-disc-$($script:RipperSession.DiscCount + 1)"
+    Write-RipperLog INFO 'Start-Ripper' "Per-disc log rotated to: $perDiscLog"
+
+    try {
+        $cycle = Invoke-RipperOneDiscCycle
+    } catch {
+        # Last-ditch safety net. Per-disc errors are supposed to be caught
+        # inside Invoke-RipperOneDiscCycle and surfaced via message box, so
+        # reaching here means something genuinely unexpected escaped.
+        Write-RipperLog ERROR 'Start-Ripper' "Unhandled per-disc exception: $($_.Exception.Message)"
+        Show-RipperInfo "An unexpected error occurred:`n`n  $($_.Exception.Message)`n`nReturning to the disc-insert prompt." `
+            'MusicRipper' 'Error'
+        $cycle = [pscustomobject]@{
+            Outcome = 'Failed'
+            Summary = "Disc $($script:RipperSession.DiscCount): unhandled error -- $($_.Exception.Message)"
+        }
+    }
+    $script:RipperSession.LastSummary = $cycle.Summary
+
+    if (-not $continuousMode) {
+        Write-RipperLog INFO 'Start-Ripper' 'ContinuousMode disabled -- exiting after one disc.'
+        break
+    }
+
+    # Between-discs prompt. Auto-detects disc arrival via WMI; otherwise
+    # waits for the parent to click Rip Next or Quit.
+    $next = Show-RipperBetweenDiscsDialog `
+                -DriveLetter    $cfg.DriveLetter `
+                -LastRipSummary $script:RipperSession.LastSummary `
+                -DiscCount      $script:RipperSession.DiscCount
+
+    Write-RipperLog INFO 'Start-Ripper' "Between-discs decision: Action=$($next.Action) Trigger=$($next.Trigger)"
+    if ($next.Action -ne 'RipNext') { break }
+} while ($true)
+
+Write-RipperLog INFO 'Start-Ripper' "Session ending: $($script:RipperSession.DiscCount) disc(s) processed."
 Stop-RipperLog

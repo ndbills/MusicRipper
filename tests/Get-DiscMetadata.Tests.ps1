@@ -52,6 +52,27 @@ Describe 'ConvertFrom-MusicBrainzDiscIdResponse' {
             $c.Tracks[1].Title   | Should -Be 'Breathe'
             $c.Tracks[2].RecordingMbid | Should -Be 'r03'
         }
+
+        It 'extracts the Picard-parity album-level fields' {
+            $c = $cands[0]
+            $c.AlbumArtistSort | Should -Be 'Pink Floyd'
+            $c.ReleaseDate     | Should -Be '1973-03-01'
+            $c.OriginalDate    | Should -Be '1973-03-01'
+            $c.OriginalYear    | Should -Be 1973
+            $c.ReleaseStatus   | Should -Be 'Official'
+            $c.ReleaseType     | Should -Be 'Album'
+            $c.Script          | Should -Be 'Latn'
+            $c.Language        | Should -Be 'eng'
+            $c.Asin            | Should -Be 'B000024D4P'
+            $c.Barcode         | Should -Be '077774600125'
+            $c.LabelName       | Should -Be 'Harvest'
+            $c.CatalogNumber   | Should -Be 'SMAS-11163'
+        }
+
+        It 'extracts per-track ArtistSort' {
+            $c = $cands[0]
+            $c.Tracks[0].ArtistSort | Should -Be 'Pink Floyd'
+        }
     }
 
     Context 'multi match (Abbey Road original + 2019 remix)' {

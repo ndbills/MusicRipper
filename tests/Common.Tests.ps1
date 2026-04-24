@@ -65,3 +65,99 @@ Describe 'ConvertTo-SafeWindowsPathSegment' {
         'a:b','c?d' | ConvertTo-SafeWindowsPathSegment | Should -Be @('a b', 'c d')
     }
 }
+
+Describe 'Get-MetaflacPath' {
+    # We don't want this test suite to depend on Xiph.FLAC actually being
+    # installed (CI / dev box may not have it), and we don't want to mock
+    # Get-Command at module scope (it's used everywhere). So we drop a
+    # fake metaflac.exe in a temp dir and prepend it to PATH for the
+    # "found on PATH" branch, and verify the throw branch by stripping
+    # PATH and pointing the winget roots at empty dirs via env override.
+
+    BeforeAll {
+        $script:tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("mr-metaflac-{0}" -f [guid]::NewGuid())
+        New-Item -ItemType Directory -Path $script:tempDir | Out-Null
+        $script:fakeExe = Join-Path $script:tempDir 'metaflac.exe'
+        # Empty file is enough — Get-Command resolves by name + PATHEXT.
+        Set-Content -LiteralPath $script:fakeExe -Value '' -NoNewline
+        $script:origPath = $env:PATH
+    }
+    AfterAll {
+        $env:PATH = $script:origPath
+        Remove-Item -LiteralPath $script:tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'returns the PATH-resolved metaflac.exe when one exists' {
+        $env:PATH = "$script:tempDir;$script:origPath"
+        # Get-Command caches by session — clear the cache for metaflac.exe.
+        $resolved = Get-MetaflacPath
+        $resolved | Should -Be $script:fakeExe
+    }
+
+    It 'throws a clear error when metaflac cannot be found anywhere' {
+        # Strip PATH of anything that could resolve metaflac, and point
+        # LOCALAPPDATA / Program Files at empty dirs so the fallback
+        # branches all miss too.
+        $env:PATH = ''
+        $sandbox = Join-Path $script:tempDir 'sandbox'
+        New-Item -ItemType Directory -Path $sandbox | Out-Null
+        $origLocal = $env:LOCALAPPDATA
+        $origPF    = $env:ProgramFiles
+        $origPF86  = ${env:ProgramFiles(x86)}
+        try {
+            $env:LOCALAPPDATA      = $sandbox
+            $env:ProgramFiles      = $sandbox
+            ${env:ProgramFiles(x86)} = $sandbox
+            { Get-MetaflacPath } | Should -Throw -ErrorId '*' -ExpectedMessage '*metaflac.exe not found*'
+        } finally {
+            $env:LOCALAPPDATA      = $origLocal
+            $env:ProgramFiles      = $origPF
+            ${env:ProgramFiles(x86)} = $origPF86
+        }
+    }
+}
+
+Describe 'Test-RipperDependencies' {
+    # We exercise the function shape and the negative case (which we can
+    # produce deterministically by stripping PATH + the fallback dirs).
+    # The positive case depends on whether the dev/CI box has CUETools +
+    # Xiph.FLAC installed; we assert shape only, not values.
+
+    It 'returns a hashtable with Ok and Missing keys' {
+        $r = Test-RipperDependencies
+        $r              | Should -BeOfType [hashtable]
+        $r.ContainsKey('Ok')      | Should -BeTrue
+        $r.ContainsKey('Missing') | Should -BeTrue
+        $r.Ok      | Should -BeOfType [bool]
+        ,$r.Missing | Should -BeOfType [array]
+    }
+
+    It 'reports both deps missing when neither CUETools nor metaflac can be found' {
+        $sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("mr-deps-{0}" -f [guid]::NewGuid())
+        New-Item -ItemType Directory -Path $sandbox | Out-Null
+        $origPath  = $env:PATH
+        $origLocal = $env:LOCALAPPDATA
+        $origPF    = $env:ProgramFiles
+        $origPF86  = ${env:ProgramFiles(x86)}
+        try {
+            $env:PATH              = ''
+            $env:LOCALAPPDATA      = $sandbox
+            $env:ProgramFiles      = $sandbox
+            ${env:ProgramFiles(x86)} = $sandbox
+
+            $r = Test-RipperDependencies
+            $r.Ok | Should -BeFalse
+            $r.Missing.Count | Should -Be 2
+            ($r.Missing.Name -join ',') | Should -Match 'CUETools'
+            ($r.Missing.Name -join ',') | Should -Match 'Xiph.FLAC'
+            ($r.Missing.WingetId) | Should -Contain 'gchudov.CUETools'
+            ($r.Missing.WingetId) | Should -Contain 'Xiph.FLAC'
+        } finally {
+            $env:PATH              = $origPath
+            $env:LOCALAPPDATA      = $origLocal
+            $env:ProgramFiles      = $origPF
+            ${env:ProgramFiles(x86)} = $origPF86
+            Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
