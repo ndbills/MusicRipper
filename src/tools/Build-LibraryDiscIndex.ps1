@@ -50,7 +50,7 @@ Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 . (Join-Path $repoRoot 'src\core\Get-LibraryDiscIndex.ps1')
 
 if (-not $LibraryRoot) {
-    $cfg = Read-RipperConfig
+    $cfg = Import-RipperConfig
     $LibraryRoot = $cfg.LibraryRoot
 }
 if (-not (Test-Path -LiteralPath $LibraryRoot -PathType Container)) {
