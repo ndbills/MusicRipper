@@ -346,10 +346,16 @@ function Show-RipperCoverArtPicker {
 
     Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml | Out-Null
 
-    # Reuse the BytesToImageConverter compiled by Show-RipperTextSearchDialog.
-    # If that function has never been called in this session we need to
-    # compile it now; the type-existence guard makes it idempotent.
-    if (-not ('MusicRipper.BytesToImageConverter' -as [type])) {
+    # Picker-specific converter (DecodePixelWidth=240 to match the larger
+    # ~140px tiles in this dialog). MUST NOT share a class name with
+    # Show-RipperTextSearchDialog's converter -- that one decodes at 80
+    # for the metadata-dialog thumbnails, and whichever Add-Type fires
+    # first wins for the whole session, leaving the loser's consumer
+    # stuck with the wrong decode size. Symptom of the collision was
+    # blurry tiles in this picker after the user had opened the text-
+    # search modal earlier in the session (Phase 5.3 latent bug,
+    # surfaced during 5.7 manual verification).
+    if (-not ('MusicRipper.BytesToLargeImageConverter' -as [type])) {
         $refAsms = @(
             [System.Windows.Data.IValueConverter].Assembly.Location
             [System.Windows.Media.Imaging.BitmapImage].Assembly.Location
@@ -365,7 +371,7 @@ using System.Windows.Data;
 using System.Windows.Media.Imaging;
 
 namespace MusicRipper {
-    public class BytesToImageConverter : IValueConverter {
+    public class BytesToLargeImageConverter : IValueConverter {
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture) {
             PSObject pso = value as PSObject;
             if (pso != null) value = pso.BaseObject;
@@ -392,7 +398,7 @@ namespace MusicRipper {
 '@
     }
 
-    $asmName = [MusicRipper.BytesToImageConverter].Assembly.GetName().Name
+    $asmName = [MusicRipper.BytesToLargeImageConverter].Assembly.GetName().Name
     $xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -401,7 +407,7 @@ namespace MusicRipper {
         WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
         FontFamily="Segoe UI" FontSize="13">
   <Window.Resources>
-    <mr:BytesToImageConverter x:Key="BytesToImg"/>
+    <mr:BytesToLargeImageConverter x:Key="BytesToImg"/>
   </Window.Resources>
   <Grid Margin="12">
     <Grid.RowDefinitions>

@@ -70,6 +70,7 @@ if ($existing) {
         MetadataProviders = $knownMd
         CoverArtProviders = $knownCov
         EjectAfterRip     = $true
+        ContinuousMode    = $true
     }
     foreach ($k in $expected.Keys) {
         if (-not $existing.PSObject.Properties[$k]) {
@@ -105,9 +106,11 @@ if ($existing) {
     $existingMd  = if ($existing.PSObject.Properties['MetadataProviders']  -and $existing.MetadataProviders)  { ($existing.MetadataProviders  -join ', ') } else { '(missing — will default to: ' + ($knownMd  -join ', ') + ')' }
     $existingCov = if ($existing.PSObject.Properties['CoverArtProviders'] -and $existing.CoverArtProviders) { ($existing.CoverArtProviders -join ', ') } else { '(missing — will default to: ' + ($knownCov -join ', ') + ')' }
     $existingEject = if ($existing.PSObject.Properties['EjectAfterRip']) { [string][bool]$existing.EjectAfterRip } else { '(missing — will default to: True)' }
+    $existingCont  = if ($existing.PSObject.Properties['ContinuousMode']) { [string][bool]$existing.ContinuousMode } else { '(missing — will default to: True)' }
     Write-Host "  MetadataProviders     : $existingMd"
     Write-Host "  CoverArtProviders     : $existingCov"
     Write-Host "  EjectAfterRip         : $existingEject"
+    Write-Host "  ContinuousMode        : $existingCont"
     Write-Host ""
 
     # -TopUp: non-interactive upgrade path. Write existing values back
@@ -246,6 +249,15 @@ $defaultEject = if ($existing -and $existing.PSObject.Properties['EjectAfterRip'
 $ejectStr = Read-WithDefault -Prompt 'Eject disc after rip? (Y/N)' -Default ($(if ($defaultEject) { 'Y' } else { 'N' }))
 $ejectAfterRip = ($ejectStr -match '^\s*[YyTt1]')
 
+# --- Continuous mode (Phase 5.7) ------------------------------------------
+# Default-true keeps MusicRipper running after each disc so the parent
+# can rip a whole stack without re-launching (and re-answering UAC).
+# A between-discs dialog (Rip Next / Quit) appears after each rip; if
+# a disc arrives via WMI while it's open, Rip Next is auto-selected.
+$defaultCont = if ($existing -and $existing.PSObject.Properties['ContinuousMode']) { [bool]$existing.ContinuousMode } else { $true }
+$contStr = Read-WithDefault -Prompt 'Continuous mode (keep running between discs)? (Y/N)' -Default ($(if ($defaultCont) { 'Y' } else { 'N' }))
+$continuousMode = ($contStr -match '^\s*[YyTt1]')
+
 # --- Build & persist -------------------------------------------------------
 $cfg = New-RipperConfigObject `
     -LibraryRoot   $libraryRoot `
@@ -257,6 +269,7 @@ $cfg.HasSynologyCredential = $hasCred
 $cfg.MetadataProviders     = $metadataProviders
 $cfg.CoverArtProviders     = $coverArtProviders
 $cfg.EjectAfterRip         = $ejectAfterRip
+$cfg.ContinuousMode        = $continuousMode
 
 # Carry over drive info if Register-Drive ran first.
 if ($existing) {

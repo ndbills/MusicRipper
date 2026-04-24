@@ -159,6 +159,15 @@ function New-RipperConfigObject {
         # iterating on metadata or testing -- the dialog also exposes a
         # per-rip checkbox seeded from this value.
         EjectAfterRip           = $true
+
+        # Phase 5.7: keep the application running between discs so the
+        # parent can rip an entire stack without re-launching (and re-
+        # answering the UAC prompt). After each rip a between-discs
+        # dialog offers "Rip Next" / "Quit"; if a disc arrives via WMI
+        # while the dialog is open it auto-selects "Rip Next". Logs
+        # rotate per disc (each iteration calls Start-RipperLog again).
+        # Set false to restore the one-disc-per-launch flow.
+        ContinuousMode          = $true
     }
 }
 

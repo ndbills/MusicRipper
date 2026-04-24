@@ -661,3 +661,288 @@ CD-Text) before merging.
 4. Confirm current `Show-RipperMetadataDialog` and
    `Get-RipperDiscMetadata` shapes haven't drifted from what's
    described above.
+
+
+---
+
+## D-016 — Continuous mode: stay running between discs *(Phase 5.7)*
+
+**Problem:** Today MusicRipper exits after one disc, so a parent
+ripping a stack of CDs has to double-click the Desktop shortcut for
+each one and re-answer the UAC prompt every single time. With
+Phase 4-5 the per-disc loop is now a clean sequence (id → metadata
+→ confirm → rip → quality → tag → move → eject), so the obvious
+ergonomic win is to keep the application running and just go round
+the loop again.
+
+**Choice — Shape A (in-process loop), hybrid disc detection.**
+Wrap the per-disc body of `Start-Ripper.ps1` in a function
+(`Invoke-RipperOneDiscCycle`) and drive it from a new outer
+`do { ... } while (True)` loop. After each cycle, show
+`Show-RipperBetweenDiscsDialog` (new WPF window):
+
+- Two buttons: `[Rip Next Disc]` (default) and `[Quit]`.
+- Background WMI subscription via `Register-CimIndicationEvent`
+  on `Win32_VolumeChangeEvent EventType=2` (volume arrival),
+  filtered to `cfg.DriveLetter`. When a disc arrives, the
+  subscriber marshals `window.Close()` onto the UI thread with
+  Action='RipNext' / Trigger='AutoDetected', so the parent doesn't
+  have to click anything.
+- Window-X close == `Quit`.
+
+A new config field `ContinuousMode` (default `true`) controls
+whether the outer loop runs. `false` restores the original one-
+disc-per-launch flow.
+
+**Why Shape A over Shape B (relaunch shortcut + exit current):**
+Shape B has zero state-leak risk but flickers a console between
+discs, takes a measurable second to re-init the WPF runtime each
+time, and makes "Quit after this disc" awkward. Shape A is the
+better UX as long as we discipline per-cycle state — which we do
+by wrapping the per-disc body in a function whose locals are
+naturally garbage-collected when it returns.
+
+**Why hybrid disc detection over either flavor alone:**
+
+- Modal-only would force the parent to click "Rip Next" even when
+  they've already inserted the next disc. Annoying for a stack.
+- Auto-only (no modal) would mean there's no way to gracefully
+  quit after a rip without ejecting and walking away — bad.
+- Hybrid gets both: zero clicks for the common "swap disc" case,
+  a clear Quit button for "I'm done."
+
+**Logging.** Each iteration calls `Stop-RipperLog` then
+`Start-RipperLog -Context "rip-disc-N"`, so
+`%LOCALAPPDATA%\MusicRipper\logs\` ends up with one timestamped
+file per disc. `Move-ToLibrary` already calls
+`Copy-RipperLog` against whatever log is currently active, so the
+album folder still receives its per-disc snapshot exactly as
+before. The session-wide `start-ripper` log started at top of
+script remains valid for any pre-loop work (config check, dep
+check, orphan resume) and is rotated out when the first iteration
+begins.
+
+**Already-ripped-this-session prompt.** A script-scope hashtable
+`\.RippedDiscs` keyed by `DiscId` records
+every disc that finished a non-cancelled rip cycle. If the parent
+re-inserts a disc with that id, a Yes/No message box asks "rip
+again or skip?" before the metadata lookup. (Cancelled / failed
+rips are NOT marked, so the parent can re-insert and try again
+without the prompt.)
+
+**Per-cycle error handling.** Per-disc failures (rip throws,
+post-process throws, disc-id failures, unhandled exceptions) all
+log + show a message box and `return` from the cycle function
+rather than `throw`ing through the loop. The outer loop catches
+any escapee with a last-ditch `try/catch` so the only way to exit
+is through the between-discs dialog.
+
+**Rejected:**
+
+- **Auto-relaunch via Start-Process + exit.** See Shape B above.
+- **Background-poll + auto-rip with no between-discs dialog at
+  all.** Removes the user's chance to say "I'm done" without
+  walking to the drive — and silently rips a disc inserted by
+  accident.
+- **Filter the WMI query down to `DriveName=...`.** Some
+  platforms surface `DriveName` only on the inner
+  `TargetInstance` rather than the top-level event, so the
+  filter would silently miss arrivals. Filter in the action
+  handler instead (cheap; events fire infrequently).
+- **A separate "Continuous" tray icon.** Over-engineering for a
+  single-process workflow that already has a window on screen.
+
+**Wire:**
+
+- `src/lib/Config.psm1` → `ContinuousMode = \True` default.
+- `config/config.template.json` → field + comment.
+- `setup/New-RipperConfig.ps1` → top-up detection + interactive
+  Y/N prompt mirroring `EjectAfterRip`.
+- `src/ui/Show-BetweenDiscsDialog.ps1` → new WPF window with
+  dispatcher unhandled-exception sink (Phase-4 rule applies to
+  every new window) writing to
+  `%LOCALAPPDATA%\MusicRipper\logs\between-discs-dispatcher.log`.
+- `src/Start-Ripper.ps1` → refactor per-disc body into
+  `Invoke-RipperOneDiscCycle`; outer `do/while` driving it;
+  per-iteration log rotate; session-state `\`
+  with `DiscCount` / `RippedDiscs` / `LastSummary`.
+- Tests: `Config.Tests.ps1` defaults assert `ContinuousMode -eq \True`.
+
+
+---
+
+## D-016 — Continuous mode: stay running between discs *(Phase 5.7)*
+
+**Problem:** Today MusicRipper exits after one disc, so a parent
+ripping a stack of CDs has to double-click the Desktop shortcut for
+each one and re-answer the UAC prompt every single time. With
+Phase 4-5 the per-disc loop is now a clean sequence (id → metadata
+→ confirm → rip → quality → tag → move → eject), so the obvious
+ergonomic win is to keep the application running and just go round
+the loop again.
+
+**Choice — Shape A (in-process loop), hybrid disc detection.**
+Wrap the per-disc body of `Start-Ripper.ps1` in a function
+(`Invoke-RipperOneDiscCycle`) and drive it from a new outer
+`do { ... } while ($true)` loop. After each cycle, show
+`Show-RipperBetweenDiscsDialog` (new WPF window):
+
+- Two buttons: `[Rip Next Disc]` (default) and `[Quit]`.
+- Background WMI subscription via `Register-CimIndicationEvent`
+  on `Win32_VolumeChangeEvent EventType=2` (volume arrival),
+  filtered to `cfg.DriveLetter`. When a disc arrives, the
+  subscriber marshals `window.Close()` onto the UI thread with
+  Action='RipNext' / Trigger='AutoDetected', so the parent doesn't
+  have to click anything.
+- Window-X close == `Quit`.
+
+A new config field `ContinuousMode` (default `true`) controls
+whether the outer loop runs. `false` restores the original one-
+disc-per-launch flow.
+
+**Why Shape A over Shape B (relaunch shortcut + exit current):**
+Shape B has zero state-leak risk but flickers a console between
+discs, takes a measurable second to re-init the WPF runtime each
+time, and makes "Quit after this disc" awkward. Shape A is the
+better UX as long as we discipline per-cycle state — which we do
+by wrapping the per-disc body in a function whose locals are
+naturally garbage-collected when it returns.
+
+**Why hybrid disc detection over either flavor alone:**
+
+- Modal-only would force the parent to click "Rip Next" even when
+  they've already inserted the next disc. Annoying for a stack.
+- Auto-only (no modal) would mean there's no way to gracefully
+  quit after a rip without ejecting and walking away — bad.
+- Hybrid gets both: zero clicks for the common "swap disc" case,
+  a clear Quit button for "I'm done."
+
+**Logging.** Each iteration calls `Stop-RipperLog` then
+`Start-RipperLog -Context "rip-disc-N"`, so
+`%LOCALAPPDATA%\MusicRipper\logs\` ends up with one timestamped
+file per disc. `Move-ToLibrary` already calls `Copy-RipperLog`
+against whatever log is currently active, so the album folder still
+receives its per-disc snapshot exactly as before. The session-wide
+`start-ripper` log started at top of script remains valid for any
+pre-loop work (config check, dep check, orphan resume) and is
+rotated out when the first iteration begins.
+
+**Already-ripped-this-session prompt.** A script-scope hashtable
+`$script:RipperSession.RippedDiscs` keyed by `DiscId` records every
+disc that finished a non-cancelled rip cycle. If the parent
+re-inserts a disc with that id, a Yes/No message box asks "rip
+again or skip?" before the metadata lookup. (Cancelled / failed
+rips are NOT marked, so the parent can re-insert and try again
+without the prompt.)
+
+**Per-cycle error handling.** Per-disc failures (rip throws,
+post-process throws, disc-id failures, unhandled exceptions) all
+log + show a message box and `return` from the cycle function
+rather than `throw`ing through the loop. The outer loop catches
+any escapee with a last-ditch `try/catch` so the only way to exit
+is through the between-discs dialog.
+
+**Rejected:**
+
+- **Auto-relaunch via Start-Process + exit.** See Shape B above.
+- **Background-poll + auto-rip with no between-discs dialog at all.**
+  Removes the user's chance to say "I'm done" without walking to
+  the drive — and silently rips a disc inserted by accident.
+- **Filter the WMI query down to `DriveName=...`.** Some platforms
+  surface `DriveName` only on the inner `TargetInstance` rather
+  than the top-level event, so the filter would silently miss
+  arrivals. Filter in the action handler instead (cheap; events
+  fire infrequently).
+- **A separate "Continuous" tray icon.** Over-engineering for a
+  single-process workflow that already has a window on screen.
+
+**Wire:**
+
+- `src/lib/Config.psm1` → `ContinuousMode = $true` default.
+- `config/config.template.json` → field + comment.
+- `setup/New-RipperConfig.ps1` → top-up detection + interactive
+  Y/N prompt mirroring `EjectAfterRip`.
+- `src/ui/Show-BetweenDiscsDialog.ps1` → new WPF window with
+  dispatcher unhandled-exception sink (Phase-4 rule applies to
+  every new window) writing to
+  `%LOCALAPPDATA%\MusicRipper\logs\between-discs-dispatcher.log`.
+- `src/Start-Ripper.ps1` → refactor per-disc body into
+  `Invoke-RipperOneDiscCycle`; outer `do/while` driving it;
+  per-iteration log rotate; session-state `$script:RipperSession`
+  with `DiscCount` / `RippedDiscs` / `LastSummary`.
+- Tests: `Config.Tests.ps1` defaults assert `ContinuousMode -eq $true`.
+
+
+---
+
+## D-017 — Cross-session duplicate-rip detection via library check *(Phase 5+ backlog)*
+
+**Status:** Deferred. Surfaced during Phase 5.7 manual verification
+(Task 3) when the user asked whether the "already ripped this session"
+prompt also catches discs ripped in *previous* sessions.
+
+**Problem:** `$script:RipperSession.RippedDiscs` (D-016) only lives for
+the lifetime of one Start-Ripper.ps1 process. Quit and relaunch and
+the same disc will rip again with no warning, silently overwriting (or
+worse, ReviewQueue-duplicating) work the user already finished. The
+session-scoped check catches the "I forgot I just did this disc"
+case but not the "I did this disc last weekend" case, which is the
+more likely failure for a parents-grade tool used in short bursts.
+
+**Approach (sketch):**
+
+The library itself is the durable source of truth — if an album folder
+already exists at the destination path, we already ripped this disc.
+Two layers, cheap to check, both before the expensive rip:
+
+1. **Fast path — DiscId index file.** Maintain
+   `<library-root>/.musicripper/discids.json` mapping
+   `DiscId -> { path, rippedAt, source }`. Append on every successful
+   `Move-ToLibrary`. At the start of `Invoke-RipperOneDiscCycle`,
+   right after `Get-DiscId`, look up the DiscId; if hit, prompt the
+   user (Yes / No / Open in Explorer) before proceeding.
+2. **Slow path — destination-folder probe.** If the JSON index is
+   missing or stale (user moved files around manually), after metadata
+   resolution we compute the would-be destination path and `Test-Path`
+   it. Same prompt.
+
+The session hashtable from D-016 stays in place as the in-memory
+fast cache; the JSON index is its on-disk twin.
+
+**Why JSON index over scanning:** Library may grow to thousands of
+albums on a NAS share. Walking the tree on every disc insert would
+add seconds of latency over SMB. A flat JSON keyed by DiscId is O(1)
+and survives Synology snapshot/restore.
+
+**Edge cases to handle:**
+- ReviewQueue items shouldn't go in the index until they're approved
+  and moved into the real library.
+- "Rip again" (Yes) needs a clear destination strategy —
+  overwrite, side-by-side `(2)` folder, or route to ReviewQueue for
+  manual diff. Default proposal: side-by-side `(2)` so nothing is
+  ever destroyed. The same three-way prompt should also replace the
+  current late-stage `Move-ToLibrary` "already exists" throw
+  (Move-ToLibrary.ps1#L316), which today is the only backstop for
+  cross-session duplicates and forces the user to discover the
+  collision *after* a 5-minute rip. Once the early index check is in
+  place, the late-stage throw becomes a belt-and-braces safety net
+  for index-miss cases (manual file moves, restored backups) and
+  should reuse the same prompt UX rather than throwing.
+- Index corruption: read errors fall back to the slow path, never
+  block a rip.
+- Multi-disc sets share TOCs across discs in some pressings; key on
+  full DiscId (which includes track offsets), not just the freedb id.
+
+**Files likely touched:**
+- `src/core/Move-ToLibrary.ps1` — append to index on success.
+- `src/Start-Ripper.ps1` — index lookup right after `Get-DiscId`,
+  before metadata fetch.
+- New `src/core/Get-LibraryDiscIndex.ps1` — read/write/repair the
+  JSON.
+- `tests/Get-LibraryDiscIndex.Tests.ps1` — round-trip + corruption
+  recovery.
+
+**Risk:** Low. Index is advisory; failure modes degrade to current
+behaviour (no detection), never block the rip.
+
+**Estimate:** Small-to-medium. A focused half-day plus tests.
