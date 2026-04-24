@@ -126,7 +126,7 @@ function Show-RipperDuplicateDiscDialog {
               Width="180" Height="34"
               IsDefault="True"
               Background="#0a7" Foreground="White" FontWeight="Bold"
-              ToolTip="Rip this disc again as a side-by-side copy. The new rip lands in '<Album> [rip 2]' so it doesn't overwrite the existing one."/>
+              ToolTip="Rip this disc again as a side-by-side copy. The new rip lands in 'Album Name [rip 2]' so it doesn't overwrite the existing one."/>
     </StackPanel>
   </Grid>
 </Window>
