@@ -262,8 +262,67 @@ function Invoke-RipperResumeOrphans {
                 $rpp = Resume-RipperOrphan -RipFolder $orphan.Folder -LibraryRoot $cfg.LibraryRoot
                 Write-RipperLog INFO 'Start-Ripper' "Resumed orphan -> $($rpp.Target)"
             } catch {
-                Write-RipperLog ERROR 'Start-Ripper' "Resume failed for $($orphan.Folder): $($_.Exception.Message)"
-                $resumeFails += [pscustomobject]@{ Folder = $orphan.Folder; Error = $_.Exception.Message }
+                # Phase 5.11: detect "target already exists" so the user
+                # can interactively recover (Keep both / Review / Discard /
+                # Leave) instead of getting a passive warning. Same marker
+                # the post-process catch in Invoke-RipperOneDiscCycle uses.
+                $orphanEx       = $_.Exception
+                $existingTarget = $null
+                $cur = $orphanEx
+                while ($cur) {
+                    if ($cur.Data -and $cur.Data.Contains('TargetExists')) {
+                        $existingTarget = [string]$cur.Data['TargetExists']; break
+                    }
+                    $cur = $cur.InnerException
+                }
+
+                if ($existingTarget) {
+                    Write-RipperLog WARN 'Start-Ripper' "Orphan resume blocked: target exists at '$existingTarget'. Prompting user."
+                    $orphanLabel = Split-Path -Leaf $orphan.Folder
+                    try {
+                        $st = Read-RipperRipState -RipFolder $orphan.Folder
+                        if ($st -and $st.Metadata) {
+                            $orphanLabel = "$($st.Metadata.AlbumArtist) - $($st.Metadata.Album)"
+                        }
+                    } catch {}
+
+                    $oChoice = Show-RipperTargetExistsDialog `
+                        -AlbumLabel       $orphanLabel `
+                        -ExistingPath     $existingTarget `
+                        -StrandedRipPath  $orphan.Folder
+                    Write-RipperLog INFO 'Start-Ripper' "Orphan target-exists dialog: Action=$($oChoice.Action)"
+
+                    switch ($oChoice.Action) {
+                        { $_ -in 'SideBySide','Review' } {
+                            try {
+                                $rpp = Resume-RipperOrphan `
+                                    -RipFolder         $orphan.Folder `
+                                    -LibraryRoot       $cfg.LibraryRoot `
+                                    -AllowSideBySide:($oChoice.Action -eq 'SideBySide') `
+                                    -ForceReviewQueue:($oChoice.Action -eq 'Review')
+                                Write-RipperLog INFO 'Start-Ripper' "Orphan recovery succeeded ($($oChoice.Action)) -> $($rpp.Target)"
+                            } catch {
+                                Write-RipperLog ERROR 'Start-Ripper' "Orphan recovery ($($oChoice.Action)) failed: $($_.Exception.Message)"
+                                $resumeFails += [pscustomobject]@{ Folder = $orphan.Folder; Error = $_.Exception.Message }
+                            }
+                        }
+                        'Discard' {
+                            try {
+                                Move-RipperFolderToRecycleBin -Path $orphan.Folder
+                                Write-RipperLog INFO 'Start-Ripper' "Discarded orphan to Recycle Bin: $($orphan.Folder)"
+                            } catch {
+                                Write-RipperLog ERROR 'Start-Ripper' "Orphan discard failed: $($_.Exception.Message)"
+                                $resumeFails += [pscustomobject]@{ Folder = $orphan.Folder; Error = "Discard failed: $($_.Exception.Message)" }
+                            }
+                        }
+                        default {
+                            Write-RipperLog INFO 'Start-Ripper' "Left orphan in inbox: $($orphan.Folder)"
+                        }
+                    }
+                } else {
+                    Write-RipperLog ERROR 'Start-Ripper' "Resume failed for $($orphan.Folder): $($_.Exception.Message)"
+                    $resumeFails += [pscustomobject]@{ Folder = $orphan.Folder; Error = $_.Exception.Message }
+                }
             }
         }
         if ($resumeFails.Count -gt 0) {

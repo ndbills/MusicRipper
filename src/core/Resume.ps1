@@ -190,7 +190,13 @@ function Resume-RipperOrphan {
     [OutputType([hashtable])]
     param(
         [Parameter(Mandatory)] [string] $RipFolder,
-        [Parameter(Mandatory)] [string] $LibraryRoot
+        [Parameter(Mandatory)] [string] $LibraryRoot,
+
+        # Phase 5.11 recovery: passed through when the user picks
+        # "Keep both" / "Send to Review" on Show-RipperTargetExistsDialog
+        # for an orphan that collides with an existing library album.
+        [switch] $AllowSideBySide,
+        [switch] $ForceReviewQueue
     )
 
     $state = Read-RipperRipState -RipFolder $RipFolder
@@ -217,7 +223,9 @@ function Resume-RipperOrphan {
         -Metadata     $state.Metadata `
         -DiscId       $state.DiscId `
         -LibraryRoot  $LibraryRoot `
-        -CoverArtFile $coverFile
+        -CoverArtFile $coverFile `
+        -AllowSideBySide:$AllowSideBySide `
+        -ForceReviewQueue:$ForceReviewQueue
 
     # Sidecar moved with the folder; clean it up from the new location.
     Remove-RipperRipState -RipFolder $pp.Target
