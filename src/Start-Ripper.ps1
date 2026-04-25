@@ -264,16 +264,22 @@ function Invoke-RipperResumeOrphans {
             } catch {
                 # Phase 5.11: detect "target already exists" so the user
                 # can interactively recover (Keep both / Review / Discard /
-                # Leave) instead of getting a passive warning. Same marker
-                # the post-process catch in Invoke-RipperOneDiscCycle uses.
-                $orphanEx       = $_.Exception
+                # Leave) instead of getting a passive warning. PowerShell's
+                # `throw` rewraps the IOException as RuntimeException and
+                # drops .Data, so we match on the (stable) message text and
+                # parse the path off it -- falling back to the Data marker
+                # for direct callers that managed to preserve it.
+                $msg            = [string]$_.Exception.Message
                 $existingTarget = $null
-                $cur = $orphanEx
+                $cur = $_.Exception
                 while ($cur) {
                     if ($cur.Data -and $cur.Data.Contains('TargetExists')) {
                         $existingTarget = [string]$cur.Data['TargetExists']; break
                     }
                     $cur = $cur.InnerException
+                }
+                if (-not $existingTarget -and $msg -match '^Target directory already exists\b.*?:\s*(.+)$') {
+                    $existingTarget = $matches[1].Trim()
                 }
 
                 if ($existingTarget) {
@@ -661,20 +667,27 @@ function Invoke-RipperOneDiscCycle {
                         Write-RipperLog WARN 'Start-Ripper' "Sidecar cleanup failed: $($_.Exception.Message)"
                     }
                 } catch {
-                    # Phase 5.11: detect "target already exists" by the
-                    # Exception.Data['TargetExists'] marker Move-RipToLibrary
-                    # attaches. The rip itself is intact in _inbox\ with its
-                    # sidecar still in place; offer the user a choice
-                    # (Side-by-side / Send to Review / Discard / Leave) so
-                    # they aren't dumped into a manual cleanup.
-                    $ex             = $_.Exception
+                    # Phase 5.11: detect "target already exists" so we can
+                    # offer the user an interactive recovery dialog instead
+                    # of dumping the stranded rip in _inbox\.
+                    #
+                    # Move-RipToLibrary tags Exception.Data['TargetExists']
+                    # with the resolved target path, but PowerShell's `throw`
+                    # rewraps script-thrown exceptions as RuntimeException and
+                    # drops .Data / .InnerException. We therefore detect via
+                    # the (stable) message text and parse the path off it,
+                    # falling back to the Data marker for direct callers.
+                    $msg            = [string]$_.Exception.Message
                     $existingTarget = $null
-                    $cur = $ex
+                    $cur = $_.Exception
                     while ($cur) {
                         if ($cur.Data -and $cur.Data.Contains('TargetExists')) {
                             $existingTarget = [string]$cur.Data['TargetExists']; break
                         }
                         $cur = $cur.InnerException
+                    }
+                    if (-not $existingTarget -and $msg -match '^Target directory already exists\b.*?:\s*(.+)$') {
+                        $existingTarget = $matches[1].Trim()
                     }
 
                     if ($existingTarget) {
