@@ -31,3 +31,5 @@ temp/
 out/
 dist/
 testResults.xml
+
+pester-result.txt

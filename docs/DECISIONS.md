@@ -1099,10 +1099,10 @@ Phase 5.7 was added to prevent.
 `confirm-dialog` work; this decision retires the stub.
 
 
-## D-020 -- Honour EjectAfterRip on every disc-disposition path *(Phase 5.10 backlog)*
+## D-020 -- Honour EjectAfterRip on every disc-disposition path *(wontfix)*
 
-**Status:** Backlogged for Phase 5.10 (after 5.9 merges).
-**Date:** 2026-04-24.
+**Status:** Wontfix (closed 2026-04-24 after live trial).
+**Date:** 2026-04-24 (raised); 2026-04-24 (closed).
 
 **Context:** Phase 5.4 added a per-rip `Eject disc when done` checkbox
 in the metadata dialog (sourced from `cfg.EjectAfterRip`) which the
@@ -1151,3 +1151,24 @@ its own small phase.
 **Reverse references:** Eject-toggle was introduced in
 `9835d1e feat(eject): per-rip eject toggle in confirm dialog (Phase 5.4)`;
 this decision completes the audit that should have accompanied it.
+
+**Outcome (2026-04-24):** Implemented on a short-lived branch
+`phase-5.10-eject-audit` (commit `1a35f5f`) and trialled live. The
+new behaviour felt wrong in practice: clicking `Skip rip` on the
+library-duplicate dialog (or `No` on the in-session-duplicate
+prompt) is fundamentally a "next disc, please" gesture, and the
+parent expects the tray to open so they can swap discs --
+regardless of `cfg.EjectAfterRip`. Drawing a finer line between
+"skip-with-disc → eject" and "skip-without-disc → don't" is a
+distinction nobody will remember six months from now.
+
+**Final decision:** `cfg.EjectAfterRip` governs the *post-rip*
+flows only -- the `Rip` / `Review` / `Cancel` arms in the metadata
+dialog, routed through `_maybeEject $choice`. Pre-metadata
+short-circuit paths (no-disc, library-dup Skip/default,
+in-session-dup No) keep their unconditional `Invoke-RipperEject`
+behaviour from before Phase 5.10. Branch discarded
+(`git branch -D`); no code changes landed on `main`. Reproducer
+from Phase 5.9 verification (`EjectAfterRip = false` + `No` on
+in-session dup → still ejects) is now expected behaviour, not a
+bug.
