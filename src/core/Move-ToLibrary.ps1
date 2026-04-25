@@ -342,7 +342,14 @@ function Move-RipToLibrary {
                 throw "Side-by-side fallback exhausted (>= 99 copies?) for: $orig"
             }
         } else {
-            throw "Target directory already exists (use -Force to overlay or -AllowSideBySide for `[rip N]` fallback): $target"
+            # Phase 5.11: tag the throw with Exception.Data so the caller
+            # (Start-Ripper post-process catch) can offer the user an
+            # interactive Side-by-side / Open existing / Send to Review /
+            # Discard prompt instead of just dumping the rip in _inbox.
+            $ex = [System.IO.IOException]::new(
+                "Target directory already exists (use -Force to overlay or -AllowSideBySide for ``[rip N]`` fallback): $target")
+            $ex.Data['TargetExists'] = $target
+            throw $ex
         }
     }
 

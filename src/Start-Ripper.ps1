@@ -64,6 +64,7 @@ Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 . (Join-Path $repoRoot 'src\ui\Show-RipProgress.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-BetweenDiscsDialog.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-DuplicateDiscDialog.ps1')
+. (Join-Path $repoRoot 'src\ui\Show-TargetExistsDialog.ps1')
 
 $logPath = Start-RipperLog -Context 'start-ripper'
 Write-RipperLog INFO 'Start-Ripper' 'Phase 5 entry: config + disc-id + metadata + confirm + rip + quality/tag/move.'
@@ -220,11 +221,26 @@ if (-not $deps.Ok) {
 # --- Resume orphaned rips --------------------------------------------------
 # Any folder under <LibraryRoot>\_inbox\ that still has _ripper-state.json
 # is a rip whose post-process never finished (crash, power loss, manual exit
-# between Invoke-Rip and Invoke-RipperPostProcess). Offer to finish them now
+# between Invoke-Rip and Invoke-RipperPostProcess, or a "target already
+# exists" throw that left the rip stranded). Offer to finish them now
 # before touching the drive — running the disc-id step would be wasted work
 # if the user wants to bail out and recover by hand instead.
-$orphans = @(Find-RipperOrphanedRips -LibraryRoot $cfg.LibraryRoot)
-if ($orphans.Count -gt 0) {
+#
+# Phase 5.11: factored into Invoke-RipperResumeOrphans so the continuous-
+# mode loop can re-run it between cycles (a stranded rip from cycle N
+# should be offered for resume before cycle N+1 starts, not held until
+# the next launch).
+function Invoke-RipperResumeOrphans {
+    [CmdletBinding()]
+    [OutputType([string])]   # returns 'Continue' or 'Quit'
+    param([switch]$Quiet)
+
+    $orphans = @(Find-RipperOrphanedRips -LibraryRoot $cfg.LibraryRoot)
+    if ($orphans.Count -eq 0) {
+        if (-not $Quiet) { Write-RipperLog INFO 'Start-Ripper' 'No orphaned rips found.' }
+        return 'Continue'
+    }
+
     $names = ($orphans | ForEach-Object { "  - $(Split-Path -Leaf $_.Folder)" }) -join "`n"
     Write-RipperLog INFO 'Start-Ripper' "Found $($orphans.Count) orphaned rip(s)."
 
@@ -237,8 +253,7 @@ if ($orphans.Count -gt 0) {
 
     if ($rc -eq [System.Windows.Forms.DialogResult]::Cancel) {
         Write-RipperLog INFO 'Start-Ripper' 'User cancelled at orphan-resume prompt.'
-        Stop-RipperLog
-        return
+        return 'Quit'
     }
     if ($rc -eq [System.Windows.Forms.DialogResult]::Yes) {
         $resumeFails = @()
@@ -253,12 +268,18 @@ if ($orphans.Count -gt 0) {
         }
         if ($resumeFails.Count -gt 0) {
             $failList = ($resumeFails | ForEach-Object { "  - $(Split-Path -Leaf $_.Folder): $($_.Error)" }) -join "`n"
-            Show-RipperInfo "Some orphan rips could not be finished:`n`n$failList`n`nThe sidecars are still in place — try again next launch, or use src\tools\Complete-OrphanedRip.ps1." `
+            Show-RipperInfo "Some orphan rips could not be finished:`n`n$failList`n`nThe sidecars are still in place — try again next disc / launch, or use src\tools\Complete-OrphanedRip.ps1." `
                 'MusicRipper - Resume Issues' 'Warning'
         }
     } else {
         Write-RipperLog INFO 'Start-Ripper' 'User chose to skip orphan resume.'
     }
+    return 'Continue'
+}
+
+if ((Invoke-RipperResumeOrphans) -eq 'Quit') {
+    Stop-RipperLog
+    return
 }
 
 # --- Per-disc cycle (Phase 5.7) -------------------------------------------
@@ -581,11 +602,95 @@ function Invoke-RipperOneDiscCycle {
                         Write-RipperLog WARN 'Start-Ripper' "Sidecar cleanup failed: $($_.Exception.Message)"
                     }
                 } catch {
-                    Write-RipperLog ERROR 'Start-Ripper' "Phase 5 pipeline failed: $($_.Exception.Message)"
-                    Show-RipperInfo "Rip succeeded but post-processing failed:`n`n  $($_.Exception.Message)`n`nThe raw rip is still at:`n  $($result.OutputDir)`n`nSee log:`n  $(Get-RipperLogPath)" `
-                        'MusicRipper - Post-Processing Failed' 'Warning'
-                    _maybeEject $choice
-                    return _result 'Failed' "Disc ${cycleNum}: $($m.AlbumArtist) - $($m.Album) -- post-process failed: $($_.Exception.Message)"
+                    # Phase 5.11: detect "target already exists" by the
+                    # Exception.Data['TargetExists'] marker Move-RipToLibrary
+                    # attaches. The rip itself is intact in _inbox\ with its
+                    # sidecar still in place; offer the user a choice
+                    # (Side-by-side / Send to Review / Discard / Leave) so
+                    # they aren't dumped into a manual cleanup.
+                    $ex             = $_.Exception
+                    $existingTarget = $null
+                    $cur = $ex
+                    while ($cur) {
+                        if ($cur.Data -and $cur.Data.Contains('TargetExists')) {
+                            $existingTarget = [string]$cur.Data['TargetExists']; break
+                        }
+                        $cur = $cur.InnerException
+                    }
+
+                    if ($existingTarget) {
+                        Write-RipperLog WARN 'Start-Ripper' "Move blocked: target exists at '$existingTarget'. Prompting user."
+                        $albumLabel = "$($m.AlbumArtist) - $($m.Album)"
+                        $choice2 = Show-RipperTargetExistsDialog `
+                            -AlbumLabel       $albumLabel `
+                            -ExistingPath     $existingTarget `
+                            -StrandedRipPath  $result.OutputDir
+                        Write-RipperLog INFO 'Start-Ripper' "Target-exists dialog: Action=$($choice2.Action)"
+
+                        switch ($choice2.Action) {
+                            { $_ -in 'SideBySide','Review' } {
+                                # Re-run post-process with the appropriate
+                                # override. Swallow a second "target exists"
+                                # only for SideBySide (shouldn't happen --
+                                # >= 99 copies); Review always lands in
+                                # _ReviewQueue\ which uses unique disc-id-
+                                # suffixed folders.
+                                try {
+                                    $pp = Invoke-RipperPostProcess `
+                                        -RipFolder        $result.OutputDir `
+                                        -LogFile          $result.LogFile `
+                                        -Metadata         $m `
+                                        -DiscId           $disc.DiscId `
+                                        -LibraryRoot      $cfg.LibraryRoot `
+                                        -CoverArtFile     $result.CoverArtFile `
+                                        -AllowSideBySide:($choice2.Action -eq 'SideBySide') `
+                                        -ForceReviewQueue:($choice2.Action -eq 'Review')
+                                    $phase5Quality = $pp.Quality
+                                    $phase5Target  = $pp.Target
+                                    try { Remove-RipperRipState -RipFolder $pp.Target } catch {
+                                        Write-RipperLog WARN 'Start-Ripper' "Sidecar cleanup failed: $($_.Exception.Message)"
+                                    }
+                                    Write-RipperLog INFO 'Start-Ripper' "Recovery succeeded ($($choice2.Action)) -> $phase5Target"
+                                } catch {
+                                    Write-RipperLog ERROR 'Start-Ripper' "Recovery ($($choice2.Action)) failed: $($_.Exception.Message)"
+                                    Show-RipperInfo "Recovery attempt failed:`n`n  $($_.Exception.Message)`n`nThe raw rip is still at:`n  $($result.OutputDir)`n`nMusicRipper will offer to resume it next disc / launch." `
+                                        'MusicRipper - Recovery Failed' 'Warning'
+                                    _maybeEject $choice
+                                    return _result 'Failed' "Disc ${cycleNum}: $albumLabel -- recovery failed: $($_.Exception.Message)"
+                                }
+                            }
+                            'Discard' {
+                                try {
+                                    Move-RipperFolderToRecycleBin -Path $result.OutputDir
+                                    Write-RipperLog INFO 'Start-Ripper' "Discarded stranded rip to Recycle Bin: $($result.OutputDir)"
+                                    Show-RipperInfo "The new rip was moved to the Recycle Bin.`n`nThe existing album in your library was not touched." `
+                                        'MusicRipper' 'Information'
+                                } catch {
+                                    Write-RipperLog ERROR 'Start-Ripper' "Discard failed: $($_.Exception.Message)"
+                                    Show-RipperInfo "Could not move the rip to the Recycle Bin:`n`n  $($_.Exception.Message)`n`nThe rip is still at:`n  $($result.OutputDir)" `
+                                        'MusicRipper - Discard Failed' 'Warning'
+                                }
+                                _maybeEject $choice
+                                return _result 'Skipped' "Disc ${cycleNum}: $albumLabel -- discarded (already in library)"
+                            }
+                            default {
+                                # Leave: the sidecar is in place; orphan
+                                # rescan (between cycles or next launch)
+                                # will offer to resume.
+                                Write-RipperLog INFO 'Start-Ripper' "Left stranded rip in inbox: $($result.OutputDir)"
+                                Show-RipperInfo "The new rip is still at:`n`n  $($result.OutputDir)`n`nMusicRipper will offer to finish it before the next disc (or on next launch)." `
+                                    'MusicRipper' 'Information'
+                                _maybeEject $choice
+                                return _result 'Skipped' "Disc ${cycleNum}: $albumLabel -- left in _inbox (already in library)"
+                            }
+                        }
+                    } else {
+                        Write-RipperLog ERROR 'Start-Ripper' "Phase 5 pipeline failed: $($_.Exception.Message)"
+                        Show-RipperInfo "Rip succeeded but post-processing failed:`n`n  $($_.Exception.Message)`n`nThe raw rip is still at:`n  $($result.OutputDir)`n`nSee log:`n  $(Get-RipperLogPath)" `
+                            'MusicRipper - Post-Processing Failed' 'Warning'
+                        _maybeEject $choice
+                        return _result 'Failed' "Disc ${cycleNum}: $($m.AlbumArtist) - $($m.Album) -- post-process failed: $($_.Exception.Message)"
+                    }
                 }
             }
 
@@ -714,6 +819,12 @@ do {
 
     Write-RipperLog INFO 'Start-Ripper' "Between-discs decision: Action=$($next.Action) Trigger=$($next.Trigger)"
     if ($next.Action -ne 'RipNext') { break }
+
+    # Phase 5.11: re-scan _inbox\ before the next cycle. If the previous
+    # cycle stranded a rip (e.g. Move-RipToLibrary "target already exists"
+    # threw and the post-process catch left it in place), the parent gets
+    # the resume prompt now instead of having to relaunch the app.
+    if ((Invoke-RipperResumeOrphans -Quiet) -eq 'Quit') { break }
 } while ($true)
 
 Write-RipperLog INFO 'Start-Ripper' "Session ending: $($script:RipperSession.DiscCount) disc(s) processed."

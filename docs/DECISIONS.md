@@ -1172,3 +1172,83 @@ behaviour from before Phase 5.10. Branch discarded
 from Phase 5.9 verification (`EjectAfterRip = false` + `No` on
 in-session dup → still ejects) is now expected behaviour, not a
 bug.
+
+---
+
+## D-021 -- Recover stranded rips when post-process hits "target already exists" (Phase 5.11)
+
+**Context:** Live trial after Phase 5.10 fed a CD whose album was
+already in the library but **not** indexed in `.musicripper\discids.json`
+(pre-Phase-5.8 vintage). Outcome:
+
+1. Disc-id lookup missed -> no `Show-RipperDuplicateDiscDialog`.
+2. Rip + tag succeeded; sidecar written; rip lived in `_inbox\`.
+3. `Move-RipToLibrary` threw "Target directory already exists..." for
+   `Mannheim Steamroller\Christmas (1984)`.
+4. `Invoke-RipperPostProcess` re-threw to `Invoke-RipperOneDiscCycle`'s
+   catch, which surfaced a passive `Show-RipperInfo` warning and
+   returned `Failed`.
+5. The orphan-resume sweep only ran at script *startup*. In continuous
+   mode, the next disc proceeded with the previous rip silently
+   stranded.
+
+**Choice:** Two-part fix on branch `phase-5.11-orphan-rescan-target-exists`.
+
+1. **Between-cycle orphan rescan.** Refactor the startup orphan-resume
+   block in `Start-Ripper.ps1` into `Invoke-RipperResumeOrphans
+   [-Quiet]` returning `Continue` / `Quit`. Continuous-mode loop calls
+   it (`-Quiet`) after `Show-RipperBetweenDiscsDialog`'s `RipNext` so
+   any orphan from the previous cycle gets the same YesNoCancel prompt
+   the user already knows from launch.
+2. **Interactive target-exists dialog.** `Move-RipToLibrary` now throws
+   `[System.IO.IOException]` with `Exception.Data['TargetExists']` =
+   resolved target path (message preserved -> existing
+   `*already exists*` test still passes). The post-process catch in
+   `Invoke-RipperOneDiscCycle` walks `InnerException` looking for that
+   marker and, when found, calls a new WPF
+   `Show-RipperTargetExistsDialog` (`src/ui/Show-TargetExistsDialog.ps1`).
+   Five buttons: *Open existing...* (best-effort `Invoke-Item`, dialog
+   stays open), *Discard new rip*, *Send to Review*, *Leave for now*
+   (IsCancel + close-X), *Keep both* (IsDefault, green). Branches:
+   - **SideBySide / Review** -> retry `Invoke-RipperPostProcess` with
+     `-AllowSideBySide` or `-ForceReviewQueue`.
+   - **Discard** -> `Move-RipperFolderToRecycleBin` (a thin wrapper
+     around `Microsoft.VisualBasic.FileIO.FileSystem.DeleteDirectory`
+     with `RecycleOption.SendToRecycleBin`) so the orphan is
+     **recoverable**, not hard-deleted.
+   - **Leave** -> passive notice; the new between-cycle rescan picks
+     it up.
+
+**Alternatives considered:**
+
+- **Just always force side-by-side.** Rejected: silent duplicates
+  pollute the library and the user can't tell *which* disc he just
+  ripped at a glance.
+- **Hard-delete the new rip on Discard.** Rejected per user instruction:
+  Recycle Bin keeps the recovery path open if the user changes his mind.
+- **Pre-flight target check before ripping.** Considered for a future
+  phase; today the rip is fast enough that catching at move-time and
+  recovering interactively is fine, and it keeps `Move-RipToLibrary`
+  the single source of truth for collision policy.
+- **Always route to `_ReviewQueue\` on collision.** That's now one of
+  the offered actions; not the only one because the most common case
+  during the parents' use is the album genuinely is the same and the
+  rip should be discarded.
+
+**Tests:**
+
+- `tests/Move-ToLibrary.Tests.ps1` -- new case asserts
+  `Exception.Data['TargetExists']` is populated and ends in
+  `Spirit of the Season (2007)`.
+- `tests/Show-TargetExistsDialog.Tests.ps1` -- input validation for
+  `Move-RipperFolderToRecycleBin` (missing path, file-not-dir,
+  `-WhatIf` no-op) plus a source-contract scan for the dispatcher
+  sink and the four documented actions. WPF window itself is not
+  driven from Pester (same convention as `Show-DuplicateDiscDialog`).
+- Full suite: 324 passed / 0 failed / 1 skipped (was 318 before
+  Phase 5.11).
+
+**Manual verification:** User left the stranded
+`_inbox\Mannheim Steamroller - Christmas\` in place and will re-run
+MusicRipper after merge to confirm the dialog appears, each branch
+behaves, and discarded folders land in the Recycle Bin recoverable.
