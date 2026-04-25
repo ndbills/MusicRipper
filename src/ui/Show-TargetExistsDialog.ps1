@@ -67,9 +67,10 @@ function Show-RipperTargetExistsDialog {
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="MusicRipper - Album Already in Library"
-        Width="640" Height="430"
+        Width="720" Height="520"
+        MinWidth="640" MinHeight="460"
         WindowStartupLocation="CenterOwner"
-        ResizeMode="NoResize"
+        ResizeMode="CanResize"
         SizeToContent="Manual">
   <Grid Margin="22">
     <Grid.RowDefinitions>
@@ -91,11 +92,13 @@ function Show-RipperTargetExistsDialog {
       <StackPanel>
         <TextBlock Text="$labelEsc"
                    FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap"/>
-        <TextBlock Text="Existing library folder:"
-                   FontSize="11" Foreground="#666" Margin="0,8,0,0"/>
-        <TextBlock Text="$existingEsc"
-                   FontFamily="Consolas" FontSize="11"
-                   Foreground="#222" TextWrapping="Wrap"/>
+        <TextBlock FontSize="11" Foreground="#666" Margin="0,8,0,0">
+          Existing library folder
+          <Run Foreground="#888">(click to open in Explorer):</Run>
+        </TextBlock>
+        <TextBlock FontFamily="Consolas" FontSize="11" TextWrapping="Wrap">
+          <Hyperlink x:Name="ExistingPathLink" Foreground="#0645AD">$existingEsc</Hyperlink>
+        </TextBlock>
         <TextBlock Text="New (stranded) rip:"
                    FontSize="11" Foreground="#666" Margin="0,8,0,0"/>
         <TextBlock Text="$strandedEsc"
@@ -106,18 +109,14 @@ function Show-RipperTargetExistsDialog {
 
     <TextBlock Grid.Row="2"
                Text="What would you like to do with the new rip?"
-               Margin="0,8,0,8" FontSize="13"/>
+               Margin="0,12,0,8" FontSize="13" FontWeight="SemiBold"/>
 
-    <TextBlock Grid.Row="3" TextWrapping="Wrap" FontSize="11" Foreground="#555"
-               Margin="0,0,0,12">
-      <Run FontWeight="Bold">Keep both</Run> files it side-by-side as
-      "Album (Year) [rip 2]". <LineBreak/>
-      <Run FontWeight="Bold">Send to Review</Run> drops it in _ReviewQueue\
-      so you can triage it later in Picard. <LineBreak/>
-      <Run FontWeight="Bold">Discard</Run> moves the new rip to the
-      Recycle Bin (recoverable). <LineBreak/>
-      <Run FontWeight="Bold">Leave for now</Run> keeps it in _inbox\;
-      MusicRipper will offer to resume it next time.
+    <TextBlock Grid.Row="3" TextWrapping="Wrap" FontSize="12" Foreground="#444"
+               Margin="0,0,0,12" LineHeight="20">
+      <Run FontWeight="Bold">Keep both</Run> -- save side-by-side as "Album (Year) [rip 2]".<LineBreak/>
+      <Run FontWeight="Bold">Send to Review</Run> -- drop in _ReviewQueue\ for triage in Picard.<LineBreak/>
+      <Run FontWeight="Bold">Discard new rip</Run> -- move to the Recycle Bin (recoverable).<LineBreak/>
+      <Run FontWeight="Bold">Leave for now</Run> -- keep in _inbox\; resume offered next time.
     </TextBlock>
 
     <TextBlock Grid.Row="5"
@@ -126,10 +125,6 @@ function Show-RipperTargetExistsDialog {
                Margin="0,0,0,12"/>
 
     <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right">
-      <Button x:Name="OpenExistingButton"
-              Content="Open existing..."
-              Width="130" Height="34" Margin="0,0,10,0"
-              ToolTip="Open the existing library folder in File Explorer. The dialog stays open."/>
       <Button x:Name="DiscardButton"
               Content="Discard new rip"
               Width="130" Height="34" Margin="0,0,10,0"
@@ -180,7 +175,7 @@ function Show-RipperTargetExistsDialog {
     $review       = $window.FindName('ReviewButton')
     $discard      = $window.FindName('DiscardButton')
     $leave        = $window.FindName('LeaveButton')
-    $openExisting = $window.FindName('OpenExistingButton')
+    $existingLink = $window.FindName('ExistingPathLink')
 
     $sideBySide.Add_Click({
         $state.Action = 'SideBySide'
@@ -206,11 +201,13 @@ function Show-RipperTargetExistsDialog {
         $window.Close()
     }.GetNewClosure())
 
-    # Open existing stays open so the user can decide after looking at
-    # the existing rip. Best-effort -- if Invoke-Item fails (folder
-    # gone, locked share, etc.) we just log and move on.
-    $openExisting.Tag = $ExistingPath
-    $openExisting.Add_Click({
+    # Hyperlink on the existing library path -- opens File Explorer in
+    # place of a dedicated "Open existing..." button. Dialog stays open
+    # so the user can decide after looking at the existing rip.
+    # Best-effort -- if Invoke-Item fails (folder gone, locked share,
+    # etc.) we just log and move on.
+    $existingLink.Tag = $ExistingPath
+    $existingLink.Add_Click({
         $p = $this.Tag
         try {
             if (Test-Path -LiteralPath $p) {
