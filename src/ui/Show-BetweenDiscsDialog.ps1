@@ -138,6 +138,14 @@ function Show-RipperBetweenDiscsDialog {
     $window = [Windows.Markup.XamlReader]::Load($reader)
     if ($Owner) { $window.Owner = $Owner }
 
+    # Phase 5.11: see Show-DuplicateDiscDialog -- steal foreground from
+    # whatever was last in focus, since the host pwsh window is minimized.
+    $window.Topmost = $true
+    $window.Add_Loaded({
+        $this.Activate() | Out-Null
+        $this.Topmost = $false
+    }.GetNewClosure())
+
     # Dispatcher sink (Phase-4 / 5.2 rule): every WPF window we open
     # gets an unhandled-exception sink writing to a per-window sidecar.
     $sidecar = Join-Path $env:LOCALAPPDATA 'MusicRipper\logs\between-discs-dispatcher.log'

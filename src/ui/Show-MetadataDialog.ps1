@@ -465,6 +465,14 @@ namespace MusicRipper {
     $window = [Windows.Markup.XamlReader]::Load($reader)
     if ($Owner) { $window.Owner = $Owner }
 
+    # Phase 5.11: see Show-DuplicateDiscDialog -- steal foreground from
+    # whatever was last in focus, since the host pwsh window is minimized.
+    $window.Topmost = $true
+    $window.Add_Loaded({
+        $this.Activate() | Out-Null
+        $this.Topmost = $false
+    }.GetNewClosure())
+
     # Phase-4 lesson: always install a dispatcher unhandled-exception
     # sink on any new WPF window so binding / template errors get
     # logged instead of bubbling as a silent NRE at ShowDialog.
@@ -798,6 +806,14 @@ namespace MusicRipper {
     $reader = [System.Xml.XmlNodeReader]::new(([xml]$xaml))
     $window = [Windows.Markup.XamlReader]::Load($reader)
     if ($Owner) { $window.Owner = $Owner }
+
+    # Phase 5.11: see Show-DuplicateDiscDialog -- steal foreground from
+    # whatever was last in focus, since the host pwsh window is minimized.
+    $window.Topmost = $true
+    $window.Add_Loaded({
+        $this.Activate() | Out-Null
+        $this.Topmost = $false
+    }.GetNewClosure())
 
     # Phase-4 lesson: WPF re-raises tick / binding / template errors as
     # a generic NullReferenceException at the call site of ShowDialog,
@@ -1197,6 +1213,14 @@ function Show-RipperMetadataDialog {
 
     $reader = [System.Xml.XmlNodeReader]::new(([xml]$xaml))
     $window = [Windows.Markup.XamlReader]::Load($reader)
+
+    # Phase 5.11: see Show-DuplicateDiscDialog -- steal foreground from
+    # whatever was last in focus, since the host pwsh window is minimized.
+    $window.Topmost = $true
+    $window.Add_Loaded({
+        $this.Activate() | Out-Null
+        $this.Topmost = $false
+    }.GetNewClosure())
 
     # Find named controls.
     $controls = @{}
