@@ -91,7 +91,7 @@ function Show-RipperBetweenDiscsDialog {
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="$titleEsc"
         Width="520" Height="280"
-        WindowStartupLocation="CenterOwner"
+        WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize"
         SizeToContent="Manual">
   <Grid Margin="20">
@@ -137,6 +137,14 @@ function Show-RipperBetweenDiscsDialog {
     $reader = [System.Xml.XmlNodeReader]::new(([xml]$xaml))
     $window = [Windows.Markup.XamlReader]::Load($reader)
     if ($Owner) { $window.Owner = $Owner }
+
+    # Phase 5.11: see Show-DuplicateDiscDialog -- steal foreground from
+    # whatever was last in focus, since the host pwsh window is minimized.
+    $window.Topmost = $true
+    $window.Add_Loaded({
+        $this.Activate() | Out-Null
+        $this.Topmost = $false
+    }.GetNewClosure())
 
     # Dispatcher sink (Phase-4 / 5.2 rule): every WPF window we open
     # gets an unhandled-exception sink writing to a per-window sidecar.

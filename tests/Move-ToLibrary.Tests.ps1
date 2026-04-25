@@ -229,6 +229,22 @@ Describe 'Move-RipToLibrary (integration)' {
             Should -Throw '*already exists*'
     }
 
+    It 'tags the "target already exists" exception with Exception.Data[TargetExists] (Phase 5.11)' {
+        Move-RipToLibrary -RipFolder $script:rip -LibraryRoot $script:lib `
+            -Metadata (New-FakeMetadata) -Quality (New-FakeQuality) -DiscId 'd' | Out-Null
+
+        Seed-RipFolder $script:rip   # re-seed source for the second attempt
+        $thrown = $null
+        try {
+            Move-RipToLibrary -RipFolder $script:rip -LibraryRoot $script:lib `
+                -Metadata (New-FakeMetadata) -Quality (New-FakeQuality) -DiscId 'd' | Out-Null
+        } catch { $thrown = $_.Exception }
+
+        $thrown | Should -Not -BeNullOrEmpty
+        $thrown.Data.Contains('TargetExists') | Should -BeTrue
+        [string]$thrown.Data['TargetExists']  | Should -Match 'Spirit of the Season \(2007\)$'
+    }
+
     It 'overlays an existing target when -Force is set' {
         Move-RipToLibrary -RipFolder $script:rip -LibraryRoot $script:lib `
             -Metadata (New-FakeMetadata) -Quality (New-FakeQuality) -DiscId 'd' | Out-Null

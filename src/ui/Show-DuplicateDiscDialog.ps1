@@ -70,7 +70,7 @@ function Show-RipperDuplicateDiscDialog {
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="MusicRipper - Disc Already in Library"
         Width="560" Height="340"
-        WindowStartupLocation="CenterOwner"
+        WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize"
         SizeToContent="Manual">
   <Grid Margin="22">
@@ -135,6 +135,16 @@ function Show-RipperDuplicateDiscDialog {
     $reader = [System.Xml.XmlNodeReader]::new(([xml]$xaml))
     $window = [Windows.Markup.XamlReader]::Load($reader)
     if ($Owner) { $window.Owner = $Owner }
+
+    # Phase 5.11: the host pwsh window is minimized so dialogs would
+    # otherwise open behind whichever app the user was last using.
+    # Briefly Topmost + Activate on Loaded brings us to the foreground
+    # without permanently pinning above other windows.
+    $window.Topmost = $true
+    $window.Add_Loaded({
+        $this.Activate() | Out-Null
+        $this.Topmost = $false
+    }.GetNewClosure())
 
     if (-not $rippedAtText) {
         $window.FindName('RippedAtText').Visibility = 'Collapsed'
