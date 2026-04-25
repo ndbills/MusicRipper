@@ -43,6 +43,28 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+
+# Phase 5.11: minimize the host pwsh window so the WPF dialogs are the
+# only user-visible surface. Belt-and-suspenders: the Desktop shortcut
+# also sets WindowStyle=7 (Minimized), but elevated launches don't always
+# honour it, so we self-minimize here as well. Best-effort -- if the
+# Win32 P/Invoke or window handle isn't available (ISE, redirected
+# console, future hosts) we just continue.
+try {
+    if (-not ('MusicRipper.Win32' -as [type])) {
+        Add-Type -Namespace MusicRipper -Name Win32 -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern System.IntPtr GetConsoleWindow();
+'@ | Out-Null
+    }
+    $hwnd = [MusicRipper.Win32]::GetConsoleWindow()
+    if ($hwnd -ne [IntPtr]::Zero) {
+        [void][MusicRipper.Win32]::ShowWindow($hwnd, 6)   # 6 = SW_MINIMIZE
+    }
+} catch {}
+
 Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1')  -Force
 Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
 Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force

@@ -91,7 +91,7 @@ function Show-RipperBetweenDiscsDialog {
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="$titleEsc"
         Width="520" Height="280"
-        WindowStartupLocation="CenterOwner"
+        WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize"
         SizeToContent="Manual">
   <Grid Margin="20">

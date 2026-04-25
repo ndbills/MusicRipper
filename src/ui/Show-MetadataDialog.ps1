@@ -404,7 +404,7 @@ namespace MusicRipper {
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:mr="clr-namespace:MusicRipper;assembly=$asmName"
         Title="Change cover art" Height="520" Width="780"
-        WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
+        WindowStartupLocation="CenterScreen" ResizeMode="CanResize"
         FontFamily="Segoe UI" FontSize="13">
   <Window.Resources>
     <mr:BytesToLargeImageConverter x:Key="BytesToImg"/>
@@ -707,7 +707,7 @@ namespace MusicRipper {
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:mr="clr-namespace:MusicRipper;assembly=$asmName"
         Title="Search metadata by text" Height="540" Width="780"
-        WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
+        WindowStartupLocation="CenterScreen" ResizeMode="CanResize"
         FontFamily="Segoe UI" FontSize="13">
   <Window.Resources>
     <mr:BytesToImageConverter x:Key="BytesToImg"/>

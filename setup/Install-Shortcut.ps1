@@ -59,6 +59,13 @@ $lnk.Description      = 'MusicRipper — rip an Audio CD to FLAC'
 $icon = Join-Path $repoRoot 'assets\musicripper.ico'
 $lnk.IconLocation = if (Test-Path -LiteralPath $icon) { $icon } else { "$pwsh,0" }
 
+# Launch the console minimized so the WPF dialogs are the user-visible
+# surface; the pwsh window is just a log tail. WScript.Shell window styles:
+# 1=Normal, 3=Maximized, 7=Minimized. (Elevated launches don't always
+# honour this -- Start-Ripper.ps1 also self-minimizes its own console as
+# a belt-and-suspenders fallback.)
+$lnk.WindowStyle = 7
+
 $lnk.Save()
 
 # WScript.Shell can't set the "Run as administrator" flag on a .lnk, so we

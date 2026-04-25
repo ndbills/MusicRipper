@@ -70,7 +70,7 @@ function Show-RipperDuplicateDiscDialog {
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="MusicRipper - Disc Already in Library"
         Width="560" Height="340"
-        WindowStartupLocation="CenterOwner"
+        WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize"
         SizeToContent="Manual">
   <Grid Margin="22">

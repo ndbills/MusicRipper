@@ -69,7 +69,7 @@ function Show-RipperTargetExistsDialog {
         Title="MusicRipper - Album Already in Library"
         Width="720" Height="520"
         MinWidth="640" MinHeight="460"
-        WindowStartupLocation="CenterOwner"
+        WindowStartupLocation="CenterScreen"
         ResizeMode="CanResize"
         SizeToContent="Manual">
   <Grid Margin="22">
