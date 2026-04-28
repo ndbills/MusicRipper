@@ -117,3 +117,44 @@ Describe 'Sync-PendingAlbums.ps1 (in-process logic)' {
         Test-RipperEntryNeedsRetry -Entry $e -Targets @('Stub','OneDrive') | Should -BeFalse
     }
 }
+
+Describe 'Sync-PendingAlbums.ps1 stale-target prune' {
+
+    # The tool prunes Targets entries whose name is no longer in
+    # cfg.SyncTargets. The mutation is one PSObject.Properties.Remove
+    # call; this test exercises the same pattern in isolation so a
+    # regression there gets caught even if we never spawn the script.
+
+    It 'removes only the stale target names from the entry' {
+        $entry = [pscustomobject]@{
+            Targets = [pscustomobject]@{
+                Stub  = [pscustomobject]@{ Status='OK' }
+                Bogus = [pscustomobject]@{ Status='Failed' }
+            }
+        }
+        $configured = @('Stub')
+        $stale = @()
+        foreach ($p in $entry.Targets.PSObject.Properties) {
+            if ($configured -notcontains $p.Name) { $stale += $p.Name }
+        }
+        foreach ($n in $stale) { $entry.Targets.PSObject.Properties.Remove($n) }
+
+        $stale | Should -Be @('Bogus')
+        $entry.Targets.PSObject.Properties.Name | Should -Be @('Stub')
+    }
+
+    It 'is a no-op when every target is configured' {
+        $entry = [pscustomobject]@{
+            Targets = [pscustomobject]@{
+                Stub     = [pscustomobject]@{ Status='OK' }
+                OneDrive = [pscustomobject]@{ Status='Failed' }
+            }
+        }
+        $configured = @('Stub','OneDrive')
+        $stale = @()
+        foreach ($p in $entry.Targets.PSObject.Properties) {
+            if ($configured -notcontains $p.Name) { $stale += $p.Name }
+        }
+        $stale.Count | Should -Be 0
+    }
+}

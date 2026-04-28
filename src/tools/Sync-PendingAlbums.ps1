@@ -95,6 +95,39 @@ if ($state.Count -eq 0) {
     return
 }
 
+# Hygiene pass: prune any per-album Targets entries whose name is no
+# longer in cfg.SyncTargets. Stale 'Failed' rows from a fixed typo or
+# a removed target read like unresolved problems three months later;
+# the per-disc rip log already preserves the historical record. Done
+# here (inside the hygiene tool) rather than in the rip pipeline so a
+# normal rip never silently mutates state outside its own album.
+$prunedAny = $false
+foreach ($key in @($state.Keys)) {
+    $entry = $state[$key]
+    if (-not $entry.PSObject.Properties['Targets'] -or -not $entry.Targets) { continue }
+    $stale = @()
+    foreach ($p in $entry.Targets.PSObject.Properties) {
+        if ($configuredTargets -notcontains $p.Name) { $stale += $p.Name }
+    }
+    foreach ($n in $stale) {
+        if ($PSCmdlet.ShouldProcess("$key / target=$n", 'Prune stale target from sync-state')) {
+            $entry.Targets.PSObject.Properties.Remove($n)
+            Write-RipperLog INFO 'SyncPending' "Pruned stale target '$n' from album '$key' (no longer in cfg.SyncTargets)."
+            Write-Host ("Pruned stale target: {0} (album '{1}')" -f $n, $key) -ForegroundColor DarkYellow
+            $prunedAny = $true
+        } else {
+            Write-Host ("Would prune stale target: {0} (album '{1}')" -f $n, $key) -ForegroundColor DarkYellow
+        }
+    }
+}
+if ($prunedAny) {
+    try {
+        Save-RipperLibrarySyncState -LibraryRoot $LibraryRoot -Index $state
+    } catch {
+        Write-RipperLog WARN 'SyncPending' "Failed to persist sync-state after prune: $($_.Exception.Message)"
+    }
+}
+
 # Pre-load discids.json once for the DiscId lookup. Each entry on
 # sync-state.json carries its own DiscId so this is best-effort fallback.
 $discIndex = $null

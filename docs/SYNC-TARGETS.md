@@ -183,3 +183,10 @@ self-heal silently, matching the pre-Phase-6 behaviour.
   also runs `Invoke-RipperLibraryRetention` on entries it restores
   to AllOk so a deferred `MoveToSentAfterAllSynced` /
   `RecycleAfterAllSynced` finally applies.
+- The same tool also performs a hygiene pass: any per-album
+  `Targets.<name>` whose `<name>` is no longer in `cfg.SyncTargets`
+  is pruned (logged INFO, persisted). Stale `Failed` rows from a
+  fixed typo or a removed target read like unresolved problems
+  three months later; the per-disc rip log retains the historical
+  record. Pruning honours `-WhatIf`. The rip pipeline itself never
+  prunes -- a normal rip only ever mutates state for its own album.

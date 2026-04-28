@@ -317,6 +317,13 @@ The same tool covers transient failures (NAS offline, OneDrive
 throttled, SMB share momentarily unmounted): just re-run it once
 the underlying problem is fixed.
 
+While it's at it, the tool prunes any `Targets.<name>` whose
+name is no longer in `cfg.SyncTargets` -- so the `Bogus: Failed`
+row above disappears from `sync-state.json` after the first
+successful run with the corrected config. The historical record
+stays in the per-disc rip log; sync-state.json reflects the
+current configuration only.
+
 ### "What does `RetentionApplied: null` in sync-state.json mean?"
 `null` means the retention layer never ran for that album yet --
 e.g. the rip predates Phase 6.1, or `Invoke-RipperPostProcess` was
