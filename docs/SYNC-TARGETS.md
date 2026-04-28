@@ -173,5 +173,13 @@ self-heal silently, matching the pre-Phase-6 behaviour.
 - `cfg.SyncTargets = []` short-circuits the orchestrator to
   `Skipped = $true`. Retention also skips in that state, so an empty
   config is exactly the pre-Phase-6 behaviour.
-- Manual retry / batch sync over already-ripped albums lands in a
-  later sub-phase as `src/tools/Sync-PendingAlbums.ps1`.
+- Manual retry / batch sync over already-ripped albums:
+  `./src/tools/Sync-PendingAlbums.ps1` walks `sync-state.json` and
+  re-invokes the orchestrator against every album whose configured
+  targets are not all `OK`. Use after fixing a typo in
+  `cfg.SyncTargets`, recovering from a NAS outage, or rotating
+  credentials. Supports `-WhatIf`, `-Force` (retry everything,
+  including AllOk entries), and `-LibraryRoot <path>`. The tool
+  also runs `Invoke-RipperLibraryRetention` on entries it restores
+  to AllOk so a deferred `MoveToSentAfterAllSynced` /
+  `RecycleAfterAllSynced` finally applies.

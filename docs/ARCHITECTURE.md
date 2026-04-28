@@ -66,6 +66,7 @@ the first thing to update.
 | `src/tools/Show-FlacTags.ps1`      | 5     | Dump Vorbis comments + PICTURE summary for a file/folder. |
 | `src/tools/Update-AlbumTags.ps1`   | 5     | Re-tag an existing album in place; looks up MB by ALBUMID/DISCID/text. |
 | `src/tools/Build-LibraryDiscIndex.ps1` | 5.8 | One-shot seed of `discids.json` from existing library FLACs (uses MUSICBRAINZ_DISCID tag). |
+| `src/tools/Sync-PendingAlbums.ps1` | 6.1 | Retry sync for every album in `sync-state.json` whose configured targets aren't all `OK`; reapplies retention. Supports `-WhatIf`, `-Force`, `-LibraryRoot`. |
 | `Install-MusicRipper.ps1` (root)   | 7     | One-shot self-installer.                               |
 
 ## State on disk
