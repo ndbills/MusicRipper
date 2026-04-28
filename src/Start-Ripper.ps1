@@ -82,6 +82,9 @@ Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 . (Join-Path $repoRoot 'src\core\New-ReviewQueueArtifacts.ps1')
 . (Join-Path $repoRoot 'src\core\Invoke-PostProcess.ps1')
 . (Join-Path $repoRoot 'src\core\Resume.ps1')
+. (Join-Path $repoRoot 'src\sync\Get-LibrarySyncState.ps1')
+. (Join-Path $repoRoot 'src\sync\Invoke-RipperSync.ps1')
+. (Join-Path $repoRoot 'src\sync\Invoke-LibraryRetention.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-MetadataDialog.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-RipProgress.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-BetweenDiscsDialog.ps1')
@@ -281,7 +284,7 @@ function Invoke-RipperResumeOrphans {
         $resumeFails = @()
         foreach ($orphan in $orphans) {
             try {
-                $rpp = Resume-RipperOrphan -RipFolder $orphan.Folder -LibraryRoot $cfg.LibraryRoot
+                $rpp = Resume-RipperOrphan -RipFolder $orphan.Folder -LibraryRoot $cfg.LibraryRoot -Config $cfg
                 Write-RipperLog INFO 'Start-Ripper' "Resumed orphan -> $($rpp.Target)"
             } catch {
                 # Phase 5.11: detect "target already exists" so the user
@@ -327,7 +330,8 @@ function Invoke-RipperResumeOrphans {
                                     -RipFolder         $orphan.Folder `
                                     -LibraryRoot       $cfg.LibraryRoot `
                                     -AllowSideBySide:($oChoice.Action -eq 'SideBySide') `
-                                    -ForceReviewQueue:($oChoice.Action -eq 'Review')
+                                    -ForceReviewQueue:($oChoice.Action -eq 'Review') `
+                                    -Config            $cfg
                                 Write-RipperLog INFO 'Start-Ripper' "Orphan recovery succeeded ($($oChoice.Action)) -> $($rpp.Target)"
                             } catch {
                                 Write-RipperLog ERROR 'Start-Ripper' "Orphan recovery ($($oChoice.Action)) failed: $($_.Exception.Message)"
@@ -455,8 +459,14 @@ function Invoke-RipperOneDiscCycle {
         $libLabel = if ($libDup.PSObject.Properties['Label'] -and $libDup.Label) { [string]$libDup.Label } else { "DiscId $($disc.DiscId)" }
         $libPath  = [string]$libDup.Path
         $libRipAt = if ($libDup.PSObject.Properties['RippedAt']) { $libDup.RippedAt } else { $null }
-        Write-RipperLog INFO 'Start-Ripper' "DiscId $($disc.DiscId) already in library: $libLabel ($libPath)."
-        $dup = Show-RipperDuplicateDiscDialog -AlbumLabel $libLabel -AlbumPath $libPath -RippedAt $libRipAt
+        $libSrc   = if ($libDup.PSObject.Properties['Source']) { [string]$libDup.Source } else { 'library' }
+        # When the recorded path no longer exists on disk (recycled by
+        # LocalRetention, OR the user manually moved/deleted the album
+        # after sync vouched for it -- D-022) suppress the path line
+        # and Open-folder button. The dialog shows a small note instead.
+        $dialogPath = if (Test-Path -LiteralPath $libPath) { $libPath } else { '' }
+        Write-RipperLog INFO 'Start-Ripper' "DiscId $($disc.DiscId) already in library: $libLabel ($libPath, source=$libSrc)."
+        $dup = Show-RipperDuplicateDiscDialog -AlbumLabel $libLabel -AlbumPath $dialogPath -RippedAt $libRipAt
         switch ($dup.Action) {
             'Skip' {
                 Write-RipperLog INFO 'Start-Ripper' "User skipped already-in-library disc: $libLabel."
@@ -682,7 +692,8 @@ function Invoke-RipperOneDiscCycle {
                         -LibraryRoot      $cfg.LibraryRoot `
                         -CoverArtFile     $result.CoverArtFile `
                         -AllowSideBySide:$allowSideBySide `
-                        -ForceReviewQueue:$forceReviewQueue
+                        -ForceReviewQueue:$forceReviewQueue `
+                        -Config           $cfg
                     $phase5Quality = $pp.Quality
                     $phase5Target  = $pp.Target
                     try { Remove-RipperRipState -RipFolder $pp.Target } catch {
@@ -738,7 +749,8 @@ function Invoke-RipperOneDiscCycle {
                                         -LibraryRoot      $cfg.LibraryRoot `
                                         -CoverArtFile     $result.CoverArtFile `
                                         -AllowSideBySide:($choice2.Action -eq 'SideBySide') `
-                                        -ForceReviewQueue:($choice2.Action -eq 'Review')
+                                        -ForceReviewQueue:($choice2.Action -eq 'Review') `
+                                        -Config           $cfg
                                     $phase5Quality = $pp.Quality
                                     $phase5Target  = $pp.Target
                                     try { Remove-RipperRipState -RipFolder $pp.Target } catch {

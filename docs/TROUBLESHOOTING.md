@@ -286,3 +286,48 @@ your library' prompt.
 When you've finished fixing tags in Picard, promote the album with
 `./src/tools/Move-FromReviewQueue.ps1 <folder>` (or do it by hand;
 the layout is identical to the main library).
+
+## Sync (Phase 6.1+)
+
+### "I configured a SyncTarget but it doesn't match any installed target"
+Symptom: rip finishes, log shows `WARN Sync Unknown sync target
+'<Name>' (no function Invoke-RipperSyncTo<Name>)`, the album is left
+in the library, and `sync-state.json` records `Status=Failed` for
+that target. Retention (Move/Recycle) does not fire because not every
+target reported OK -- the album records `RetentionApplied.Action =
+'KeepTargetsNotOk'`.
+
+Recovery:
+
+1. Fix `cfg.SyncTargets` -- typo, missing target script, etc. The
+   built-in name is `Stub`; future phases ship `OneDrive` and
+   `SynologyNAS`.
+2. Run the retry tool:
+   ```powershell
+   ./src/tools/Sync-PendingAlbums.ps1
+   ```
+   It walks `sync-state.json`, retries every album whose configured
+   targets are not all `OK`, applies retention on the freshly-OK
+   ones, and exits 1 if anything still fails. Add `-WhatIf` to
+   preview, `-Force` to retry every entry (useful after rotating
+   credentials or wiping the destination), or `-LibraryRoot <path>`
+   to point at a non-default library.
+
+The same tool covers transient failures (NAS offline, OneDrive
+throttled, SMB share momentarily unmounted): just re-run it once
+the underlying problem is fixed.
+
+While it's at it, the tool prunes any `Targets.<name>` whose
+name is no longer in `cfg.SyncTargets` -- so the `Bogus: Failed`
+row above disappears from `sync-state.json` after the first
+successful run with the corrected config. The historical record
+stays in the per-disc rip log; sync-state.json reflects the
+current configuration only.
+
+### "What does `RetentionApplied: null` in sync-state.json mean?"
+`null` means the retention layer never ran for that album yet --
+e.g. the rip predates Phase 6.1, or `Invoke-RipperPostProcess` was
+interrupted before the retention call. Every retention decision
+(including the `Keep` no-op and the `KeepTargetsNotOk` waiting state)
+records a non-null value with `Action`, `Reason`, `AppliedAt`. See
+`docs/SYNC-TARGETS.md` for the full Action table.

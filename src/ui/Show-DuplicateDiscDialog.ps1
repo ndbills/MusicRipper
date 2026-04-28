@@ -39,8 +39,11 @@ function Show-RipperDuplicateDiscDialog {
         # Friendly label of the prior rip ("Artist - Album (Year)").
         [Parameter(Mandatory)] [string]$AlbumLabel,
 
-        # Absolute path to the prior rip folder.
-        [Parameter(Mandatory)] [string]$AlbumPath,
+        # Absolute path to the prior rip folder. Pass an empty string
+        # for entries whose local copy is intentionally gone (D-022
+        # LocalRetention=RecycleAfterAllSynced) -- the dialog hides
+        # its path line and Open-folder button and notes the situation.
+        [string]$AlbumPath = '',
 
         # When this disc was originally ripped (ISO-8601 string or
         # DateTime). Optional but adds context.
@@ -91,9 +94,15 @@ function Show-RipperDuplicateDiscDialog {
       <StackPanel>
         <TextBlock Text="$labelEsc"
                    FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap"/>
-        <TextBlock Text="$pathEsc"
+        <TextBlock x:Name="PathText"
+                   Text="$pathEsc"
                    FontFamily="Consolas" FontSize="11"
                    Foreground="#555" TextWrapping="Wrap"
+                   Margin="0,6,0,0"/>
+        <TextBlock x:Name="RecycledNote"
+                   Text="(Local copy isn't here anymore -- it was either disposed of after sync, or moved/deleted by hand. Re-insert is recorded so you don't accidentally re-rip.)"
+                   FontSize="11" FontStyle="Italic" Foreground="#666"
+                   TextWrapping="Wrap"
                    Margin="0,6,0,0"/>
         <TextBlock x:Name="RippedAtText"
                    Text="$rippedAtEsc"
@@ -148,6 +157,16 @@ function Show-RipperDuplicateDiscDialog {
 
     if (-not $rippedAtText) {
         $window.FindName('RippedAtText').Visibility = 'Collapsed'
+    }
+
+    # When the caller didn't pass a real path (recycled entries), hide
+    # the path line + Open-folder button and surface the small italic
+    # note instead.
+    if ([string]::IsNullOrWhiteSpace($AlbumPath)) {
+        $window.FindName('PathText').Visibility         = 'Collapsed'
+        $window.FindName('OpenFolderButton').Visibility = 'Collapsed'
+    } else {
+        $window.FindName('RecycledNote').Visibility = 'Collapsed'
     }
 
     # Dispatcher sink (Phase-4 / 5.2 rule).

@@ -1030,6 +1030,207 @@ and best-effort failure swallowing.
 - `src/Start-Ripper.ps1` -- early dup-check + side-by-side flag
   threaded into the post-process call.
 
+---
+
+## D-022 -- Sync framework + LocalRetention (Phase 6.1)
+
+**Context:** Phase 5 closed the rip-to-tagged-library loop. The
+single remaining gap before parents could safely use the box was
+"the rip box must not be the only copy." Phase 6 splits into four
+sub-phases:
+
+- **6.1** -- generic sync framework + built-in `Stub` target +
+  `LocalRetention` (this decision).
+- **6.2** -- `OneDrive` sync target.
+- **6.3** -- `SynologyNAS` sync target over LAN.
+- **6.4** -- `SynologyNAS` over a self-hosted WireGuard tunnel
+  (see [SYNOLOGY-SHARE-SETUP.md](SYNOLOGY-SHARE-SETUP.md) Part B
+  for the planned tunnel-management API).
+
+**Choice:** Provider-chain pattern (mirrors D-011 metadata
+providers + the cover-art chain). Two new top-level config fields:
+
+```jsonc
+{
+  "SyncTargets":     [],          // ordered list of target names
+  "LocalRetention":  "Keep"       // Keep | MoveToSentAfterAllSynced | RecycleAfterAllSynced
+}
+```
+
+Empty defaults preserve pre-Phase-6 behaviour bit-for-bit.
+
+**Module layout:** new `src/sync/` directory.
+- `Get-LibrarySyncState.ps1` -- durable per-album index at
+  `<LibraryRoot>\.musicripper\sync-state.json`. Sibling of
+  `discids.json` (D-018) with the same advisory-write rules.
+- `Invoke-RipperSync.ps1` -- orchestrator + the built-in
+  `Invoke-RipperSyncToStub` target (writes a marker file under
+  `.musicripper\stub-sync\<rel>\.synced`).
+- `Invoke-LibraryRetention.ps1` -- consumes the orchestrator
+  result and applies the retention rule when (and only when) the
+  rip wasn't `Skipped` and every target reported `OK`.
+
+**Per-target contract** (matches what the orchestrator persists):
+
+```powershell
+@{
+    Target      = '<Name>'           # forced to match the configured name
+    Status      = 'OK' | 'Failed' | 'Skipped'
+    BytesCopied = [int64]<n>
+    Diagnostic  = $null | '<message>'
+}
+```
+
+Targets MAY return a `pscustomobject` of the same shape; the
+orchestrator normalises to a hashtable. Targets MAY throw; the
+orchestrator catches and synthesises a `Failed` result. Targets
+NEVER block the rip -- `Invoke-RipperPostProcess`'s sync call is
+itself wrapped in try/catch as a belt-and-braces guard.
+
+**Retention modes:**
+
+| Mode                          | Action                                                                                                               |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `Keep`                        | No-op. Album stays in the library.                                                                                   |
+| `MoveToSentAfterAllSynced`    | `Move-Item` to `<LibraryRoot>\_Sent\<Artist>\<Album>\`. Side-by-side `[moved N]` suffix on collision. `discids.json` rewritten with `Source='sent'` so duplicate detection still hits. |
+| `RecycleAfterAllSynced`       | `Move-RipperFolderToRecycleBin` (D-021). `discids.json` entry rewritten with `Source='recycled'` so re-insert still trips the duplicate-disc dialog -- having ripped this CD before is independent of whether the local copy still exists. The duplicate-disc dialog hides its Open-folder button when the recorded path is intentionally gone. |
+
+`Source='sent'` and `Source='recycled'` are new values on the
+`discids.json` `Add-RipperLibraryDiscIndexEntry -Source` validate-set.
+`Find-RipperLibraryDiscIndexEntry` skips its path-exists guard for
+recycled entries (and only recycled entries -- a vanilla `library`
+row with a missing folder still self-heals to `$null`).
+
+**Sync-state vouch for manually-cleaned-up albums.** When a `library`
+row's recorded path no longer exists, `Find-RipperLibraryDiscIndexEntry`
+best-effort consults `sync-state.json` for the same album-relative
+key: if any target reported `Status='OK'`, the entry is surfaced
+with its original Label/RippedAt and the duplicate-disc dialog
+fires (with the same path-hidden styling as the recycled case).
+That covers the realistic family workflow where a parent ships
+the rip box's library to a NAS over time and then frees up disk
+space by deleting albums by hand -- they still get the "you
+already ripped this CD" prompt on re-insert. Genuinely-stale rows
+(deleted before any sync vouch) continue to self-heal silently.
+The sync-state lookup is a soft Get-Command import so tools that
+load only `src/core/` still work.
+
+**Wiring into the rip pipeline:**
+
+- `Invoke-RipperPostProcess` gains `-Config $cfg` (optional, for
+  back-compat with existing tests). When supplied, after the
+  Library move + log copy, it runs
+  `Invoke-RipperSync ... -Config $cfg` and \u2014 unless the result
+  came back `Skipped` \u2014 then `Invoke-RipperLibraryRetention`. Both
+  calls are try/catch'd; failures populate
+  `result.Sync.Diagnostic` / `result.Retention.Diagnostic` and log
+  `WARN`. If retention moves the folder, the result's `Target`
+  reflects the new path.
+- `Resume-RipperOrphan` and `src/tools/Complete-OrphanedRip.ps1`
+  thread `-Config` through the same way so orphan-resume gets the
+  same sync + retention treatment.
+
+**Rejected alternatives:**
+
+- *Per-target post-processor scripts under
+  `src/postprocessors/`* (the original Phase-6 plan). Rejected:
+  no shared retention layer, no shared persistence, every target
+  has to re-implement the "have I already pushed this?" check.
+  The empty `src/postprocessors/.gitkeep` was removed in this
+  phase.
+- *Library-level sync (mirror the whole tree)*. Rejected: hides
+  per-album status, defeats retention, and conflicts with the
+  user-stated goal that the LibraryRoot stays local and authoritative.
+- *Refuse to retire the local copy until the user says so*. The
+  three-mode `LocalRetention` setting *is* that opt-in; defaulting
+  to `Keep` means the safe behaviour is the path of least
+  resistance.
+
+**Tests:** 35 new Pester cases across
+`Get-LibrarySyncState.Tests.ps1`,
+`Invoke-RipperSync.Tests.ps1`,
+`Invoke-LibraryRetention.Tests.ps1`, plus 6 new cases in
+`Invoke-PostProcess.Tests.ps1` covering the wiring (back-compat
+when `-Config` omitted; sync+retention dispatched; retention
+skipped when sync was `Skipped`; retention failure swallowed;
+review-queue route does NOT sync). Full suite: **359 passed / 0
+failed / 1 skipped** (was 324 / 0 / 1 at end of Phase 5.11).
+
+**Lessons (recorded in `/memories/repo/musicripper-state.md`):**
+
+- A bare `@()` literal as a `[pscustomobject]` NoteProperty value
+  unrolls to `$null` on property access. Cast to `[string[]]@()`
+  (or `[object[]]@()`) to keep an empty-array shape on round-trip.
+- Pester 5 treats `<token>` substrings in `Describe` / `It`
+  names as data-driven placeholders -- they're interpreted as
+  `$token` and fail at run-time when the variable isn't set.
+  Use plain prose instead (e.g. "the .musicripper sync-state.json
+  path under library root").
+- Under `Set-StrictMode -Version 3.0`, an empty
+  `Where-Object` pipe returns `AutomationNull`, which has no
+  `.Count`. Wrap the pipe in `@(...)` whenever you call `.Count`
+  on the result.
+
+---
+
+## F-4 -- OneDrive notifier so the user sees sync status without opening the app *(deferred to Phase 8)*
+
+**Problem:** Once `Sync-ToOneDrive.ps1` lands in Phase 6.2 the
+album is queued into the OneDrive client's pending list, but the
+user has no surface that says "the last 5 rips made it up." The
+parents-facing flow shouldn't require opening the OneDrive system-tray
+flyout.
+
+**Sketch:** A small toast on rip completion that reflects
+`sync-state.json`'s view of the current album. Ties into Phase 7
+polish but doesn't need to block 6.2 -- the framework already
+records the data; only the surfacing is missing.
+
+**Re-entry:** revisit after Phase 6.4 (WireGuard) ships and 7
+starts; same notifier infrastructure can also surface VPN-up /
+NAS-unreachable warnings.
+
+---
+
+## F-5 -- Sync per-disc session logs off-box for remote troubleshooting *(deferred)*
+
+**Problem:** Phase 6.1's `Copy-RipperLog` snapshots the per-disc
+session log into each album folder *before* the sync block runs, so
+the in-album copy never contains the `Sync` / `Retention` events
+(spotted during Phase 6.1 manual verification). The full per-disc
+log lives at
+`%LOCALAPPDATA%\MusicRipper\logs\<timestamp>-rip-disc-<N>.log` on
+the rip box and is therefore invisible from anywhere else \u2014 there's
+no way to triage a broken sync target without sitting at the
+machine.
+
+**Sketch:**
+
+- Add a fourth target-style hook (or piggyback on an existing target
+  like `OneDrive` / `SynologyNAS`) that pushes the rip box's log
+  directory \u2014 not just a per-album snapshot \u2014 to a known location
+  off-box. Plain SMB / OneDrive folder mirror is plenty; nothing
+  parses these logs, a human reads them.
+- Push at end of each rip cycle (so the latest disc's log is up
+  there immediately), and at MusicRipper exit (so the closing
+  session log lands too). De-bounce / dedupe by mtime so we don't
+  re-upload unchanged files.
+- Honour the same `cfg.SyncTargets` flexibility \u2014 e.g.
+  `cfg.LogSyncTarget = 'SynologyNAS'` (or `null` = off) so the
+  user can pick where logs go independently of where albums go.
+  Default off; opt-in via `New-RipperConfig.ps1`.
+- Optional follow-up: also reorder the per-album `Copy-RipperLog`
+  call to run *after* the sync block so the in-album snapshot
+  includes the sync events. Trade-off: a partially-synced album's
+  log won't be self-contained until the next snapshot. Easy to
+  reverse, decide when implementing.
+
+**Re-entry:** pick up after Phase 6.3 / 6.4 \u2014 by then we know which
+remote target the user actually relies on, so the log-sync can ride
+the same plumbing instead of inventing a parallel path. Cross-link
+to F-4 (notifier): a "sync failed" toast can deep-link to the
+synced log location.
+
 **Reverse references:** D-017 (the backlog entry that captured the
 problem statement) is now implemented by this decision.
 
@@ -1252,3 +1453,4 @@ already in the library but **not** indexed in `.musicripper\discids.json`
 `_inbox\Mannheim Steamroller - Christmas\` in place and will re-run
 MusicRipper after merge to confirm the dialog appears, each branch
 behaves, and discarded folders land in the Recycle Bin recoverable.
+

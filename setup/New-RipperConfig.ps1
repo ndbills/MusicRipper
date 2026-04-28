@@ -71,6 +71,8 @@ if ($existing) {
         CoverArtProviders = $knownCov
         EjectAfterRip     = $true
         ContinuousMode    = $true
+        SyncTargets       = @()
+        LocalRetention    = 'Keep'
     }
     foreach ($k in $expected.Keys) {
         if (-not $existing.PSObject.Properties[$k]) {
@@ -107,10 +109,14 @@ if ($existing) {
     $existingCov = if ($existing.PSObject.Properties['CoverArtProviders'] -and $existing.CoverArtProviders) { ($existing.CoverArtProviders -join ', ') } else { '(missing — will default to: ' + ($knownCov -join ', ') + ')' }
     $existingEject = if ($existing.PSObject.Properties['EjectAfterRip']) { [string][bool]$existing.EjectAfterRip } else { '(missing — will default to: True)' }
     $existingCont  = if ($existing.PSObject.Properties['ContinuousMode']) { [string][bool]$existing.ContinuousMode } else { '(missing — will default to: True)' }
+    $existingSync  = if ($existing.PSObject.Properties['SyncTargets']    -and $existing.SyncTargets)    { (@($existing.SyncTargets) -join ', ') } else { '(missing — will default to: <empty> = no sync)' }
+    $existingRet   = if ($existing.PSObject.Properties['LocalRetention']) { [string]$existing.LocalRetention } else { '(missing — will default to: Keep)' }
     Write-Host "  MetadataProviders     : $existingMd"
     Write-Host "  CoverArtProviders     : $existingCov"
     Write-Host "  EjectAfterRip         : $existingEject"
     Write-Host "  ContinuousMode        : $existingCont"
+    Write-Host "  SyncTargets           : $existingSync"
+    Write-Host "  LocalRetention        : $existingRet"
     Write-Host ""
 
     # -TopUp: non-interactive upgrade path. Write existing values back
@@ -258,6 +264,45 @@ $defaultCont = if ($existing -and $existing.PSObject.Properties['ContinuousMode'
 $contStr = Read-WithDefault -Prompt 'Continuous mode (keep running between discs)? (Y/N)' -Default ($(if ($defaultCont) { 'Y' } else { 'N' }))
 $continuousMode = ($contStr -match '^\s*[YyTt1]')
 
+# --- Sync targets (Phase 6.1) --------------------------------------------
+# Ordered list of sync-target names invoked per album after a successful
+# Library move. Built-in 'Stub' is for testing the orchestrator without
+# a real off-machine target. Real targets land in 6.2 (OneDrive) and
+# 6.3 (SynologyNAS). Empty = no sync (current behaviour).
+$knownSync   = @('Stub')
+$defaultSync = if ($existing -and $existing.PSObject.Properties['SyncTargets'] -and $existing.SyncTargets) { @($existing.SyncTargets) } else { @() }
+$defStr      = if ($defaultSync.Count -gt 0) { $defaultSync -join ', ' } else { '<empty>' }
+$rawSync = Read-Host "Sync targets, comma-separated (known: $($knownSync -join ', '); blank for none) [$defStr] (Enter = keep)"
+if ([string]::IsNullOrWhiteSpace($rawSync)) {
+    $syncTargets = $defaultSync
+} elseif ($rawSync.Trim() -eq '<empty>' -or $rawSync.Trim() -eq '-') {
+    $syncTargets = @()
+} else {
+    $syncTargets = @($rawSync -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    foreach ($n in $syncTargets) {
+        if ($knownSync -notcontains $n) {
+            Write-Warning "Sync target '$n' is not built-in. It will be reported Failed at runtime unless src/sync/Sync-To$n.ps1 ships an Invoke-RipperSyncTo$n function."
+        }
+    }
+}
+
+# --- LocalRetention (Phase 6.1) ------------------------------------------
+# What to do with the local album after every configured sync target
+# returned OK. 'Keep' is safest (default); 'MoveToSentAfterAllSynced'
+# moves to <LibraryRoot>\_Sent\; 'RecycleAfterAllSynced' sends to the
+# Windows Recycle Bin (recoverable). Both no-op if SyncTargets is empty
+# or any target failed.
+$retentionOptions = @('Keep','MoveToSentAfterAllSynced','RecycleAfterAllSynced')
+$defaultRet = if ($existing -and $existing.PSObject.Properties['LocalRetention'] -and $existing.LocalRetention) { [string]$existing.LocalRetention } else { 'Keep' }
+if ($retentionOptions -notcontains $defaultRet) { $defaultRet = 'Keep' }
+$retStr = Read-WithDefault -Prompt "LocalRetention (one of: $($retentionOptions -join ' | '))" -Default $defaultRet
+if ($retentionOptions -notcontains $retStr) {
+    Write-Warning "LocalRetention '$retStr' is not one of $($retentionOptions -join ', '); falling back to 'Keep'."
+    $localRetention = 'Keep'
+} else {
+    $localRetention = $retStr
+}
+
 # --- Build & persist -------------------------------------------------------
 $cfg = New-RipperConfigObject `
     -LibraryRoot   $libraryRoot `
@@ -270,6 +315,8 @@ $cfg.MetadataProviders     = $metadataProviders
 $cfg.CoverArtProviders     = $coverArtProviders
 $cfg.EjectAfterRip         = $ejectAfterRip
 $cfg.ContinuousMode        = $continuousMode
+$cfg.SyncTargets           = $syncTargets
+$cfg.LocalRetention        = $localRetention
 
 # Carry over drive info if Register-Drive ran first.
 if ($existing) {
