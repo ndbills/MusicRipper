@@ -196,7 +196,13 @@ function Resume-RipperOrphan {
         # "Keep both" / "Send to Review" on Show-RipperTargetExistsDialog
         # for an orphan that collides with an existing library album.
         [switch] $AllowSideBySide,
-        [switch] $ForceReviewQueue
+        [switch] $ForceReviewQueue,
+
+        # Phase 6.1: optional config object forwarded to
+        # Invoke-RipperPostProcess so a resumed orphan also runs the
+        # configured sync targets + LocalRetention. Omitted == skip
+        # sync (mirrors the parameter contract upstream).
+        [object] $Config
     )
 
     $state = Read-RipperRipState -RipFolder $RipFolder
@@ -225,7 +231,8 @@ function Resume-RipperOrphan {
         -LibraryRoot  $LibraryRoot `
         -CoverArtFile $coverFile `
         -AllowSideBySide:$AllowSideBySide `
-        -ForceReviewQueue:$ForceReviewQueue
+        -ForceReviewQueue:$ForceReviewQueue `
+        -Config       $Config
 
     # Sidecar moved with the folder; clean it up from the new location.
     Remove-RipperRipState -RipFolder $pp.Target

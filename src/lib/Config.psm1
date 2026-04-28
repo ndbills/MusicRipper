@@ -168,6 +168,29 @@ function New-RipperConfigObject {
         # rotate per disc (each iteration calls Start-RipperLog again).
         # Set false to restore the one-disc-per-launch flow.
         ContinuousMode          = $true
+
+        # Phase 6.1: ordered list of sync-target names invoked per album
+        # after a successful Library move. Names map to functions named
+        # 'Invoke-RipperSyncTo<Name>' loaded from src/sync/. Default empty
+        # = no sync. Built-in: 'Stub' (writes a marker for testing).
+        # Real targets land in 6.2 (OneDrive) and 6.3 (SynologyNAS).
+        # Per-target results are persisted in
+        # <LibraryRoot>\.musicripper\sync-state.json. Unknown names log
+        # WARN at runtime and are reported as Failed; they don't crash.
+        # Cast to [string[]] so an empty default still serialises as a
+        # JSON array (a bare @() on a NoteProperty unrolls to $null on
+        # property access, which trips downstream type checks).
+        SyncTargets             = [string[]]@()
+
+        # Phase 6.1: what to do with the local album folder after every
+        # configured sync target has reported OK.
+        #   'Keep'                       : never touch local files (default).
+        #   'MoveToSentAfterAllSynced'   : move folder to <LibraryRoot>\_Sent\
+        #                                  preserving the artist subdir.
+        #   'RecycleAfterAllSynced'      : send folder to the Recycle Bin
+        #                                  (recoverable, not hard-delete).
+        # No-op when SyncTargets is empty or any target failed.
+        LocalRetention          = 'Keep'
     }
 }
 

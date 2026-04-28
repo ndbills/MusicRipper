@@ -173,7 +173,7 @@ function Add-RipperLibraryDiscIndexEntry {
         [Parameter(Mandatory)] [string]$DiscId,
         [Parameter(Mandatory)] [string]$Path,
         [string]$Label,
-        [ValidateSet('library', 'reviewqueue')] [string]$Source = 'library'
+        [ValidateSet('library', 'reviewqueue', 'sent')] [string]$Source = 'library'
     )
 
     $indexPath = Get-RipperLibraryDiscIndexPath -LibraryRoot $LibraryRoot

@@ -46,7 +46,13 @@ function Invoke-RipperPostProcess {
         [Parameter(Mandatory)] [string]   $LibraryRoot,
         [Parameter()]          [string]   $CoverArtFile,
         [switch]                          $AllowSideBySide,
-        [switch]                          $ForceReviewQueue
+        [switch]                          $ForceReviewQueue,
+        # Phase 6.1: optional config object. When supplied AND the move
+        # routes to Library AND cfg.SyncTargets is non-empty, runs the
+        # sync orchestrator + LocalRetention disposal. Omitted/null
+        # means "skip Phase 6.1" -- preserves the previous behaviour
+        # for callers that don't pass it (e.g. older tests).
+        [Parameter()]          [object]   $Config
     )
 
     $quality = Test-RipQuality -LogPath $LogFile
@@ -129,11 +135,48 @@ function Invoke-RipperPostProcess {
         Write-RipperLog INFO 'PostProcess' "Snapshot of session log -> $sessionLogCopy"
     }
 
+    # Phase 6.1: optional sync orchestrator + LocalRetention disposal.
+    # Library-bound rips only -- review-queue items are drafts and
+    # don't get pushed off-machine until a human approves them. The
+    # sync layer never throws out of itself; the retention layer is
+    # wrapped in try/catch so a partial-sync edge case can't undo the
+    # successful move.
+    $sync      = $null
+    $retention = $null
+    if (-not $move.IsReviewQueue -and $Config) {
+        try {
+            $sync = Invoke-RipperSync `
+                -AlbumPath   $move.Target `
+                -LibraryRoot $LibraryRoot `
+                -DiscId      $DiscId `
+                -Config      $Config
+        } catch {
+            Write-RipperLog WARN 'PostProcess' "Sync orchestrator threw (non-fatal): $($_.Exception.Message)"
+            $sync = @{ AlbumPath=$move.Target; Targets=@(); AllOk=$false; Skipped=$false }
+        }
+
+        if ($sync -and -not $sync.Skipped) {
+            try {
+                $retention = Invoke-RipperLibraryRetention `
+                    -AlbumPath   $move.Target `
+                    -LibraryRoot $LibraryRoot `
+                    -Config      $Config `
+                    -SyncResult  $sync `
+                    -DiscId      $DiscId
+            } catch {
+                Write-RipperLog WARN 'PostProcess' "Retention threw (non-fatal): $($_.Exception.Message)"
+                $retention = @{ Action='None'; Reason="Retention threw: $($_.Exception.Message)"; NewPath=$null }
+            }
+        }
+    }
+
     return @{
         Quality        = $quality
         Move           = $move
-        Target         = $move.Target
+        Target         = if ($retention -and $retention.Action -eq 'MovedToSent' -and $retention.NewPath) { $retention.NewPath } else { $move.Target }
         IsReviewQueue  = $move.IsReviewQueue
         SessionLogCopy = $sessionLogCopy
+        Sync           = $sync
+        Retention      = $retention
     }
 }

@@ -23,6 +23,8 @@ BeforeAll {
     function script:Write-RipperReviewTxt { param($ReviewFolder,$Quality,$Metadata,$DiscId,$LogFileName) }
     function script:New-RipperReviewImage { param($ReviewFolder,$Metadata,$DiscId) }
     function script:Add-RipperLibraryDiscIndexEntry { param($LibraryRoot,$DiscId,$Path,$Label,$Source) }
+    function script:Invoke-RipperSync { param($AlbumPath,$LibraryRoot,$DiscId,$Config) }
+    function script:Invoke-RipperLibraryRetention { param($AlbumPath,$LibraryRoot,$Config,$SyncResult,$DiscId) }
 
     . (Join-Path $repoRoot 'src\core\Invoke-PostProcess.ps1')
 
@@ -284,5 +286,89 @@ Describe 'Invoke-RipperPostProcess (-ForceReviewQueue, Phase 5.9)' {
         Should -Invoke -CommandName Move-RipToLibrary -Times 1 -Exactly -ParameterFilter {
             $Quality.RoutingPrefix -eq 'SUSPECT'
         }
+    }
+}
+
+Describe 'Invoke-RipperPostProcess (Phase 6.1 sync wiring)' {
+    BeforeEach {
+        Mock -CommandName Test-RipQuality -MockWith {
+            [pscustomobject]@{ Status='Verified'; Destination='Library'; RoutingPrefix='' }
+        }
+        Mock -CommandName Invoke-RipperWriteTags -MockWith { $null }
+        Mock -CommandName Move-RipToLibrary -MockWith {
+            @{
+                Target='C:\Library\A\B (2020)'; IsReviewQueue=$false; IsSideBySide=$false; FilesMoved=5
+            }
+        }
+        Mock -CommandName Write-RipperReviewTxt          -MockWith { $null }
+        Mock -CommandName New-RipperReviewImage          -MockWith { $null }
+        Mock -CommandName Add-RipperLibraryDiscIndexEntry -MockWith { $null }
+        Mock -CommandName Invoke-RipperSync -MockWith {
+            @{ AlbumPath=$AlbumPath; Targets=@(@{Target='Stub';Status='OK';BytesCopied=10;Diagnostic=$null}); AllOk=$true; Skipped=$false }
+        }
+        Mock -CommandName Invoke-RipperLibraryRetention -MockWith {
+            @{ Action='None'; Reason='LocalRetention=Keep'; NewPath=$null }
+        }
+    }
+
+    It 'does NOT call Invoke-RipperSync when -Config is omitted (back-compat)' {
+        Invoke-RipperPostProcess -RipFolder 'C:\rip' -LogFile 'C:\rip\album.log' `
+            -Metadata (New-FakeMetadata) -DiscId 'discABC' -LibraryRoot 'C:\Library' | Out-Null
+        Should -Invoke -CommandName Invoke-RipperSync             -Times 0 -Exactly
+        Should -Invoke -CommandName Invoke-RipperLibraryRetention -Times 0 -Exactly
+    }
+
+    It 'calls sync + retention when -Config supplied on a Library route' {
+        $cfg = [pscustomobject]@{ SyncTargets=@('Stub'); LocalRetention='Keep' }
+        $r = Invoke-RipperPostProcess -RipFolder 'C:\rip' -LogFile 'C:\rip\album.log' `
+            -Metadata (New-FakeMetadata) -DiscId 'discABC' -LibraryRoot 'C:\Library' `
+            -Config $cfg
+        Should -Invoke -CommandName Invoke-RipperSync             -Times 1 -Exactly
+        Should -Invoke -CommandName Invoke-RipperLibraryRetention -Times 1 -Exactly
+        $r.Sync.AllOk            | Should -BeTrue
+        $r.Retention.Action      | Should -Be 'None'
+    }
+
+    It 'skips retention when sync was a no-op (Skipped=$true)' {
+        Mock -CommandName Invoke-RipperSync -MockWith {
+            @{ AlbumPath=$AlbumPath; Targets=@(); AllOk=$true; Skipped=$true }
+        }
+        Invoke-RipperPostProcess -RipFolder 'C:\rip' -LogFile 'C:\rip\album.log' `
+            -Metadata (New-FakeMetadata) -DiscId 'discABC' -LibraryRoot 'C:\Library' `
+            -Config ([pscustomobject]@{ SyncTargets=@(); LocalRetention='RecycleAfterAllSynced' }) | Out-Null
+        Should -Invoke -CommandName Invoke-RipperLibraryRetention -Times 0 -Exactly
+    }
+
+    It 'reports the new _Sent path as Target when retention moved the album' {
+        Mock -CommandName Invoke-RipperLibraryRetention -MockWith {
+            @{ Action='MovedToSent'; Reason='All targets OK'; NewPath='C:\Library\_Sent\A\B (2020)' }
+        }
+        $r = Invoke-RipperPostProcess -RipFolder 'C:\rip' -LogFile 'C:\rip\album.log' `
+            -Metadata (New-FakeMetadata) -DiscId 'discABC' -LibraryRoot 'C:\Library' `
+            -Config ([pscustomobject]@{ SyncTargets=@('Stub'); LocalRetention='MoveToSentAfterAllSynced' })
+        $r.Target           | Should -Be 'C:\Library\_Sent\A\B (2020)'
+        $r.Move.Target      | Should -Be 'C:\Library\A\B (2020)'   # original move target preserved
+    }
+
+    It 'does NOT sync review-queue routes' {
+        Mock -CommandName Test-RipQuality -MockWith {
+            [pscustomobject]@{ Status='Suspect'; Destination='ReviewQueue'; RoutingPrefix='SUSPECT' }
+        }
+        Mock -CommandName Move-RipToLibrary -MockWith {
+            @{ Target='C:\Library\_ReviewQueue\SUSPECT - x'; IsReviewQueue=$true; IsSideBySide=$false; FilesMoved=5 }
+        }
+        Invoke-RipperPostProcess -RipFolder 'C:\rip' -LogFile 'C:\rip\album.log' `
+            -Metadata (New-FakeMetadata) -DiscId 'discABC' -LibraryRoot 'C:\Library' `
+            -Config ([pscustomobject]@{ SyncTargets=@('Stub'); LocalRetention='Keep' }) | Out-Null
+        Should -Invoke -CommandName Invoke-RipperSync             -Times 0 -Exactly
+        Should -Invoke -CommandName Invoke-RipperLibraryRetention -Times 0 -Exactly
+    }
+
+    It 'swallows a sync orchestrator exception (rip stays in library)' {
+        Mock -CommandName Invoke-RipperSync -MockWith { throw 'simulated' }
+        { Invoke-RipperPostProcess -RipFolder 'C:\rip' -LogFile 'C:\rip\album.log' `
+            -Metadata (New-FakeMetadata) -DiscId 'discABC' -LibraryRoot 'C:\Library' `
+            -Config ([pscustomobject]@{ SyncTargets=@('Stub'); LocalRetention='Keep' }) } |
+            Should -Not -Throw
     }
 }

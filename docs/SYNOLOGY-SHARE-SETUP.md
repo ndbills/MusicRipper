@@ -1,7 +1,10 @@
 # Synology NAS Share Setup
 
-> **Status:** Stub. Full screenshot walkthrough lands in **Phase 6** when
-> `Sync-ToSynologyNAS.ps1` is implemented.
+> **Status:** Stub. Full screenshot walkthrough lands in **Phase 6.3**
+> when `Sync-ToSynologyNAS.ps1` is implemented. The Phase 6.1 sync
+> framework + retention layer is already in place \u2014 see
+> [SYNC-TARGETS.md](SYNC-TARGETS.md) \u2014 so once the NAS target file
+> exists it slots in as a new entry in `cfg.SyncTargets`.
 
 ## Remote-access model (decided)
 
@@ -27,7 +30,7 @@ the middle. See [DECISIONS.md D-007](DECISIONS.md).
 The MusicRipper post-processor needs the VPN up *only* during the
 NAS sync. Goal: the user never has to remember to toggle anything.
 
-Phase 6 scope (to be implemented in `Sync-ToSynologyNAS.ps1` and a
+Phase 6.4 scope (to be implemented in `Sync-ToSynologyNAS.ps1` and a
 new `src/lib/Wireguard.psm1`):
 
 1. **Install hook in `setup/Install-Dependencies.ps1`:** add

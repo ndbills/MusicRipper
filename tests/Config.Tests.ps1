@@ -17,6 +17,11 @@ Describe 'New-RipperConfigObject' {
         $cfg.HasSynologyCredential   | Should -BeFalse
         $cfg.EjectAfterRip           | Should -BeTrue
         $cfg.ContinuousMode          | Should -BeTrue
+        # SyncTargets default = empty array. PowerShell unrolls an empty
+        # NoteProperty array to $null on access; @() coerces both back to
+        # an empty array for the count check.
+        @($cfg.SyncTargets).Count    | Should -Be 0
+        $cfg.LocalRetention          | Should -Be 'Keep'
         { Assert-RipperConfig -Config $cfg } | Should -Not -Throw
     }
 

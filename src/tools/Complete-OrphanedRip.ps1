@@ -80,6 +80,10 @@ Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 . (Join-Path $repoRoot 'src\core\New-ReviewQueueArtifacts.ps1')
 . (Join-Path $repoRoot 'src\core\Invoke-PostProcess.ps1')
 . (Join-Path $repoRoot 'src\core\Resume.ps1')
+. (Join-Path $repoRoot 'src\core\Get-LibraryDiscIndex.ps1')
+. (Join-Path $repoRoot 'src\sync\Get-LibrarySyncState.ps1')
+. (Join-Path $repoRoot 'src\sync\Invoke-RipperSync.ps1')
+. (Join-Path $repoRoot 'src\sync\Invoke-LibraryRetention.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-MetadataDialog.ps1')
 
 $logPath = Start-RipperLog -Context 'complete-orphaned-rip'
@@ -89,10 +93,14 @@ if (-not (Test-Path -LiteralPath $RipFolder -PathType Container)) {
     throw "RipFolder not found: $RipFolder"
 }
 
-# Resolve LibraryRoot from config if not overridden.
+# Resolve LibraryRoot from config if not overridden. Always load $cfg
+# (even when -LibraryRoot is supplied) so the Phase 6.1 sync orchestrator
+# downstream sees the configured SyncTargets / LocalRetention.
 if (-not $LibraryRoot) {
     $cfg = Import-RipperConfig
     $LibraryRoot = $cfg.LibraryRoot
+} else {
+    try { $cfg = Import-RipperConfig } catch { $cfg = $null }
 }
 Write-RipperLog INFO 'Complete-Orphan' "LibraryRoot=$LibraryRoot"
 
@@ -100,7 +108,7 @@ Write-RipperLog INFO 'Complete-Orphan' "LibraryRoot=$LibraryRoot"
 $state = Read-RipperRipState -RipFolder $RipFolder
 if ($state) {
     Write-RipperLog INFO 'Complete-Orphan' "Sidecar found (Version=$($state.Version), DiscId=$($state.DiscId)) — running silent resume."
-    $pp = Resume-RipperOrphan -RipFolder $RipFolder -LibraryRoot $LibraryRoot
+    $pp = Resume-RipperOrphan -RipFolder $RipFolder -LibraryRoot $LibraryRoot -Config $cfg
     Write-RipperLog INFO 'Complete-Orphan' "Done. Target=$($pp.Target) Quality=$($pp.Quality.Status)"
     Stop-RipperLog
     return $pp
@@ -170,7 +178,8 @@ $pp = Invoke-RipperPostProcess `
     -Metadata     $choice.Metadata `
     -DiscId       $DiscId `
     -LibraryRoot  $LibraryRoot `
-    -CoverArtFile $coverPath
+    -CoverArtFile $coverPath `
+    -Config       $cfg
 
 Write-RipperLog INFO 'Complete-Orphan' "Done. Target=$($pp.Target) Quality=$($pp.Quality.Status) Review=$($pp.IsReviewQueue)"
 Stop-RipperLog
