@@ -1173,6 +1173,47 @@ records the data; only the surfacing is missing.
 starts; same notifier infrastructure can also surface VPN-up /
 NAS-unreachable warnings.
 
+---
+
+## F-5 -- Sync per-disc session logs off-box for remote troubleshooting *(deferred)*
+
+**Problem:** Phase 6.1's `Copy-RipperLog` snapshots the per-disc
+session log into each album folder *before* the sync block runs, so
+the in-album copy never contains the `Sync` / `Retention` events
+(spotted during Phase 6.1 manual verification). The full per-disc
+log lives at
+`%LOCALAPPDATA%\MusicRipper\logs\<timestamp>-rip-disc-<N>.log` on
+the rip box and is therefore invisible from anywhere else \u2014 there's
+no way to triage a broken sync target without sitting at the
+machine.
+
+**Sketch:**
+
+- Add a fourth target-style hook (or piggyback on an existing target
+  like `OneDrive` / `SynologyNAS`) that pushes the rip box's log
+  directory \u2014 not just a per-album snapshot \u2014 to a known location
+  off-box. Plain SMB / OneDrive folder mirror is plenty; nothing
+  parses these logs, a human reads them.
+- Push at end of each rip cycle (so the latest disc's log is up
+  there immediately), and at MusicRipper exit (so the closing
+  session log lands too). De-bounce / dedupe by mtime so we don't
+  re-upload unchanged files.
+- Honour the same `cfg.SyncTargets` flexibility \u2014 e.g.
+  `cfg.LogSyncTarget = 'SynologyNAS'` (or `null` = off) so the
+  user can pick where logs go independently of where albums go.
+  Default off; opt-in via `New-RipperConfig.ps1`.
+- Optional follow-up: also reorder the per-album `Copy-RipperLog`
+  call to run *after* the sync block so the in-album snapshot
+  includes the sync events. Trade-off: a partially-synced album's
+  log won't be self-contained until the next snapshot. Easy to
+  reverse, decide when implementing.
+
+**Re-entry:** pick up after Phase 6.3 / 6.4 \u2014 by then we know which
+remote target the user actually relies on, so the log-sync can ride
+the same plumbing instead of inventing a parallel path. Cross-link
+to F-4 (notifier): a "sync failed" toast can deep-link to the
+synced log location.
+
 **Reverse references:** D-017 (the backlog entry that captured the
 problem statement) is now implemented by this decision.
 
