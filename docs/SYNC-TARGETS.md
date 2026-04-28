@@ -72,10 +72,35 @@ Path: `<LibraryRoot>\.musicripper\sync-state.json`
       "OneDrive":    { "Status": "OK",     "SyncedAt": "...", "BytesCopied": 123456, "Diagnostic": null },
       "SynologyNAS": { "Status": "Failed", "SyncedAt": null,  "BytesCopied": 0,      "Diagnostic": "VPN tunnel down" }
     },
-    "RetentionApplied": null
+    "RetentionApplied": {
+      "Action":    "Keep",
+      "Reason":    "LocalRetention=Keep",
+      "AppliedAt": "2026-04-26T14:00:05Z",
+      "NewPath":   null
+    }
   }
 }
 ```
+
+`RetentionApplied` is stamped on every retention decision the
+pipeline makes, **including no-ops**. Possible `Action` values:
+
+| Action                       | Meaning                                                                        |
+|------------------------------|--------------------------------------------------------------------------------|
+| `Keep`                       | `LocalRetention=Keep`, all targets OK. Local copy intentionally left in place. |
+| `KeepTargetsNotOk`           | A move/recycle was requested but at least one target failed; album held for retry. `Reason` lists the failed target names. |
+| `MoveToSentAfterAllSynced`   | Album moved to `<LibraryRoot>\_Sent\…`. `NewPath` records where.               |
+| `RecycleAfterAllSynced`      | Album sent to the Windows Recycle Bin. `NewPath` is `null`.                    |
+
+A `null` `RetentionApplied` therefore means *retention has not run
+yet* for this album (e.g. the rip predates Phase 6.1 or the
+post-process step has not reached the retention call). It is a
+useful diagnostic — not a normal steady-state.
+
+> When `cfg.SyncTargets` is empty (`Skipped=true`), no
+> sync-state entry is created at all and there is consequently
+> nothing to annotate. That is intentional: a user not opted into
+> sync should not accumulate sync-state entries.
 
 Same advisory rules as `discids.json`: missing file or corrupt JSON
 degrades to "no record found", writes are atomic via temp + Move-Item,

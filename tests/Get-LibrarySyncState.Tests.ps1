@@ -159,12 +159,29 @@ Describe 'Set-RipperLibraryRetentionApplied' {
             -DiscId 'd' -Result @{ Target='Stub'; Status='OK'; BytesCopied=1; Diagnostic=$null }
 
         Set-RipperLibraryRetentionApplied -LibraryRoot $lib -AlbumPath $alb `
-            -Action 'MoveToSentAfterAllSynced' -NewPath 'D:\sent\B'
+            -Action 'MoveToSentAfterAllSynced' -Reason 'All targets OK' -NewPath 'D:\sent\B'
 
         $e = Get-RipperLibrarySyncStateEntry -LibraryRoot $lib -AlbumPath $alb
         $e.RetentionApplied            | Should -Not -BeNullOrEmpty
         $e.RetentionApplied.Action     | Should -Be 'MoveToSentAfterAllSynced'
+        $e.RetentionApplied.Reason     | Should -Be 'All targets OK'
         $e.RetentionApplied.NewPath    | Should -Be 'D:\sent\B'
         $e.RetentionApplied.AppliedAt  | Should -Not -BeNullOrEmpty
+    }
+
+    It 'records a Keep no-op with reason' {
+        $lib = Join-Path $script:tmpRoot ([guid]::NewGuid())
+        New-Item -ItemType Directory -Path $lib -Force | Out-Null
+        $alb = New-FakeAlbum $lib 'A' 'B'
+        Set-RipperLibrarySyncTargetResult -LibraryRoot $lib -AlbumPath $alb `
+            -DiscId 'd' -Result @{ Target='Stub'; Status='OK'; BytesCopied=1; Diagnostic=$null }
+
+        Set-RipperLibraryRetentionApplied -LibraryRoot $lib -AlbumPath $alb `
+            -Action 'Keep' -Reason 'LocalRetention=Keep'
+
+        $e = Get-RipperLibrarySyncStateEntry -LibraryRoot $lib -AlbumPath $alb
+        $e.RetentionApplied.Action  | Should -Be 'Keep'
+        $e.RetentionApplied.Reason  | Should -Be 'LocalRetention=Keep'
+        $e.RetentionApplied.NewPath | Should -BeNullOrEmpty
     }
 }

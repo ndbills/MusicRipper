@@ -58,6 +58,13 @@ Describe 'Invoke-RipperLibraryRetention (no-op paths)' {
                 -Config (New-Cfg 'Keep') -SyncResult (New-SyncResult)
         $r.Action | Should -Be 'None'
         Test-Path -LiteralPath $script:alb | Should -BeTrue
+
+        # And the no-op outcome is persisted, so an operator can tell
+        # \"considered, kept on purpose\" apart from \"never reached
+        # retention\".
+        $e = Get-RipperLibrarySyncStateEntry -LibraryRoot $script:lib -AlbumPath $script:alb
+        $e.RetentionApplied.Action | Should -Be 'Keep'
+        $e.RetentionApplied.Reason | Should -Be 'LocalRetention=Keep'
     }
 
     It 'returns None when LocalRetention is missing entirely' {
@@ -71,6 +78,9 @@ Describe 'Invoke-RipperLibraryRetention (no-op paths)' {
                 -Config (New-Cfg 'MoveToSentAfterAllSynced') -SyncResult (New-SyncResult -Skipped $true -AllOk $true)
         $r.Action | Should -Be 'None'
         Test-Path -LiteralPath $script:alb | Should -BeTrue
+        # Skipped means \"this user isn't using sync\" -- we deliberately
+        # do NOT materialise a sync-state entry just to record nothing.
+        Get-RipperLibrarySyncStateEntry -LibraryRoot $script:lib -AlbumPath $script:alb | Should -BeNullOrEmpty
     }
 
     It 'returns None when any target failed' {
@@ -79,6 +89,10 @@ Describe 'Invoke-RipperLibraryRetention (no-op paths)' {
         $r.Action | Should -Be 'None'
         $r.Reason | Should -Match 'OneDrive'
         Test-Path -LiteralPath $script:alb | Should -BeTrue
+
+        $e = Get-RipperLibrarySyncStateEntry -LibraryRoot $script:lib -AlbumPath $script:alb
+        $e.RetentionApplied.Action | Should -Be 'KeepTargetsNotOk'
+        $e.RetentionApplied.Reason | Should -Match 'OneDrive'
     }
 
     It 'returns None and warns on unknown mode' {

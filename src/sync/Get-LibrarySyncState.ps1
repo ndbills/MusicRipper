@@ -242,13 +242,38 @@ function Set-RipperLibrarySyncTargetResult {
 function Set-RipperLibraryRetentionApplied {
 <#
 .SYNOPSIS
-    Record that a retention action ran on this album.
+    Record that retention ran on this album, including no-op outcomes.
+
+.DESCRIPTION
+    Every retention decision -- whether the album was moved, recycled,
+    or intentionally left alone -- writes a stamped record so an
+    operator inspecting sync-state.json can tell at a glance "yes, the
+    pipeline considered this album and chose action X". A null
+    RetentionApplied therefore means "retention has not run yet for
+    this album", which is a meaningful diagnostic.
+
+    Action values:
+      - 'Keep'                       : LocalRetention=Keep, all targets OK.
+      - 'KeepTargetsNotOk'           : retention requested but at least
+                                       one configured target failed; the
+                                       album stays put pending retry.
+      - 'MoveToSentAfterAllSynced'   : album moved to <LibraryRoot>\_Sent\.
+      - 'RecycleAfterAllSynced'      : album sent to the Recycle Bin.
+
+    A 'KeepNoTargets' Action is intentionally NOT defined: when no
+    sync targets are configured, no sync-state entry exists for the
+    album in the first place, so there is nothing to annotate. The
+    caller (Invoke-RipperLibraryRetention) skips the record write in
+    that case.
 #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [string]$LibraryRoot,
         [Parameter(Mandatory)] [string]$AlbumPath,
-        [Parameter(Mandatory)] [ValidateSet('MoveToSentAfterAllSynced','RecycleAfterAllSynced')] [string]$Action,
+        [Parameter(Mandatory)]
+        [ValidateSet('Keep','KeepTargetsNotOk','MoveToSentAfterAllSynced','RecycleAfterAllSynced')]
+        [string]$Action,
+        [string]$Reason,
         [string]$NewPath
     )
     $key = ConvertTo-RipperLibraryRelativeKey -LibraryRoot $LibraryRoot -AlbumPath $AlbumPath
@@ -264,6 +289,7 @@ function Set-RipperLibraryRetentionApplied {
     }
     $idx[$key].RetentionApplied = [pscustomobject]@{
         Action    = $Action
+        Reason    = if ($PSBoundParameters.ContainsKey('Reason')) { $Reason } else { $null }
         AppliedAt = [DateTime]::UtcNow.ToString('o')
         NewPath   = if ($PSBoundParameters.ContainsKey('NewPath')) { $NewPath } else { $null }
     }

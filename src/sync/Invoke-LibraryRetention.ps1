@@ -69,16 +69,39 @@ function Invoke-RipperLibraryRetention {
     $mode = if ($Config.PSObject.Properties['LocalRetention']) { [string]$Config.LocalRetention } else { 'Keep' }
     if ([string]::IsNullOrWhiteSpace($mode)) { $mode = 'Keep' }
 
-    if ($mode -eq 'Keep') {
-        return @{ Action='None'; Reason='LocalRetention=Keep'; NewPath=$null }
-    }
     if ($SyncResult.Skipped) {
-        Write-RipperLog INFO 'Retention' "LocalRetention=$mode but no targets configured; keeping local copy."
+        # No targets configured at all -- there's no sync-state entry
+        # to annotate, so we can't record anything. The absence is
+        # itself the diagnostic: "this user isn't using sync".
+        if ($mode -ne 'Keep') {
+            Write-RipperLog INFO 'Retention' "LocalRetention=$mode but no targets configured; keeping local copy."
+        }
         return @{ Action='None'; Reason='No sync targets configured'; NewPath=$null }
+    }
+
+    if ($mode -eq 'Keep') {
+        # Record explicit Keep so the operator can tell "considered
+        # this album, policy says keep" apart from "never reached
+        # the retention step".
+        try {
+            Set-RipperLibraryRetentionApplied `
+                -LibraryRoot $LibraryRoot -AlbumPath $AlbumPath `
+                -Action 'Keep' -Reason 'LocalRetention=Keep'
+        } catch {
+            Write-RipperLog WARN 'Retention' "Failed to record Keep retention: $($_.Exception.Message)"
+        }
+        return @{ Action='None'; Reason='LocalRetention=Keep'; NewPath=$null }
     }
     if (-not $SyncResult.AllOk) {
         $failed = ($SyncResult.Targets | Where-Object { $_.Status -ne 'OK' } | ForEach-Object { $_.Target }) -join ', '
         Write-RipperLog INFO 'Retention' "LocalRetention=$mode but target(s) [$failed] not OK; keeping local copy for retry."
+        try {
+            Set-RipperLibraryRetentionApplied `
+                -LibraryRoot $LibraryRoot -AlbumPath $AlbumPath `
+                -Action 'KeepTargetsNotOk' -Reason "Targets not OK: $failed"
+        } catch {
+            Write-RipperLog WARN 'Retention' "Failed to record KeepTargetsNotOk retention: $($_.Exception.Message)"
+        }
         return @{ Action='None'; Reason="Targets not OK: $failed"; NewPath=$null }
     }
 
@@ -109,7 +132,7 @@ function Invoke-RipperLibraryRetention {
 
             Set-RipperLibraryRetentionApplied `
                 -LibraryRoot $LibraryRoot -AlbumPath $AlbumPath `
-                -Action 'MoveToSentAfterAllSynced' -NewPath $newPath
+                -Action 'MoveToSentAfterAllSynced' -Reason 'All targets OK' -NewPath $newPath
 
             # Best-effort: rewrite the discids.json entry's Path so the
             # cross-session duplicate-disc dialog still resolves on
@@ -164,7 +187,7 @@ function Invoke-RipperLibraryRetention {
 
             Set-RipperLibraryRetentionApplied `
                 -LibraryRoot $LibraryRoot -AlbumPath $AlbumPath `
-                -Action 'RecycleAfterAllSynced'
+                -Action 'RecycleAfterAllSynced' -Reason 'All targets OK'
 
             # Keep the discids.json entry so re-inserting the disc still
             # trips the duplicate-disc dialog -- the user has ripped this
