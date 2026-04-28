@@ -460,11 +460,11 @@ function Invoke-RipperOneDiscCycle {
         $libPath  = [string]$libDup.Path
         $libRipAt = if ($libDup.PSObject.Properties['RippedAt']) { $libDup.RippedAt } else { $null }
         $libSrc   = if ($libDup.PSObject.Properties['Source']) { [string]$libDup.Source } else { 'library' }
-        # Recycled entries (D-022 LocalRetention=RecycleAfterAllSynced)
-        # have an intentionally-gone path. Don't surface it to the
-        # dialog -- the dialog hides Open-folder and shows the recycled
-        # note instead.
-        $dialogPath = if ($libSrc -eq 'recycled') { '' } else { $libPath }
+        # When the recorded path no longer exists on disk (recycled by
+        # LocalRetention, OR the user manually moved/deleted the album
+        # after sync vouched for it -- D-022) suppress the path line
+        # and Open-folder button. The dialog shows a small note instead.
+        $dialogPath = if (Test-Path -LiteralPath $libPath) { $libPath } else { '' }
         Write-RipperLog INFO 'Start-Ripper' "DiscId $($disc.DiscId) already in library: $libLabel ($libPath, source=$libSrc)."
         $dup = Show-RipperDuplicateDiscDialog -AlbumLabel $libLabel -AlbumPath $dialogPath -RippedAt $libRipAt
         switch ($dup.Action) {

@@ -81,6 +81,18 @@ Same advisory rules as `discids.json`: missing file or corrupt JSON
 degrades to "no record found", writes are atomic via temp + Move-Item,
 write failures log `WARN` and never throw out of the rip pipeline.
 
+### Vouching for manually-cleaned-up albums
+
+When the rip box's library has been mirrored to a sync target,
+the parent may free up local disk space later by deleting albums
+by hand. `Find-RipperLibraryDiscIndexEntry` (in `src/core/`)
+consults `sync-state.json` whenever a `Source='library'` row's
+recorded path is missing: if any target reported `Status='OK'`
+for that album, the entry is still surfaced and the duplicate-disc
+dialog fires on re-insert (with the same path-hidden styling as
+the recycled case). Rows with no successful sync record still
+self-heal silently, matching the pre-Phase-6 behaviour.
+
 ## Adding a new target
 
 1. **Create** `src/sync/Sync-To<Name>.ps1` with one function:

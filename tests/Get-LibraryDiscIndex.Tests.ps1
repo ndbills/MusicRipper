@@ -134,3 +134,47 @@ Describe 'Add-RipperLibraryDiscIndexEntry + Find-RipperLibraryDiscIndexEntry' {
         Find-RipperLibraryDiscIndexEntry -LibraryRoot $script:lib -DiscId 'SX' | Should -BeNullOrEmpty
     }
 }
+
+Describe 'Find-RipperLibraryDiscIndexEntry sync-state vouch (D-022)' {
+    BeforeAll {
+        # Soft-import the sync-state helpers so Find can call them.
+        $repoRoot = Split-Path -Parent $PSScriptRoot
+        . (Join-Path $repoRoot 'src\sync\Get-LibrarySyncState.ps1')
+    }
+
+    BeforeEach {
+        $script:lib = Join-Path $script:tmpRoot ([guid]::NewGuid())
+        New-Item -ItemType Directory -Path $script:lib -Force | Out-Null
+    }
+
+    It 'surfaces a stale library entry when sync-state vouches for it (target OK)' {
+        $album = New-FakeAlbum $script:lib 'Foo Fighters' 'Wasting Light (2011)'
+        Add-RipperLibraryDiscIndexEntry -LibraryRoot $script:lib -DiscId 'VX' -Path $album -Label 'Foo Fighters - Wasting Light (2011)'
+        # Record a successful sync BEFORE the user manually deletes the folder.
+        Set-RipperLibrarySyncTargetResult -LibraryRoot $script:lib -AlbumPath $album -DiscId 'VX' `
+            -Result @{ Target='OneDrive'; Status='OK'; BytesCopied=123; Diagnostic=$null }
+        Remove-Item -LiteralPath $album -Recurse -Force
+
+        $e = Find-RipperLibraryDiscIndexEntry -LibraryRoot $script:lib -DiscId 'VX'
+        $e        | Should -Not -BeNullOrEmpty
+        $e.Label  | Should -Be 'Foo Fighters - Wasting Light (2011)'
+    }
+
+    It 'still self-heals when sync-state has the album but no target reported OK' {
+        $album = New-FakeAlbum $script:lib 'Bar Band' 'Bar Album'
+        Add-RipperLibraryDiscIndexEntry -LibraryRoot $script:lib -DiscId 'VY' -Path $album
+        Set-RipperLibrarySyncTargetResult -LibraryRoot $script:lib -AlbumPath $album -DiscId 'VY' `
+            -Result @{ Target='OneDrive'; Status='Failed'; BytesCopied=0; Diagnostic='offline' }
+        Remove-Item -LiteralPath $album -Recurse -Force
+
+        Find-RipperLibraryDiscIndexEntry -LibraryRoot $script:lib -DiscId 'VY' | Should -BeNullOrEmpty
+    }
+
+    It 'still self-heals when there is no sync-state record at all' {
+        $album = New-FakeAlbum $script:lib 'Solo' 'Album'
+        Add-RipperLibraryDiscIndexEntry -LibraryRoot $script:lib -DiscId 'VZ' -Path $album
+        Remove-Item -LiteralPath $album -Recurse -Force
+
+        Find-RipperLibraryDiscIndexEntry -LibraryRoot $script:lib -DiscId 'VZ' | Should -BeNullOrEmpty
+    }
+}

@@ -1101,6 +1101,20 @@ itself wrapped in try/catch as a belt-and-braces guard.
 recycled entries (and only recycled entries -- a vanilla `library`
 row with a missing folder still self-heals to `$null`).
 
+**Sync-state vouch for manually-cleaned-up albums.** When a `library`
+row's recorded path no longer exists, `Find-RipperLibraryDiscIndexEntry`
+best-effort consults `sync-state.json` for the same album-relative
+key: if any target reported `Status='OK'`, the entry is surfaced
+with its original Label/RippedAt and the duplicate-disc dialog
+fires (with the same path-hidden styling as the recycled case).
+That covers the realistic family workflow where a parent ships
+the rip box's library to a NAS over time and then frees up disk
+space by deleting albums by hand -- they still get the "you
+already ripped this CD" prompt on re-insert. Genuinely-stale rows
+(deleted before any sync vouch) continue to self-heal silently.
+The sync-state lookup is a soft Get-Command import so tools that
+load only `src/core/` still work.
+
 **Wiring into the rip pipeline:**
 
 - `Invoke-RipperPostProcess` gains `-Config $cfg` (optional, for

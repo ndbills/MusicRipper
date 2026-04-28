@@ -109,10 +109,22 @@ function Find-RipperLibraryDiscIndexEntry {
       - the entry's Source is 'recycled' (the local copy was
         intentionally disposed of by Phase 6.1 LocalRetention; the
         path is expected to be gone but the record is still meant to
-        trip duplicate-disc detection).
-    Otherwise (path missing for a non-recycled entry) returns $null,
-    so stale 'I deleted that folder by hand' index rows quietly
-    self-heal on next re-insert.
+        trip duplicate-disc detection), OR
+      - the entry's Source is 'library', the on-disk path is gone,
+        AND the Phase 6.1 sync-state index records at least one
+        sync target as Status='OK' for the same album-relative key.
+        That covers "the user manually moved/deleted the local copy
+        after sync, but we know it was backed up off-box, so re-insert
+        should still trip duplicate-disc detection." See D-022.
+    Otherwise (path missing, Source='library', no sync vouch)
+    returns $null, so genuinely-stale 'I deleted that folder by hand
+    before any sync target saw it' index rows quietly self-heal on
+    next re-insert.
+
+    The sync-state lookup is best-effort: if the sync helper isn't
+    loaded (e.g. a tools script that only dot-sources core), the
+    vouch step is skipped and behaviour falls back to today's
+    self-heal -- no exceptions, no warnings.
 
 .PARAMETER LibraryRoot
     Absolute path to the music library root.
@@ -140,11 +152,43 @@ function Find-RipperLibraryDiscIndexEntry {
     $source = if ($entry.PSObject.Properties['Source']) { [string]$entry.Source } else { 'library' }
     if ($source -eq 'recycled') { return $entry }
 
-    if (-not (Test-Path -LiteralPath $entry.Path)) {
-        Write-RipperLog INFO 'LibraryIndex' "Stale index entry for DiscId ${DiscId}: '$($entry.Path)' no longer exists."
-        return $null
+    if (Test-Path -LiteralPath $entry.Path) { return $entry }
+
+    # Path is gone. For Source='library', try the sync-state vouch
+    # before declaring the entry stale. (Source='sent' rows whose
+    # _Sent\... folder was deleted by hand fall through to self-heal
+    # -- the user explicitly removed the only on-box copy of an
+    # already-sent album, so forgetting the row is the right call.)
+    if ($source -eq 'library') {
+        $convertCmd = Get-Command -Name ConvertTo-RipperLibraryRelativeKey -ErrorAction SilentlyContinue
+        $stateCmd   = Get-Command -Name Get-RipperLibrarySyncState         -ErrorAction SilentlyContinue
+        if ($convertCmd -and $stateCmd) {
+            try {
+                $key   = & $convertCmd -LibraryRoot $LibraryRoot -AlbumPath $entry.Path
+                $state = & $stateCmd   -LibraryRoot $LibraryRoot
+                if ($state -and $state.ContainsKey($key)) {
+                    $sEntry = $state[$key]
+                    if ($sEntry.PSObject.Properties['Targets'] -and $sEntry.Targets) {
+                        foreach ($p in $sEntry.Targets.PSObject.Properties) {
+                            if ([string]$p.Value.Status -eq 'OK') {
+                                Write-RipperLog INFO 'LibraryIndex' "Stale library path for DiscId ${DiscId} ('$($entry.Path)') vouched by sync-state (target '$($p.Name)' OK); surfacing entry."
+                                return $entry
+                            }
+                        }
+                    }
+                }
+            } catch {
+                # Sync-state read failures are advisory; fall through
+                # to the self-heal path so a corrupt sync-state.json
+                # never silently breaks duplicate-disc detection in
+                # the OTHER direction (returning a bogus entry).
+                Write-RipperLog WARN 'LibraryIndex' "Sync-state vouch lookup failed for DiscId ${DiscId}: $($_.Exception.Message). Falling back to self-heal."
+            }
+        }
     }
-    $entry
+
+    Write-RipperLog INFO 'LibraryIndex' "Stale index entry for DiscId ${DiscId}: '$($entry.Path)' no longer exists."
+    $null
 }
 
 

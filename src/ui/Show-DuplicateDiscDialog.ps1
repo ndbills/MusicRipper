@@ -100,7 +100,7 @@ function Show-RipperDuplicateDiscDialog {
                    Foreground="#555" TextWrapping="Wrap"
                    Margin="0,6,0,0"/>
         <TextBlock x:Name="RecycledNote"
-                   Text="(Local copy was disposed of after sync. Re-insert is recorded so you don't accidentally re-rip.)"
+                   Text="(Local copy isn't here anymore -- it was either disposed of after sync, or moved/deleted by hand. Re-insert is recorded so you don't accidentally re-rip.)"
                    FontSize="11" FontStyle="Italic" Foreground="#666"
                    TextWrapping="Wrap"
                    Margin="0,6,0,0"/>
