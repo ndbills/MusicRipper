@@ -103,10 +103,16 @@ function Find-RipperLibraryDiscIndexEntry {
     Look up one DiscId in the library index.
 
 .DESCRIPTION
-    Returns the entry pscustomobject when present and the recorded
-    Path still exists on disk, otherwise $null. Stale entries (folder
-    deleted/moved) return $null so the duplicate-disc dialog only
-    surfaces actionable hits.
+    Returns the entry pscustomobject when present and either:
+      - the recorded Path still exists on disk (the normal
+        'library'/'sent' case), OR
+      - the entry's Source is 'recycled' (the local copy was
+        intentionally disposed of by Phase 6.1 LocalRetention; the
+        path is expected to be gone but the record is still meant to
+        trip duplicate-disc detection).
+    Otherwise (path missing for a non-recycled entry) returns $null,
+    so stale 'I deleted that folder by hand' index rows quietly
+    self-heal on next re-insert.
 
 .PARAMETER LibraryRoot
     Absolute path to the music library root.
@@ -126,6 +132,14 @@ function Find-RipperLibraryDiscIndexEntry {
 
     $entry = $idx[$DiscId]
     if (-not $entry.PSObject.Properties['Path'] -or -not $entry.Path) { return $null }
+
+    # 'recycled' entries are kept for duplicate-disc detection AFTER
+    # the local copy has been disposed of (D-022 LocalRetention =
+    # RecycleAfterAllSynced). The on-disk path is expected to be
+    # missing -- skip the existence check.
+    $source = if ($entry.PSObject.Properties['Source']) { [string]$entry.Source } else { 'library' }
+    if ($source -eq 'recycled') { return $entry }
+
     if (-not (Test-Path -LiteralPath $entry.Path)) {
         Write-RipperLog INFO 'LibraryIndex' "Stale index entry for DiscId ${DiscId}: '$($entry.Path)' no longer exists."
         return $null
@@ -162,9 +176,12 @@ function Add-RipperLibraryDiscIndexEntry {
 
 .PARAMETER Source
     Where this rip lives. Defaults to 'library'. Reserved values:
-    'library', 'reviewqueue'. Only library entries are indexed in the
-    normal flow today; the field exists so a future review-queue
-    approval workflow can promote entries.
+    'library', 'reviewqueue', 'sent', 'recycled'. The 'sent' value
+    is set by Phase 6.1 LocalRetention=MoveToSentAfterAllSynced and
+    points at <LibraryRoot>\_Sent\... ; 'recycled' is set by
+    LocalRetention=RecycleAfterAllSynced and intentionally records
+    a path that no longer exists on disk so the duplicate-disc
+    dialog still fires on re-insert.
 #>
     [CmdletBinding()]
     [OutputType([void])]
@@ -173,7 +190,7 @@ function Add-RipperLibraryDiscIndexEntry {
         [Parameter(Mandatory)] [string]$DiscId,
         [Parameter(Mandatory)] [string]$Path,
         [string]$Label,
-        [ValidateSet('library', 'reviewqueue', 'sent')] [string]$Source = 'library'
+        [ValidateSet('library', 'reviewqueue', 'sent', 'recycled')] [string]$Source = 'library'
     )
 
     $indexPath = Get-RipperLibraryDiscIndexPath -LibraryRoot $LibraryRoot

@@ -51,7 +51,7 @@ OneDrive (`Sync-ToOneDrive.ps1`) and SynologyNAS
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Keep` (default)              | Do nothing. The album stays in the library forever. Safe choice when you don't have an off-box backup yet.                                        |
 | `MoveToSentAfterAllSynced`    | Move the album folder to `<LibraryRoot>\_Sent\<Artist>\<Album>\`. The `discids.json` entry is rewritten to point at the new path with `Source='sent'` so duplicate detection still works on later inserts. |
-| `RecycleAfterAllSynced`       | Send the album folder to the Recycle Bin via the same helper as the target-exists "Discard" button (D-021). The `discids.json` entry is removed. |
+| `RecycleAfterAllSynced`       | Send the album folder to the Recycle Bin via the same helper as the target-exists "Discard" button (D-021). The `discids.json` entry is rewritten with `Source='recycled'` so re-inserting the same disc still trips the duplicate-disc dialog -- the dialog hides its Open-folder button (the local copy is intentionally gone) and shows a small note explaining the situation. |
 
 Retention only fires when `Invoke-RipperSync` returns `AllOk = $true`
 **and** `Skipped = $false` — i.e. at least one target was attempted

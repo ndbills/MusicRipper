@@ -1093,10 +1093,13 @@ itself wrapped in try/catch as a belt-and-braces guard.
 | ----------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `Keep`                        | No-op. Album stays in the library.                                                                                   |
 | `MoveToSentAfterAllSynced`    | `Move-Item` to `<LibraryRoot>\_Sent\<Artist>\<Album>\`. Side-by-side `[moved N]` suffix on collision. `discids.json` rewritten with `Source='sent'` so duplicate detection still hits. |
-| `RecycleAfterAllSynced`       | `Move-RipperFolderToRecycleBin` (D-021). `discids.json` entry removed.                                               |
+| `RecycleAfterAllSynced`       | `Move-RipperFolderToRecycleBin` (D-021). `discids.json` entry rewritten with `Source='recycled'` so re-insert still trips the duplicate-disc dialog -- having ripped this CD before is independent of whether the local copy still exists. The duplicate-disc dialog hides its Open-folder button when the recorded path is intentionally gone. |
 
-`Source='sent'` is a new value on the `discids.json`
-`Add-RipperLibraryDiscIndexEntry -Source` validate-set.
+`Source='sent'` and `Source='recycled'` are new values on the
+`discids.json` `Add-RipperLibraryDiscIndexEntry -Source` validate-set.
+`Find-RipperLibraryDiscIndexEntry` skips its path-exists guard for
+recycled entries (and only recycled entries -- a vanilla `library`
+row with a missing folder still self-heals to `$null`).
 
 **Wiring into the rip pipeline:**
 

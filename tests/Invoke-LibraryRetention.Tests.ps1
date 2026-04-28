@@ -141,3 +141,53 @@ Describe 'Invoke-RipperLibraryRetention (MoveToSentAfterAllSynced)' {
         $idx['discA'].Source | Should -Be 'sent'
     }
 }
+
+Describe 'Invoke-RipperLibraryRetention (RecycleAfterAllSynced)' {
+    BeforeEach {
+        $script:lib = Join-Path $script:tmpRoot ([guid]::NewGuid())
+        New-Item -ItemType Directory -Path $script:lib -Force | Out-Null
+        $script:alb = New-FakeAlbum $script:lib 'Pink Floyd' 'The Wall (1979)'
+    }
+
+    It 'recycles the folder and marks the discids.json entry Source=recycled' {
+        Add-RipperLibraryDiscIndexEntry -LibraryRoot $script:lib -DiscId 'discR' `
+            -Path $script:alb -Label 'Pink Floyd - The Wall (1979)' -Source 'library'
+
+        # Stub Move-RipperFolderToRecycleBin so we don't touch the real
+        # Recycle Bin from the test runner. The retention layer only
+        # cares that the helper was invoked and the album path no
+        # longer exists on disk.
+        function global:Move-RipperFolderToRecycleBin {
+            param([Parameter(Mandatory)] [string] $Path)
+            Remove-Item -LiteralPath $Path -Recurse -Force
+        }
+        try {
+            $r = Invoke-RipperLibraryRetention -AlbumPath $script:alb -LibraryRoot $script:lib `
+                    -Config (New-Cfg 'RecycleAfterAllSynced') -SyncResult (New-SyncResult) -DiscId 'discR'
+        } finally {
+            Remove-Item -LiteralPath function:Move-RipperFolderToRecycleBin
+        }
+
+        $r.Action | Should -Be 'Recycled'
+        Test-Path -LiteralPath $script:alb | Should -BeFalse
+
+        $idx = Get-RipperLibraryDiscIndex -LibraryRoot $script:lib
+        $idx.ContainsKey('discR')  | Should -BeTrue
+        $idx['discR'].Source       | Should -Be 'recycled'
+        $idx['discR'].Label        | Should -Be 'Pink Floyd - The Wall (1979)'
+    }
+
+    It 'Find-RipperLibraryDiscIndexEntry surfaces recycled entries even though their path is gone' {
+        Add-RipperLibraryDiscIndexEntry -LibraryRoot $script:lib -DiscId 'discR2' `
+            -Path (Join-Path $script:lib 'Phantom\Album') -Label 'Phantom - Album' -Source 'recycled'
+        $entry = Find-RipperLibraryDiscIndexEntry -LibraryRoot $script:lib -DiscId 'discR2'
+        $entry           | Should -Not -BeNullOrEmpty
+        $entry.Source    | Should -Be 'recycled'
+    }
+
+    It 'Find-RipperLibraryDiscIndexEntry still returns null for a stale library entry' {
+        Add-RipperLibraryDiscIndexEntry -LibraryRoot $script:lib -DiscId 'discS' `
+            -Path (Join-Path $script:lib 'Phantom\Album') -Label 'Phantom - Album' -Source 'library'
+        Find-RipperLibraryDiscIndexEntry -LibraryRoot $script:lib -DiscId 'discS' | Should -BeNullOrEmpty
+    }
+}

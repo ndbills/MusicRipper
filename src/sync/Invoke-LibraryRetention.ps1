@@ -35,10 +35,14 @@
       - For MoveToSentAfterAllSynced: also rewrites the discids.json
         entry's Path to the new _Sent location so the duplicate-disc
         dialog still finds it on re-insert (Phase 5.8 contract).
-      - For RecycleAfterAllSynced: removes the discids.json entry so
-        a later disc re-insert isn't flagged as a duplicate against a
-        path that no longer exists. Sync-state.json keeps the history
-        record indefinitely.
+      - For RecycleAfterAllSynced: rewrites the discids.json entry
+        with Source='recycled' (preserving the original Label and
+        the now-gone Path for the historical record). The duplicate-
+        disc dialog still fires on re-insert -- "you ripped this
+        before" remains true even after the local copy is disposed
+        of -- but the dialog hides its Open-folder button because
+        the path is intentionally gone. Sync-state.json keeps the
+        durable RetentionApplied record alongside.
 
     Returns a hashtable describing what happened:
         @{
@@ -138,6 +142,23 @@ function Invoke-RipperLibraryRetention {
                 Write-RipperLog WARN 'Retention' 'Move-RipperFolderToRecycleBin not loaded; falling back to Keep.'
                 return @{ Action='None'; Reason='Recycle helper not loaded'; NewPath=$null }
             }
+
+            # Snapshot the existing discids.json entry BEFORE recycling
+            # the folder -- once the path is gone, the existing
+            # 'library'-source entry would read as stale and we'd lose
+            # the label we want to carry into the new 'recycled' record.
+            $existingLabel = ''
+            if ($DiscId) {
+                try {
+                    $existing = Find-RipperLibraryDiscIndexEntry -LibraryRoot $LibraryRoot -DiscId $DiscId
+                    if ($existing -and $existing.PSObject.Properties['Label']) {
+                        $existingLabel = [string]$existing.Label
+                    }
+                } catch {
+                    Write-RipperLog WARN 'Retention' "Failed to snapshot discids.json entry before recycle: $($_.Exception.Message)"
+                }
+            }
+
             & $cmd -Path $AlbumPath
             Write-RipperLog INFO 'Retention' "Recycled '$AlbumPath'."
 
@@ -145,26 +166,20 @@ function Invoke-RipperLibraryRetention {
                 -LibraryRoot $LibraryRoot -AlbumPath $AlbumPath `
                 -Action 'RecycleAfterAllSynced'
 
-            # Discard the discids.json entry: the path no longer exists.
-            # Sync-state.json keeps the durable record (DiscId field +
-            # RetentionApplied marker).
+            # Keep the discids.json entry so re-inserting the disc still
+            # trips the duplicate-disc dialog -- the user has ripped this
+            # CD before, and that fact doesn't stop being true just
+            # because the local copy was disposed of. Mark Source='recycled'
+            # so Find-RipperLibraryDiscIndexEntry knows to skip the
+            # path-exists check, and preserve the original Label so the
+            # dialog still shows "Artist - Album (Year)".
             if ($DiscId) {
                 try {
-                    $idxPath = Get-RipperLibraryDiscIndexPath -LibraryRoot $LibraryRoot
-                    if (Test-Path -LiteralPath $idxPath) {
-                        $idx = Get-RipperLibraryDiscIndex -LibraryRoot $LibraryRoot
-                        if ($idx.ContainsKey($DiscId)) {
-                            $idx.Remove($DiscId) | Out-Null
-                            $payload = [ordered]@{}
-                            foreach ($k in ($idx.Keys | Sort-Object)) { $payload[$k] = $idx[$k] }
-                            $json = ($payload | ConvertTo-Json -Depth 5)
-                            $tmp  = "$idxPath.tmp"
-                            Set-Content -LiteralPath $tmp -Value $json -Encoding UTF8 -NoNewline
-                            Move-Item -LiteralPath $tmp -Destination $idxPath -Force
-                        }
-                    }
+                    Add-RipperLibraryDiscIndexEntry `
+                        -LibraryRoot $LibraryRoot -DiscId $DiscId `
+                        -Path $AlbumPath -Label $existingLabel -Source 'recycled' | Out-Null
                 } catch {
-                    Write-RipperLog WARN 'Retention' "Failed to prune discids.json after Recycle: $($_.Exception.Message)"
+                    Write-RipperLog WARN 'Retention' "Failed to mark discids.json entry recycled: $($_.Exception.Message)"
                 }
             }
 

@@ -459,8 +459,14 @@ function Invoke-RipperOneDiscCycle {
         $libLabel = if ($libDup.PSObject.Properties['Label'] -and $libDup.Label) { [string]$libDup.Label } else { "DiscId $($disc.DiscId)" }
         $libPath  = [string]$libDup.Path
         $libRipAt = if ($libDup.PSObject.Properties['RippedAt']) { $libDup.RippedAt } else { $null }
-        Write-RipperLog INFO 'Start-Ripper' "DiscId $($disc.DiscId) already in library: $libLabel ($libPath)."
-        $dup = Show-RipperDuplicateDiscDialog -AlbumLabel $libLabel -AlbumPath $libPath -RippedAt $libRipAt
+        $libSrc   = if ($libDup.PSObject.Properties['Source']) { [string]$libDup.Source } else { 'library' }
+        # Recycled entries (D-022 LocalRetention=RecycleAfterAllSynced)
+        # have an intentionally-gone path. Don't surface it to the
+        # dialog -- the dialog hides Open-folder and shows the recycled
+        # note instead.
+        $dialogPath = if ($libSrc -eq 'recycled') { '' } else { $libPath }
+        Write-RipperLog INFO 'Start-Ripper' "DiscId $($disc.DiscId) already in library: $libLabel ($libPath, source=$libSrc)."
+        $dup = Show-RipperDuplicateDiscDialog -AlbumLabel $libLabel -AlbumPath $dialogPath -RippedAt $libRipAt
         switch ($dup.Action) {
             'Skip' {
                 Write-RipperLog INFO 'Start-Ripper' "User skipped already-in-library disc: $libLabel."
