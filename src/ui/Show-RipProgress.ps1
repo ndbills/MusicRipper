@@ -499,8 +499,13 @@ function Show-RipperRipProgress {
             if (-not $state['UiInPostProcess']) {
                 $state['UiInPostProcess'] = $true
                 $window.Title                       = 'Finalizing album...'
-                $controls.OverallBar.Value          = 0.0
-                $controls.OverallPctText.Text       = '  0%'
+                # Start indeterminate (marquee) -- some operations
+                # (robocopy to a remote NAS) can block for many seconds
+                # before the next progress callback fires, and a frozen
+                # 0% looked like the app had hung. The first non-zero
+                # frac update below switches us back to determinate.
+                $controls.OverallBar.IsIndeterminate = $true
+                $controls.OverallPctText.Text       = '...'
                 $controls.TrackBar.Value            = 1.0
                 $controls.TrackPctText.Text         = '100%'
                 $controls.CurrentTrackText.Text     = 'Rip complete. Tagging, moving, and syncing...'
@@ -510,26 +515,45 @@ function Show-RipperRipProgress {
                 $controls.StatsRow.Visibility          = 'Collapsed'
                 $controls.FailedSectorsText.Visibility = 'Collapsed'
                 $controls.CancelButton.Visibility      = 'Collapsed'
-                # Show the tagging bar (filled live by ProgressCallback).
+                # Show the tagging bar (filled live by ProgressCallback,
+                # or by the status-text heuristic below if the
+                # callback hasn't arrived yet).
                 $controls.TaggingBarRow.Visibility     = 'Visible'
                 $controls.TaggingBar.Value             = 0.0
                 $controls.TaggingPctText.Text          = ''
             }
             # Live overall progress fed by Invoke-RipperPostProcess.
             $ovFrac = [double]$state['PostProcessOverallFraction']
-            $controls.OverallBar.Value    = $ovFrac
-            $controls.OverallPctText.Text = '{0,3}%' -f [int]([Math]::Round($ovFrac * 100))
+            if ($ovFrac -gt 0) {
+                # First real value -- switch from indeterminate marquee
+                # to determinate.
+                if ($controls.OverallBar.IsIndeterminate) {
+                    $controls.OverallBar.IsIndeterminate = $false
+                }
+                $controls.OverallBar.Value    = $ovFrac
+                $controls.OverallPctText.Text = '{0,3}%' -f [int]([Math]::Round($ovFrac * 100))
+            }
             # Tagging bar: discrete count (3 / 12) is more meaningful than %.
             $tagCur = [int]$state['PostProcessTagCurrent']
             $tagTot = [int]$state['PostProcessTagTotal']
+            $msg    = [string]$state['PostProcessStatus']
             if ($tagTot -gt 0) {
                 $controls.TaggingBar.Value     = [double]$tagCur / [double]$tagTot
                 $controls.TaggingPctText.Text  = "$tagCur / $tagTot"
             } else {
-                # Outside tagging phase -- freeze at whatever full / empty
-                # state we already showed; suppress text to avoid "0 / 0".
-                if ($controls.TaggingBar.Value -lt 1.0 -and $ovFrac -gt 0.55) {
-                    # Tagging done but bar not topped up -- top it up.
+                # Outside tagging phase. Topping the bar up off either
+                # of two signals so a stalled overall fraction (no
+                # callback yet) doesn't leave the bar stuck at 0:
+                #   1. ovFrac past the tagging share (~0.55), OR
+                #   2. status text says we're past tagging (move/sync/
+                #      retention/replaygain).
+                $pastTag = ($ovFrac -gt 0.55) -or ($msg -and (
+                    $msg -like 'Moving to *' -or
+                    $msg -like 'Syncing to *' -or
+                    $msg -like 'Computing ReplayGain*' -or
+                    $msg -like 'Updating sync state*' -or
+                    $msg -like 'Local retention*'))
+                if ($controls.TaggingBar.Value -lt 1.0 -and $pastTag) {
                     $controls.TaggingBar.Value    = 1.0
                     $controls.TaggingPctText.Text = 'done'
                 }
@@ -537,7 +561,6 @@ function Show-RipperRipProgress {
             # Live status line (driven by Invoke-RipperPostProcess /
             # Invoke-RipperSync via -StatusCallback). Reuse the AR row
             # so we don't have to grow the window.
-            $msg = [string]$state['PostProcessStatus']
             if ($msg) {
                 $controls.ArStatusText.Text = $msg
             }

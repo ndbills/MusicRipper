@@ -214,15 +214,19 @@ if ($oneDriveRoot) {
 $prompt = if ($defaultOd) {
     "OneDrive sync target root [$defaultOd] (Enter = keep, 'pick' to browse, '-' to clear)"
 } elseif ($oneDriveRoot) {
-    "OneDrive sync target root (Enter = browse from $oneDriveRoot, '-' to skip)"
+    "OneDrive sync target root (Enter or 'pick' = browse from $oneDriveRoot, '-' to skip)"
 } else {
-    "OneDrive sync target root (Enter = browse, '-' to skip)"
+    "OneDrive sync target root (Enter or 'pick' = browse, '-' to skip)"
 }
 $ans = Read-Host $prompt
 $oneDrive = $defaultOd
-if ($ans.Trim() -eq '-') {
+$ansTrim = $ans.Trim()
+if ($ansTrim -eq '-') {
     $oneDrive = ''
-} elseif ([string]::IsNullOrWhiteSpace($ans) -or $ans.Trim().ToLowerInvariant() -eq 'pick') {
+} elseif ([string]::IsNullOrWhiteSpace($ans) -and $defaultOd) {
+    # Enter with an existing value = keep it; do not pop the dialog.
+    $oneDrive = $defaultOd
+} elseif ([string]::IsNullOrWhiteSpace($ans) -or $ansTrim.ToLowerInvariant() -eq 'pick') {
     # Browse. Use Windows Forms FolderBrowserDialog -- ships with
     # every Windows install, no extra dependencies. Seed at the
     # registered OneDrive root so the user can just navigate inside
@@ -244,25 +248,59 @@ if ($ans.Trim() -eq '-') {
         Write-Host "  OneDrive sync target left as: $(if ($defaultOd) { $defaultOd } else { '(not set)' })" -ForegroundColor DarkGray
     }
 } else {
-    $oneDrive = $ans.Trim()
+    $oneDrive = $ansTrim
 }
 if ([string]::IsNullOrWhiteSpace($oneDrive)) { $oneDrive = $null }
 elseif (-not (Test-Path -LiteralPath $oneDrive)) {
     Write-Warning "OneDriveSyncTargetRoot '$oneDrive' does not exist on disk. The OneDrive sync target will report Failed until the folder exists."
 }
 
-# --- Synology NAS (optional) ----------------------------------------------
+# --- Synology NAS (optional, Phase 6.3) ----------------------------------
+# Stores cfg.SynologyUnc -- the UNC path of the NAS share that the
+# 'SynologyNAS' sync target mirrors albums onto. Optional DPAPI
+# credential lives in credentials.clixml; we only re-prompt when the
+# user opts in, so re-running setup never silently asks for the NAS
+# password again.
 $defaultSyn = if ($existing) { $existing.SynologyUnc } else { '' }
 $syn = Read-WithDefault -Prompt 'Synology NAS UNC path, e.g. \\nas\music (blank to skip)' -Default $defaultSyn
 if ([string]::IsNullOrWhiteSpace($syn)) { $syn = $null }
 
-$hasCred = $false
+$hasCred = if ($existing -and $existing.PSObject.Properties['HasSynologyCredential']) { [bool]$existing.HasSynologyCredential } else { $false }
 if ($syn) {
-    $cred = Get-Credential -Message "Credentials for $syn (cancel to skip — you'll be prompted again at sync time)"
-    if ($cred) {
-        Save-RipperCredential -Credential $cred
-        $hasCred = $true
-        Write-RipperLog INFO 'New-RipperConfig' 'Synology credential saved (DPAPI).'
+    # Match the rest of the script's "Enter = keep" idiom. The
+    # bracketed default reflects current state (stored / not set);
+    # 'new' triggers a fresh Get-Credential prompt and saves it,
+    # '-' clears any existing credential. On first run (no cred
+    # stored yet) we default to prompting since that's the common
+    # case -- the user just typed a UNC and almost certainly needs
+    # to authenticate to it.
+    $credDefault = if ($hasCred) { 'stored' } else { 'not set' }
+    $credAns = (Read-Host "Synology NAS credential [$credDefault] (Enter = keep, 'new' to enter/replace, '-' to clear)").Trim()
+    $wantsNew   = $credAns -match '^(?i)new$'
+    $wantsClear = $credAns -eq '-'
+    # Backwards-compat: a bare 'y' still means 'enter a new credential'
+    # so muscle memory from the old y/N prompt keeps working.
+    if (-not $wantsNew -and -not $wantsClear -and $credAns -match '^(?i)[yt1]$') {
+        $wantsNew = $true
+    }
+    # First-run convenience: bare Enter with no cred stored = prompt now.
+    if (-not $wantsNew -and -not $wantsClear -and -not $hasCred -and [string]::IsNullOrEmpty($credAns)) {
+        $wantsNew = $true
+    }
+    if ($wantsClear -and $hasCred) {
+        $credPath = Join-Path (Get-RipperConfigRoot) 'credentials.clixml'
+        if (Test-Path -LiteralPath $credPath) {
+            Remove-Item -LiteralPath $credPath -Force
+        }
+        $hasCred = $false
+        Write-RipperLog INFO 'New-RipperConfig' 'Synology credential cleared.'
+    } elseif ($wantsNew) {
+        $cred = Get-Credential -Message "Credentials for $syn (cancel to skip)"
+        if ($cred) {
+            Save-RipperCredential -Credential $cred
+            $hasCred = $true
+            Write-RipperLog INFO 'New-RipperConfig' 'Synology credential saved (DPAPI).'
+        }
     }
 }
 
@@ -321,7 +359,7 @@ $continuousMode = ($contStr -match '^\s*[YyTt1]')
 # Library move. Built-in 'Stub' is for testing the orchestrator without
 # a real off-machine target. Real targets land in 6.2 (OneDrive) and
 # 6.3 (SynologyNAS). Empty = no sync (current behaviour).
-$knownSync   = @('Stub','OneDrive')
+$knownSync   = @('Stub','OneDrive','SynologyNAS')
 $defaultSync = if ($existing -and $existing.PSObject.Properties['SyncTargets'] -and $existing.SyncTargets) { @($existing.SyncTargets) } else { @() }
 $defStr      = if ($defaultSync.Count -gt 0) { $defaultSync -join ', ' } else { '<empty>' }
 $rawSync = Read-Host "Sync targets, comma-separated (known: $($knownSync -join ', '); blank for none) [$defStr] (Enter = keep)"

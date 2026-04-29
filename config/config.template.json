@@ -17,13 +17,13 @@
   "//OneDriveSyncTargetRoot":  "Phase 6.2: absolute path inside the user's OneDrive (or any local folder) where ripped albums get mirrored when 'OneDrive' is in SyncTargets. Pick the folder via setup/New-RipperConfig.ps1 (it pops a folder picker seeded at the OneDrive root detected from HKCU\\Software\\Microsoft\\OneDrive\\UserFolder). null = OneDrive sync target reports Failed (nothing to copy to).",
   "OneDriveSyncTargetRoot": null,
 
-  "//SynologyUnc":              "Optional: UNC path of NAS share (e.g. \\\\nas\\music). null = disabled.",
+  "//SynologyUnc":              "Phase 6.3: UNC path of the NAS share that the 'SynologyNAS' sync target mirrors albums onto (e.g. \\\\nas\\music). Any UNC server works -- the name is historical. null = the SynologyNAS target reports Failed (nothing to copy to). If HasSynologyCredential=true, the share is mounted via New-SmbMapping for the duration of each sync using the DPAPI-stored credential; otherwise the sync uses ambient session credentials.",
   "SynologyUnc": null,
 
-  "//SynologySyncReviewQueue": "If true, NAS sync also copies _ReviewQueue/. Default false to keep scratch work off the family library.",
+  "//SynologySyncReviewQueue": "Reserved for a future _ReviewQueue mirroring opt-in. Currently unused by the Phase 6.3 SynologyNAS target (the sync framework runs per album and is invoked only on Library moves, not Review-Queue routings).",
   "SynologySyncReviewQueue": false,
 
-  "//HasSynologyCredential":   "Flag only — true means a DPAPI-protected PSCredential is on disk in credentials.clixml.",
+  "//HasSynologyCredential":   "Phase 6.3: true means a DPAPI-protected PSCredential is on disk in credentials.clixml. The SynologyNAS sync target loads it via Import-RipperCredential and mounts SynologyUnc with New-SmbMapping for the duration of each sync. Set to false to use ambient session credentials (e.g. when the NAS share is already mapped in Explorer with 'Remember credentials').",
   "HasSynologyCredential": false,
 
 "//MetadataProviders":       "Ordered list of disc-id metadata sources tried in priority order. Phase 5.2: MusicBrainz (curated, canonical) then CuetoolsDb (community-submitted) then GnuDb (legacy freedb/CDDB catalog, huge coverage of older and community-submitted discs). When two or more return matches, an extra synthesized 'Merged (...)' candidate is prepended (earlier providers win on conflict, later ones fill nulls). Available: 'MusicBrainz', 'CuetoolsDb', 'GnuDb'. Note: the 'Search by text...' fallback dialog also surfaces text-search-only providers (iTunesSearch, Deezer) regardless of this list.",
@@ -38,7 +38,7 @@
   "//ContinuousMode":          "Phase 5.7: if true, MusicRipper keeps running after each disc and shows a between-discs dialog (Rip Next / Quit). Inserting a new disc auto-selects Rip Next. Default true so a parent can rip a stack of CDs without re-launching (one UAC prompt per session). Set false to restore the one-disc-per-launch flow.",
   "ContinuousMode": true,
 
-  "//SyncTargets":             "Phase 6.1+: ordered list of sync-target names to invoke per album after a successful Library move. Each name maps to a function 'Invoke-RipperSyncTo<Name>' loaded from src/sync/. Built-ins: 'Stub' (writes a marker file under .musicripper/stub-sync/, used for testing) and 'OneDrive' (Phase 6.2: robocopy mirror into OneDriveSyncTargetRoot). Phase 6.3 will add 'SynologyNAS'. Empty list = no sync, current behaviour. Per-target results land in <LibraryRoot>/.musicripper/sync-state.json.",
+  "//SyncTargets":             "Phase 6.1+: ordered list of sync-target names to invoke per album after a successful Library move. Each name maps to a function 'Invoke-RipperSyncTo<Name>' loaded from src/sync/. Built-ins: 'Stub' (writes a marker file under .musicripper/stub-sync/, used for testing), 'OneDrive' (Phase 6.2: robocopy mirror into OneDriveSyncTargetRoot), and 'SynologyNAS' (Phase 6.3: robocopy mirror onto SynologyUnc with optional DPAPI credential). Empty list = no sync, current behaviour. Per-target results land in <LibraryRoot>/.musicripper/sync-state.json.",
   "SyncTargets": [],
 
   "//LocalRetention":          "Phase 6.1: what to do with the local album folder after every configured sync target reported OK. 'Keep' (default, never touch local files), 'MoveToSentAfterAllSynced' (move to <LibraryRoot>/_Sent/ preserving the artist subdir), or 'RecycleAfterAllSynced' (send to the Windows Recycle Bin, recoverable). No-op when SyncTargets is empty or any target failed.",
