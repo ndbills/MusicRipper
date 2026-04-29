@@ -68,6 +68,7 @@ Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 . (Join-Path $repoRoot 'src\sync\Sync-ToOneDrive.ps1')
 . (Join-Path $repoRoot 'src\sync\Sync-ToSynologyNAS.ps1')
 . (Join-Path $repoRoot 'src\sync\Invoke-LibraryRetention.ps1')
+. (Join-Path $repoRoot 'src\sync\Invoke-PendingSync.ps1')
 # Recycle helper lives here -- needed if any retried entry trips
 # RecycleAfterAllSynced now that all targets are OK.
 . (Join-Path $repoRoot 'src\ui\Show-TargetExistsDialog.ps1')
@@ -90,166 +91,47 @@ if ($configuredTargets.Count -eq 0) {
 Start-RipperLog -Context 'sync-pending-albums' | Out-Null
 Write-RipperLog INFO 'SyncPending' "LibraryRoot='$LibraryRoot'; targets=[$($configuredTargets -join ', ')]; Force=$Force"
 
-$state = Get-RipperLibrarySyncState -LibraryRoot $LibraryRoot
-if ($state.Count -eq 0) {
-    Write-Host "sync-state.json is empty -- nothing to retry." -ForegroundColor Yellow
-    Stop-RipperLog
-    return
-}
-
-# Hygiene pass: prune any per-album Targets entries whose name is no
-# longer in cfg.SyncTargets. Stale 'Failed' rows from a fixed typo or
-# a removed target read like unresolved problems three months later;
-# the per-disc rip log already preserves the historical record. Done
-# here (inside the hygiene tool) rather than in the rip pipeline so a
-# normal rip never silently mutates state outside its own album.
-$prunedAny = $false
-foreach ($key in @($state.Keys)) {
-    $entry = $state[$key]
-    if (-not $entry.PSObject.Properties['Targets'] -or -not $entry.Targets) { continue }
-    $stale = @()
-    foreach ($p in $entry.Targets.PSObject.Properties) {
-        if ($configuredTargets -notcontains $p.Name) { $stale += $p.Name }
-    }
-    foreach ($n in $stale) {
-        if ($PSCmdlet.ShouldProcess("$key / target=$n", 'Prune stale target from sync-state')) {
-            $entry.Targets.PSObject.Properties.Remove($n)
-            Write-RipperLog INFO 'SyncPending' "Pruned stale target '$n' from album '$key' (no longer in cfg.SyncTargets)."
-            Write-Host ("Pruned stale target: {0} (album '{1}')" -f $n, $key) -ForegroundColor DarkYellow
-            $prunedAny = $true
-        } else {
-            Write-Host ("Would prune stale target: {0} (album '{1}')" -f $n, $key) -ForegroundColor DarkYellow
+# Console adapter: print plan up-front, status as albums process, summary at end.
+$cliCb = {
+    param($Phase, $AlbumIdx, $AlbumTotal, $AlbumKey, $AlbumLabel, $ResultStatus, $ResultDetail)
+    switch ($Phase) {
+        'plan' {
+            if ($AlbumTotal -eq 0) { return }
+            Write-Host ''
+            Write-Host "Pending albums:" -ForegroundColor Cyan
+            foreach ($p in $ResultDetail) {
+                $names = @()
+                foreach ($n in $configuredTargets) {
+                    $st = if ($p.Entry.Targets.PSObject.Properties[$n]) { [string]$p.Entry.Targets.$n.Status } else { 'missing' }
+                    $names += "$n=$st"
+                }
+                Write-Host "  $($p.Key)   [$($names -join ', ')]"
+            }
+            Write-Host ''
+        }
+        'album-start' {
+            Write-Host ("[{0}/{1}] Syncing: {2}" -f $AlbumIdx, $AlbumTotal, $AlbumKey) -ForegroundColor White
+        }
+        'album-end' {
+            switch ($ResultStatus) {
+                'OK'              { Write-Host '  -> OK' -ForegroundColor Green }
+                'PartiallyFailed' { Write-Host ("  -> still failing: {0}" -f $ResultDetail.Diagnostic) -ForegroundColor Yellow }
+                'Skipped'         { Write-Host '  -> skipped' -ForegroundColor DarkGray }
+            }
         }
     }
-}
-if ($prunedAny) {
-    try {
-        Save-RipperLibrarySyncState -LibraryRoot $LibraryRoot -Index $state
-    } catch {
-        Write-RipperLog WARN 'SyncPending' "Failed to persist sync-state after prune: $($_.Exception.Message)"
-    }
-}
+}.GetNewClosure()
 
-# Pre-load discids.json once for the DiscId lookup. Each entry on
-# sync-state.json carries its own DiscId so this is best-effort fallback.
-$discIndex = $null
-try {
-    $discIndex = Get-RipperLibraryDiscIndex -LibraryRoot $LibraryRoot
-} catch {
-    Write-RipperLog WARN 'SyncPending' "Could not load discids.json: $($_.Exception.Message). Will rely on sync-state DiscId."
-}
-
-function Test-RipperEntryNeedsRetry {
-    param([object]$Entry, [string[]]$Targets)
-    foreach ($name in $Targets) {
-        if (-not $Entry.Targets.PSObject.Properties[$name]) { return $true }
-        if ([string]$Entry.Targets.$name.Status -ne 'OK')   { return $true }
-    }
-    $false
-}
-
-$plan = @()
-foreach ($key in $state.Keys) {
-    $entry = $state[$key]
-    if ($Force) {
-        $plan += [pscustomobject]@{ Key=$key; Entry=$entry }
-        continue
-    }
-    if (Test-RipperEntryNeedsRetry -Entry $entry -Targets $configuredTargets) {
-        $plan += [pscustomobject]@{ Key=$key; Entry=$entry }
-    }
-}
-
-if ($plan.Count -eq 0) {
-    Write-Host "All sync-state entries are already OK against [$($configuredTargets -join ', ')]." -ForegroundColor Green
-    Stop-RipperLog
-    return
-}
+$summary = Invoke-RipperPendingSync `
+    -LibraryRoot      $LibraryRoot `
+    -Config           $cfg `
+    -Force:$Force `
+    -ProgressCallback $cliCb `
+    -WhatIf:$WhatIfPreference
 
 Write-Host ''
-Write-Host "Pending albums:" -ForegroundColor Cyan
-foreach ($p in $plan) {
-    $names = @()
-    foreach ($n in $configuredTargets) {
-        $st = if ($p.Entry.Targets.PSObject.Properties[$n]) { [string]$p.Entry.Targets.$n.Status } else { 'missing' }
-        $names += "$n=$st"
-    }
-    Write-Host "  $($p.Key)   [$($names -join ', ')]"
-}
-Write-Host ''
-
-$failedAny = $false
-$successCount = 0
-foreach ($p in $plan) {
-    $key   = $p.Key
-    $entry = $p.Entry
-    $abs   = Join-Path $LibraryRoot ($key -replace '/','\')
-
-    if (-not (Test-Path -LiteralPath $abs -PathType Container)) {
-        Write-RipperLog WARN 'SyncPending' "Skipping '$key' -- folder is gone (moved/recycled by user). Nothing to sync."
-        continue
-    }
-
-    $discId = ''
-    if ($entry.PSObject.Properties['DiscId'] -and $entry.DiscId) {
-        $discId = [string]$entry.DiscId
-    }
-    if (-not $discId -and $discIndex) {
-        # Best-effort: scan discids.json for a matching path.
-        foreach ($d in $discIndex.Keys) {
-            if ([string]$discIndex[$d].Path -eq $abs) { $discId = $d; break }
-        }
-    }
-    if (-not $discId) {
-        # Synthesize a placeholder so Invoke-RipperSync's Mandatory
-        # parameter is satisfied. Sync-state will keep the empty string;
-        # this only happens for entries that were already missing one.
-        $discId = ''
-    }
-
-    if (-not $PSCmdlet.ShouldProcess($abs, "Re-run sync to [$($configuredTargets -join ', ')]")) {
-        continue
-    }
-
-    Write-Host ("Syncing: {0}" -f $key) -ForegroundColor White
-    $sync = $null
-    try {
-        $sync = Invoke-RipperSync -AlbumPath $abs -LibraryRoot $LibraryRoot -DiscId $discId -Config $cfg
-    } catch {
-        Write-RipperLog WARN 'SyncPending' "Sync orchestrator threw for '$key' (non-fatal): $($_.Exception.Message)"
-        $failedAny = $true
-        continue
-    }
-
-    if (-not $sync -or $sync.Skipped) {
-        # Skipped here means SyncTargets emptied between the early check
-        # and now -- shouldn't happen in practice.
-        continue
-    }
-
-    if ($sync.AllOk) {
-        $successCount++
-        Write-Host "  -> OK" -ForegroundColor Green
-        # Apply retention policy now that the album is fully synced.
-        try {
-            Invoke-RipperLibraryRetention `
-                -AlbumPath   $abs `
-                -LibraryRoot $LibraryRoot `
-                -Config      $cfg `
-                -SyncResult  $sync `
-                -DiscId      $discId | Out-Null
-        } catch {
-            Write-RipperLog WARN 'SyncPending' "Retention threw for '$key' (non-fatal): $($_.Exception.Message)"
-        }
-    } else {
-        $failedAny = $true
-        $bad = ($sync.Targets | Where-Object { $_.Status -ne 'OK' } | ForEach-Object { "$($_.Target)=$($_.Status)" }) -join ', '
-        Write-Host "  -> still failing: $bad" -ForegroundColor Yellow
-    }
-}
-
-Write-Host ''
-Write-Host ("Done. Restored to OK: {0}. See {1} for details." -f $successCount, (Get-RipperLogPath)) -ForegroundColor Cyan
+Write-Host ("Done. Restored to OK: {0}/{1}. Still failing: {2}. Skipped: {3}. See {4} for details." -f `
+    $summary.Synced, $summary.Total, $summary.StillFailing, $summary.Skipped, (Get-RipperLogPath)) -ForegroundColor Cyan
 Stop-RipperLog
 
-if ($failedAny) { exit 1 } else { exit 0 }
+if ($summary.StillFailing -gt 0) { exit 1 } else { exit 0 }

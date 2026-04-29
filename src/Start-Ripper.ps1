@@ -155,6 +155,23 @@ function Close-RipperTray {
     $letter = ($cfg.DriveLetter -replace '[:\\]','').ToUpperInvariant()
     if ($letter.Length -ne 1) { return }
 
+    # Phase 6.5 fix: short-circuit when a disc is already loaded. On some
+    # drives, opening the MCI CDAudio device while media is present
+    # triggers a re-init that ejects the tray ("door must be closed to
+    # begin reading TOC" -> driver helpfully eject-and-recloses). The
+    # whole point of Close-RipperTray is to recover from a left-open
+    # tray; if [IO.DriveInfo]::IsReady is true we're already past that
+    # state and have nothing to do.
+    try {
+        $di = [System.IO.DriveInfo]::new("${letter}:")
+        if ($di.IsReady) {
+            Write-RipperLog INFO 'Start-Ripper' "Drive ${letter}: already has a disc loaded; skipping tray-close."
+            return
+        }
+    } catch {
+        # Fall through to MCI -- IsReady can throw on weird drive states.
+    }
+
     if (-not ('MusicRipper.Mci' -as [type])) {
         Add-Type -Language CSharp -TypeDefinition @'
 using System.Runtime.InteropServices;
@@ -981,6 +998,46 @@ function Invoke-RipperOneDiscCycle {
 # remains valid until the loop's first iteration rotates it.
 $continuousMode = if ($cfg.PSObject.Properties['ContinuousMode']) { [bool]$cfg.ContinuousMode } else { $true }
 Write-RipperLog INFO 'Start-Ripper' "ContinuousMode = $continuousMode"
+
+# Phase 6.5: catch up on any albums whose post-rip sync didn't finish
+# (NAS off, OneDrive offline, transient network blip). Runs ONCE at
+# startup, before the do/while disc loop. Skips silently if
+# sync-state.json is empty / all targets OK / cfg.SyncTargets empty
+# / cfg.RetryPendingSyncOnStartup=false. The dialog has its own
+# Cancel button that returns Action='Cancelled', in which case we
+# fall through to the normal rip flow without complaint.
+$retryOnStartup = if ($cfg.PSObject.Properties['RetryPendingSyncOnStartup']) { [bool]$cfg.RetryPendingSyncOnStartup } else { $true }
+if ($retryOnStartup) {
+    try {
+        . (Join-Path $repoRoot 'src\sync\Invoke-PendingSync.ps1')
+        . (Join-Path $repoRoot 'src\ui\Show-PendingSyncProgress.ps1')
+        $resync = Show-RipperPendingSyncProgress `
+            -LibraryRoot $cfg.LibraryRoot `
+            -Config      $cfg `
+            -RepoRoot    $repoRoot
+        if ($resync) {
+            switch ($resync.Action) {
+                'Done' {
+                    if ($resync.Summary -and $resync.Summary.Total -gt 0) {
+                        Write-RipperLog INFO 'Start-Ripper' `
+                            "Startup resync: synced=$($resync.Summary.Synced)/$($resync.Summary.Total), still failing=$($resync.Summary.StillFailing), skipped=$($resync.Summary.Skipped)."
+                    }
+                }
+                'Cancelled' {
+                    Write-RipperLog INFO 'Start-Ripper' 'Startup resync cancelled by user; proceeding to disc loop.'
+                }
+                'Error' {
+                    $msg = if ($resync.Error) { $resync.Error.Exception.Message } else { 'unknown' }
+                    Write-RipperLog WARN 'Start-Ripper' "Startup resync errored (non-fatal): $msg"
+                }
+            }
+        }
+    } catch {
+        # Belt-and-suspenders: never let a startup resync failure
+        # prevent the user from ripping discs.
+        Write-RipperLog WARN 'Start-Ripper' "Startup resync threw (non-fatal): $($_.Exception.Message)"
+    }
+}
 
 do {
     # Rotate the log: stop the previous (setup or per-disc) log and open a

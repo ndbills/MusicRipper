@@ -194,6 +194,15 @@ function New-RipperConfigObject {
         #                                  (recoverable, not hard-delete).
         # No-op when SyncTargets is empty or any target failed.
         LocalRetention          = 'Keep'
+
+        # Phase 6.5: at startup -- BEFORE any disc-rip -- show a WPF
+        # dialog that retries albums whose previous sync didn't finish
+        # (e.g. NAS was offline, OneDrive was unreachable). The dialog
+        # has its own Cancel button so a single launch can still skip
+        # the retry without flipping this flag. Set false to disable
+        # the auto-retry entirely; you can still run the equivalent
+        # via src/tools/Sync-PendingAlbums.ps1.
+        RetryPendingSyncOnStartup = $true
     }
 }
 

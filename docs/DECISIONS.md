@@ -1570,3 +1570,60 @@ behaves, and discarded folders land in the Recycle Bin recoverable.
 **Pester:** 400/0/1 green.
 
 **Cross-references:** D-022 (sync framework), D-023 (OneDrive target). Phase 6.4 will reuse this same target over WireGuard -- no code change expected, just a setup-doc addition for the VPN tunnel.
+
+## D-025 -- Startup pending-sync resync UI (Phase 6.5)
+
+**Date:** 2026-04-29
+**Phase:** 6.5
+**Status:** Implemented.
+
+### Problem
+Phase 6.3 left us in a place where a transient NAS outage (NAS off, network blip, VPN dropped) downgrades a per-album `Invoke-RipperSync` result to `Failed` and writes that into `<LibraryRoot>\.musicripper\sync-state.json`. The rip pipeline keeps going (intentional -- see D-022), but the album never makes it to the NAS. We had a CLI tool (`src/tools/Sync-PendingAlbums.ps1`) that walks `sync-state.json` and retries every non-OK entry, but a parent user is unlikely to remember it exists. Without an automatic catch-up, "rip a stack of CDs while the NAS is off" silently produces a half-mirrored library.
+
+### Decision
+At launch, **before the disc-rip loop starts**, MusicRipper shows a WPF dialog (`Show-RipperPendingSyncProgress`) that retries every album whose previous sync didn't finish. The dialog is gated by `cfg.RetryPendingSyncOnStartup` (default `$true`) and skipped silently when `sync-state.json` has nothing pending.
+
+### Why a startup dialog (not a tray app / not background)
+- The user is already at the keyboard about to use MusicRipper -- this is the cheapest UX moment to surface "hey, three albums are still pending."
+- A tray app or scheduled task would mean another piece of always-on infrastructure to install on Mom's laptop. Phase 1 explicitly stays single-script-launch (D-001).
+- Doing it strictly in the foreground, before the disc-id read, means there's no race with the rip pipeline, no shared file-lock contention on `sync-state.json`, and no surprise "why is my CD ripping slow?" (the NAS would be fighting the ripper for disk + network).
+
+### UI shape
+- **Pre-flight panel:** lists every pending album (with the actual artist/album label resolved via `Get-RipperLibraryDiscIndex`) plus which targets are missing/failed. Two buttons: `Sync now` (default) and `Cancel (rip discs instead)`.
+- **Working panel:** swaps in once `Sync now` is clicked. Two progress bars (overall "album N of M" + per-album indeterminate marquee) and a status line. Cancel turns into "Cancelling after current album finishes...".
+- **Summary panel:** mandatory click-through (no auto-close, per user's explicit ask). Headline + friendly explanatory body + per-album result list. `OK` closes. Three flavours of headline:
+  - All synced: green, "All caught up. N album(s) synced."
+  - Cancelled mid-run: red-ish, "Stopped at your request" + reassurance the rest will retry next launch.
+  - Some still failing: amber, "K of N synced. M still failing" + likely-cause hints (NAS off, OneDrive offline, creds need refresh).
+
+### Cancellation semantics
+- Cancel sets a synchronised-hashtable flag that the worker runspace polls **between** albums, not mid-album. Robocopy without `/MIR` is safe to leave half-done -- the next retry sees a size mismatch and re-copies just the partial file. Killing robocopy mid-flight saves a few seconds at the cost of leaving a thread half-bound to a network handle, which is the worse trade.
+- The current album finishes; the dialog jumps straight to the summary panel marked `Cancelled=$true`.
+- The caller (`Start-Ripper.ps1`) treats `Action='Cancelled'` as a successful skip and falls through to the normal disc-rip flow. We never crash the launch path because the resync UI threw -- the `try/catch` around the call logs WARN and proceeds.
+
+### Cross-runspace plumbing (gotcha-driven)
+- The worker runs in a fresh STA runspace (per Phase-1 lesson: the parent function table doesn't follow scriptblocks across runspace boundaries, so we re-`Import-Module` and re-dot-source every dependency inside the runspace's `AddScript` block).
+- Cancel flag goes through `[hashtable]::Synchronized(@{...})` -- not `[ref]$arr[0]`, which snapshots.
+- `ProgressCallback` and `CancelRequested` are scriptblocks that close over `$shared`; the worker re-creates them inside the runspace as plain blocks (no need for `[scriptblock]::Create()` here because they're declared inline within the AddScript body).
+
+### Reuse of the core function
+Both this dialog and the existing CLI tool (`src/tools/Sync-PendingAlbums.ps1`) call into a new pure-logic core, `Invoke-RipperPendingSync` (in `src/sync/Invoke-PendingSync.ps1`). The CLI tool keeps a console adapter that prints colored status with `Write-Host`; the dialog provides a WPF adapter that mutates the synchronised state hashtable. Both adapters use the same `ProgressCallback` shape, so future callers (a tray app in some hypothetical Phase 8) need only supply a callback.
+
+### Rejected alternatives
+- **Re-trigger on every disc rip.** Cheap to implement but hammers the NAS for no reason on the 95% of launches where everything is already synced; would also delay every disc rip's `Move-ToLibrary` finish.
+- **Run the resync invisibly in a background runspace.** No user feedback when the NAS is still off after retry, no easy way to surface "hey, you should plug in the NAS" -- defeats the whole point.
+- **`/MIR` + `/FORCE` on robocopy.** `/MIR` would delete files we *want* to keep on the NAS but no longer have locally (after `LocalRetention=RecycleAfterAllSynced`). `/FORCE` is for read-only attribute fights, not what we have here.
+
+### Files changed
+- `src/sync/Invoke-PendingSync.ps1` -- NEW. `Get-RipperPendingSyncPlan` + `Invoke-RipperPendingSync` (pure-logic core, used by both CLI and UI).
+- `src/ui/Show-PendingSyncProgress.ps1` -- NEW. WPF dialog with pre-flight / working / summary panels.
+- `src/Start-Ripper.ps1` -- startup hook (between `Import-RipperConfig` and the do/while disc loop), guarded by `cfg.RetryPendingSyncOnStartup` and a `try/catch` that downgrades any failure to a WARN log.
+- `src/tools/Sync-PendingAlbums.ps1` -- refactored to a thin console-adapter wrapper over `Invoke-RipperPendingSync` (was ~340 lines, now ~140).
+- `src/lib/Config.psm1` -- `RetryPendingSyncOnStartup = $true` default.
+- `config/config.template.json` -- new field with comment.
+- `setup/New-RipperConfig.ps1` -- prompt + display row for the new field.
+- `tests/Invoke-PendingSync.Tests.ps1` -- NEW, 13 tests (5 plan + 8 orchestrator) green against fully-mocked sync chain.
+
+**Pester:** 413/0/1 green.
+
+**Cross-references:** D-022 (sync framework), D-024 (NAS target). Phase 6.4 (WireGuard) will benefit from this directly -- "ripped while at the in-laws, sync on the way home" becomes "rips queue locally, VPN connects, retry-on-launch pushes the backlog."

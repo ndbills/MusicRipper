@@ -193,3 +193,14 @@ self-heal silently, matching the pre-Phase-6 behaviour.
   three months later; the per-disc rip log retains the historical
   record. Pruning honours `-WhatIf`. The rip pipeline itself never
   prunes -- a normal rip only ever mutates state for its own album.
+- **Startup auto-retry (Phase 6.5).** When `cfg.RetryPendingSyncOnStartup`
+  is true (default), `Start-Ripper.ps1` shows a WPF dialog
+  (`Show-RipperPendingSyncProgress`) at launch -- before the disc-rip
+  loop -- that runs the same retry logic over `sync-state.json` and
+  surfaces a friendly progress + summary screen. The dialog is skipped
+  silently when nothing is pending. Cancel falls through to the
+  normal rip flow without complaint; the pending entries simply
+  retry on the next launch (or via the CLI tool above). Both the
+  CLI and the dialog share the same core function
+  `Invoke-RipperPendingSync` in `src/sync/Invoke-PendingSync.ps1`.
+  See D-025 for the design rationale.
