@@ -203,6 +203,28 @@ function New-RipperConfigObject {
         # the auto-retry entirely; you can still run the equivalent
         # via src/tools/Sync-PendingAlbums.ps1.
         RetryPendingSyncOnStartup = $true
+
+        # Phase 6.4: WireGuard auto-toggle. When the NAS share lives on
+        # the other side of a WireGuard VPN (typical home-lab setup
+        # where the parent rips at a friend's house and the family NAS
+        # is at home), MusicRipper can bring the tunnel up before each
+        # NAS sync and tear it down on application exit.
+        #
+        # `WireGuardTunnelName` is the bare tunnel name -- typically
+        # the .conf filename without extension. Empty/null = no VPN
+        # management; the share must already be reachable. Setup
+        # (setup/New-RipperConfig.ps1) prompts for a .conf path,
+        # installs it as a Windows service via wireguard.exe
+        # /installtunnelservice, and grants the current user
+        # SERVICE_START / SERVICE_STOP via `sc.exe sdset` so every
+        # subsequent rip is UAC-free. See D-026 for the full design.
+        #
+        # `WireGuardAutoToggle` is the master switch -- false means
+        # MusicRipper never starts/stops the tunnel itself even if
+        # WireGuardTunnelName is set, useful for users who run their
+        # own always-on VPN.
+        WireGuardTunnelName     = $null
+        WireGuardAutoToggle     = $true
     }
 }
 

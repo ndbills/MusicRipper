@@ -82,6 +82,21 @@
 
 Set-StrictMode -Version 3.0
 
+# Phase 6.4: pull in the Wireguard helpers so this file is self-
+# contained for the auto-toggle path. Made conditional + best-effort
+# so callers / tests that don't care about WG don't fail when the
+# module is somehow missing -- we just fall back to "no auto-toggle"
+# in Invoke-RipperSyncToSynologyNAS.
+try {
+    $script:_wgModulePath = Join-Path $PSScriptRoot '..\lib\Wireguard.psd1'
+    if (Test-Path -LiteralPath $script:_wgModulePath) {
+        Import-Module $script:_wgModulePath -Force -ErrorAction Stop
+    }
+} catch {
+    # Non-fatal: if the module won't load, auto-toggle is silently
+    # disabled (the runtime check below uses Get-Command).
+}
+
 
 function Test-RipperUncPath {
 <#
@@ -161,6 +176,55 @@ function Invoke-RipperSyncToSynologyNAS {
         return @{
             Target='SynologyNAS'; Status='Failed'; BytesCopied=0
             Diagnostic=$diag
+        }
+    }
+
+    # Phase 6.4: bring the WireGuard tunnel up before pre-flight #2
+    # (UNC reachability) so we don't false-fail "share not reachable"
+    # when the only reason it's unreachable is that the VPN is down.
+    # We mark $script:RipperSession.WgStartedByUs=true if we started
+    # it, so Start-Ripper's exit hook knows to tear it down. We do NOT
+    # tear it down here -- the parent could be ripping a 30-disc stack
+    # and bouncing the tunnel between every disc would be silly.
+    $autoToggle = $false
+    if ($Config.PSObject.Properties['WireGuardAutoToggle']) {
+        $autoToggle = [bool]$Config.WireGuardAutoToggle
+    }
+    $wgName = $null
+    if ($Config.PSObject.Properties['WireGuardTunnelName']) {
+        $wgName = [string]$Config.WireGuardTunnelName
+    }
+    if ($autoToggle -and -not [string]::IsNullOrWhiteSpace($wgName)) {
+        # Defensive: if the Wireguard module didn't load (very old
+        # checkout, missing winget install, whatever), just warn and
+        # press on -- the rip pipeline must not crash because the WG
+        # helpers are missing.
+        $haveWg = [bool](Get-Command -Name Test-RipperVpnTunnel -ErrorAction SilentlyContinue)
+        if (-not $haveWg) {
+            Write-RipperLog WARN 'SynologyNAS' "WireGuardAutoToggle is true but src/lib/Wireguard.psm1 is not loaded. Continuing without auto-toggle; the share must already be reachable."
+        } elseif (-not (Test-RipperVpnTunnel -Name $wgName)) {
+            Write-RipperLog INFO 'SynologyNAS' "Bringing WireGuard tunnel '$wgName' up before NAS sync."
+            $started = Start-RipperVpnTunnel -Name $wgName
+            if (-not $started) {
+                $diag = "WireGuard tunnel '$wgName' failed to come up. NAS share is unlikely to be reachable. Check the WG service status (Get-Service WireGuardTunnel`$$wgName) and the .conf endpoint."
+                Write-RipperLog WARN 'SynologyNAS' "Pre-flight failed: $diag"
+                return @{
+                    Target='SynologyNAS'; Status='Failed'; BytesCopied=0
+                    Diagnostic=$diag
+                }
+            }
+            # Mark on session state so Start-Ripper's exit hook can
+            # tear the tunnel down. Defensive: $script:RipperSession
+            # may not exist (e.g., when called from
+            # src/tools/Sync-PendingAlbums.ps1 outside the rip loop).
+            if (Test-Path 'variable:script:RipperSession') {
+                if (-not $script:RipperSession.PSObject.Properties['WgStartedByUs']) {
+                    $script:RipperSession | Add-Member -NotePropertyName 'WgStartedByUs' -NotePropertyValue $false -Force
+                }
+                $script:RipperSession.WgStartedByUs = $true
+            }
+        } else {
+            Write-RipperLog INFO 'SynologyNAS' "WireGuard tunnel '$wgName' already up; reusing."
         }
     }
 

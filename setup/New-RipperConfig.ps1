@@ -74,6 +74,8 @@ if ($existing) {
         SyncTargets       = @()
         LocalRetention    = 'Keep'
         RetryPendingSyncOnStartup = $true
+        WireGuardTunnelName = $null
+        WireGuardAutoToggle = $true
     }
     foreach ($k in $expected.Keys) {
         if (-not $existing.PSObject.Properties[$k]) {
@@ -307,6 +309,118 @@ if ($syn) {
     }
 }
 
+# --- WireGuard auto-toggle (optional, Phase 6.4) --------------------------
+# When the family NAS lives behind a WireGuard VPN (typical home-lab
+# setup where the parent is ripping at a friend's house), MusicRipper
+# can bring the tunnel up before each NAS sync and tear it down on
+# exit. We do the install + per-user grant ONCE here, with a single
+# UAC prompt; afterwards every rip is silent.
+#
+# UX flow:
+#   1. Ask if the user wants auto-toggle (default: only ask if a
+#      Synology UNC was set, since with no NAS there's nothing to
+#      tunnel to).
+#   2. Prompt for a .conf path. Skip-out is empty input.
+#   3. If the tunnel service doesn't already exist, spawn an
+#      elevated child PowerShell that runs Install-RipperVpnTunnel
+#      + Grant-RipperVpnTunnelControl. This is the ONE UAC prompt.
+#   4. Save WireGuardTunnelName + WireGuardAutoToggle to cfg.
+
+$wgTunnelName = $null
+if ($existing -and $existing.PSObject.Properties['WireGuardTunnelName']) {
+    $wgTunnelName = $existing.WireGuardTunnelName
+}
+$wgAutoToggle = $true
+if ($existing -and $existing.PSObject.Properties['WireGuardAutoToggle']) {
+    $wgAutoToggle = [bool]$existing.WireGuardAutoToggle
+}
+
+if ($syn) {
+    $wgWanted = $false
+    if ($wgTunnelName) {
+        Write-Host "  WireGuard tunnel: '$wgTunnelName' (currently $(if ($wgAutoToggle){'auto-toggle ON'}else{'auto-toggle OFF'}))"
+        $ans = (Read-Host "Configure WireGuard auto-toggle? [Enter = keep, 'new' to (re)install, '-' to clear]").Trim()
+        if ($ans -eq '-') {
+            $wgTunnelName = $null
+            $wgAutoToggle = $true
+        } elseif ($ans -match '^(?i)(new|y|t|1)$') {
+            $wgWanted = $true
+        }
+    } else {
+        $ans = (Read-Host 'Set up WireGuard auto-toggle for the NAS share? (y/N)').Trim()
+        if ($ans -match '^(?i)[yt1]') { $wgWanted = $true }
+    }
+
+    if ($wgWanted) {
+        $confPath = Read-Host 'Path to WireGuard .conf file (blank to skip)'
+        $confPath = $confPath.Trim().Trim('"').Trim("'")
+        if ([string]::IsNullOrWhiteSpace($confPath)) {
+            Write-RipperLog INFO 'New-RipperConfig' 'WireGuard setup skipped (no .conf path provided).'
+        } elseif (-not (Test-Path -LiteralPath $confPath)) {
+            Write-Warning ".conf file '$confPath' does not exist. Skipping WireGuard setup."
+        } else {
+            $tunnelStem = [System.IO.Path]::GetFileNameWithoutExtension($confPath)
+            $svcName    = "WireGuardTunnel`$$tunnelStem"
+            $alreadyInstalled = $false
+            try {
+                $null = Get-Service -Name $svcName -ErrorAction Stop
+                $alreadyInstalled = $true
+            } catch { $alreadyInstalled = $false }
+
+            if (-not $alreadyInstalled) {
+                # Spawn an elevated child to run /installtunnelservice
+                # + sc.exe sdset in a single UAC prompt. We pass the
+                # current user's SID + repo root so the child knows
+                # who to grant control to and can dot-source our
+                # Wireguard module.
+                $repoRoot = Split-Path -Parent $PSScriptRoot
+                $userSid  = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+                $childCmd = @"
+Set-StrictMode -Version 3.0;
+`$ErrorActionPreference = 'Stop';
+Import-Module '$repoRoot\src\lib\Logging.psd1' -Force;
+Start-RipperLog -Context 'WgInstall';
+Import-Module '$repoRoot\src\lib\Wireguard.psd1' -Force;
+try {
+    `$ok1 = Install-RipperVpnTunnel -ConfPath '$confPath';
+    if (-not `$ok1) { throw 'Install-RipperVpnTunnel returned false. See log for details.' }
+    `$ok2 = Grant-RipperVpnTunnelControl -Name '$tunnelStem' -UserSid '$userSid';
+    if (-not `$ok2) { throw 'Grant-RipperVpnTunnelControl returned false.' }
+    Write-Host 'WireGuard tunnel installed and start/stop control granted.' -ForegroundColor Green;
+} catch {
+    Write-Host ('WireGuard install failed: ' + `$_.Exception.Message) -ForegroundColor Red;
+    exit 2;
+} finally {
+    Stop-RipperLog;
+}
+"@
+                Write-Host 'Launching elevated helper to install the WireGuard tunnel (one UAC prompt)...' -ForegroundColor Cyan
+                try {
+                    $proc = Start-Process -FilePath 'pwsh' `
+                        -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $childCmd) `
+                        -Verb RunAs -Wait -PassThru
+                    if ($proc.ExitCode -ne 0) {
+                        Write-Warning "Elevated helper exited $($proc.ExitCode); WireGuard tunnel was NOT installed. Auto-toggle will be left disabled."
+                    } else {
+                        $wgTunnelName = $tunnelStem
+                        Write-RipperLog INFO 'New-RipperConfig' "WireGuard tunnel '$tunnelStem' installed via elevated helper."
+                    }
+                } catch {
+                    Write-Warning "Failed to launch elevated helper: $($_.Exception.Message). WireGuard tunnel was NOT installed."
+                }
+            } else {
+                Write-Host "WireGuard service '$svcName' is already installed; reusing." -ForegroundColor Green
+                $wgTunnelName = $tunnelStem
+            }
+        }
+    }
+
+    if ($wgTunnelName) {
+        $autoStr = Read-WithDefault -Prompt 'WireGuardAutoToggle (Y/N — start/stop tunnel automatically per NAS sync)' -Default ([string][bool]$wgAutoToggle)
+        $wgAutoToggle = ($autoStr -match '^\s*[YyTt1]')
+    }
+}
+
 # --- Provider chains (Phase 5.2) ------------------------------------------
 # Free-form comma-separated lists so the user can reorder, drop, or add
 # providers we ship later without this script needing to grow a menu.
@@ -419,6 +533,8 @@ $cfg.ContinuousMode        = $continuousMode
 $cfg.SyncTargets           = $syncTargets
 $cfg.LocalRetention        = $localRetention
 $cfg.RetryPendingSyncOnStartup = $retryPendingSyncOnStartup
+$cfg.WireGuardTunnelName       = $wgTunnelName
+$cfg.WireGuardAutoToggle       = $wgAutoToggle
 
 # Carry over drive info if Register-Drive ran first.
 if ($existing) {

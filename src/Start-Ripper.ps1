@@ -113,6 +113,11 @@ $script:RipperSession = [pscustomobject]@{
     DiscCount   = 0
     RippedDiscs = @{}
     LastSummary = ''
+    # Phase 6.4: set $true by Sync-ToSynologyNAS the first time it
+    # brings the WireGuard tunnel up. The exit hook at the bottom of
+    # this script reads it to decide whether to call
+    # Stop-RipperVpnTunnel before exiting.
+    WgStartedByUs = $false
 }
 
 # --- Helpers ---------------------------------------------------------------
@@ -1086,4 +1091,25 @@ do {
 } while ($true)
 
 Write-RipperLog INFO 'Start-Ripper' "Session ending: $($script:RipperSession.DiscCount) disc(s) processed."
+
+# Phase 6.4: tear down the WireGuard tunnel if Sync-ToSynologyNAS
+# brought it up during this session. Best-effort; never fail the exit
+# path -- the WG service binary will keep running otherwise but the
+# user can stop it from the WireGuard tray app or it will be cleaned
+# up when the .conf is uninstalled.
+if ($script:RipperSession.WgStartedByUs) {
+    try {
+        $wgName = $null
+        if ($cfg.PSObject.Properties['WireGuardTunnelName']) {
+            $wgName = [string]$cfg.WireGuardTunnelName
+        }
+        if (-not [string]::IsNullOrWhiteSpace($wgName)) {
+            Import-Module (Join-Path $PSScriptRoot 'lib\Wireguard.psd1') -Force -ErrorAction Stop
+            [void](Stop-RipperVpnTunnel -Name $wgName)
+        }
+    } catch {
+        Write-RipperLog WARN 'Start-Ripper' "WireGuard tear-down skipped: $($_.Exception.Message)"
+    }
+}
+
 Stop-RipperLog
