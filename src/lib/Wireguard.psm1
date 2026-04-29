@@ -190,6 +190,28 @@ function Stop-RipperVpnTunnel {
         Write-RipperLog INFO 'Wireguard' "Tunnel '$Name' not installed; nothing to stop."
         return $true
     }
+    # If the SCM is mid-transition (StartPending / StopPending) Stop-Service
+    # will fail with "service cannot accept control messages at this time"
+    # (Win32 error 1061). Wait briefly for the service to settle into a
+    # stable state before issuing the stop. Seen right after
+    # wireguard.exe /installtunnelservice, which spawns the service in
+    # StartPending while WG handshakes with WinTun.
+    try {
+        $svcRaw = Get-Service -Name $svcName -ErrorAction Stop
+        $settleSw = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($settleSw.Elapsed.TotalSeconds -lt 10 -and `
+               ($svcRaw.Status -eq 'StartPending' -or $svcRaw.Status -eq 'StopPending')) {
+            Start-Sleep -Milliseconds 250
+            $svcRaw.Refresh()
+        }
+        if ($svcRaw.Status -ne 'Running' -and $svcRaw.Status -ne 'Stopped') {
+            Write-RipperLog WARN 'Wireguard' "Tunnel '$Name' is in transient state '$($svcRaw.Status)' after 10s wait; attempting Stop-Service anyway."
+        }
+    } catch {
+        # Get-Service should not fail here (Test-* just succeeded) but
+        # be defensive -- fall through to Stop-Service which will surface
+        # any real problem.
+    }
     # NOTE: don't early-return on $state -eq 'Stopped'. Test-* collapses
     # everything that isn't 'Running' into 'Stopped', which includes the
     # transient 'StartPending' state right after wireguard.exe
