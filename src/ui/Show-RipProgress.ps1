@@ -504,6 +504,15 @@ function Show-RipperRipProgress {
                 # before the next progress callback fires, and a frozen
                 # 0% looked like the app had hung. The first non-zero
                 # frac update below switches us back to determinate.
+                # IMPORTANT: reset Value to 0 BEFORE switching to
+                # indeterminate. The rip phase left Value=1.0; if the
+                # first determinate update from the post-process
+                # callback then arrives with $ovFrac=0.05 (sidecar+
+                # quality), the bar visibly snaps from full to 5% and
+                # then climbs back up -- it looks broken / motionless
+                # during tagging. Starting at 0 means tagging climbs
+                # 0 -> ~0.55 monotonically.
+                $controls.OverallBar.Value          = 0.0
                 $controls.OverallBar.IsIndeterminate = $true
                 $controls.OverallPctText.Text       = '...'
                 $controls.TrackBar.Value            = 1.0
@@ -524,9 +533,22 @@ function Show-RipperRipProgress {
             }
             # Live overall progress fed by Invoke-RipperPostProcess.
             $ovFrac = [double]$state['PostProcessOverallFraction']
-            if ($ovFrac -gt 0) {
-                # First real value -- switch from indeterminate marquee
-                # to determinate.
+            $msg    = [string]$state['PostProcessStatus']
+            # Phase 6.4: robocopy doesn't emit per-file progress, so a
+            # NAS sync over the WG link can sit at the same overall
+            # fraction for many seconds. Show an indeterminate marquee
+            # while the status line says "Syncing to *" so the parent
+            # sees activity. Restore determinate on the next non-sync
+            # tick so the bar can resume its climb.
+            $isSyncing = $msg -and ($msg -like 'Syncing to *')
+            if ($isSyncing) {
+                if (-not $controls.OverallBar.IsIndeterminate) {
+                    $controls.OverallBar.IsIndeterminate = $true
+                    $controls.OverallPctText.Text        = '...'
+                }
+            } elseif ($ovFrac -gt 0) {
+                # First real value (or sync just ended) -- switch from
+                # indeterminate marquee to determinate.
                 if ($controls.OverallBar.IsIndeterminate) {
                     $controls.OverallBar.IsIndeterminate = $false
                 }
@@ -536,7 +558,6 @@ function Show-RipperRipProgress {
             # Tagging bar: discrete count (3 / 12) is more meaningful than %.
             $tagCur = [int]$state['PostProcessTagCurrent']
             $tagTot = [int]$state['PostProcessTagTotal']
-            $msg    = [string]$state['PostProcessStatus']
             if ($tagTot -gt 0) {
                 $controls.TaggingBar.Value     = [double]$tagCur / [double]$tagTot
                 $controls.TaggingPctText.Text  = "$tagCur / $tagTot"

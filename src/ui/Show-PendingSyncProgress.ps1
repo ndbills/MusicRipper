@@ -130,9 +130,9 @@ function Show-RipperPendingSyncProgress {
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="MusicRipper - Catching up on pending syncs"
-        Width="640" Height="500"
+        Width="720" Height="540" MinWidth="560" MinHeight="420"
         WindowStartupLocation="CenterScreen"
-        ResizeMode="NoResize">
+        ResizeMode="CanResizeWithGrip">
   <Grid Margin="20">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>  <!-- header -->
@@ -189,7 +189,7 @@ function Show-RipperPendingSyncProgress {
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="80"/>
             <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="60"/>
+            <ColumnDefinition Width="110"/>
           </Grid.ColumnDefinitions>
           <TextBlock Grid.Column="0" Text="Overall" VerticalAlignment="Center" Foreground="#555"/>
           <ProgressBar Grid.Column="1" x:Name="OverallBar" Height="18" Minimum="0" Maximum="1" Value="0"/>
@@ -200,7 +200,7 @@ function Show-RipperPendingSyncProgress {
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="80"/>
             <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="60"/>
+            <ColumnDefinition Width="110"/>
           </Grid.ColumnDefinitions>
           <TextBlock Grid.Column="0" Text="Album" VerticalAlignment="Center" Foreground="#555"/>
           <ProgressBar Grid.Column="1" x:Name="AlbumBar" Height="14" Minimum="0" Maximum="1" Value="0" IsIndeterminate="True"/>
@@ -454,22 +454,46 @@ function Show-RipperPendingSyncProgress {
 
     $timer.Add_Tick({
         try {
-            switch ($shared.Phase) {
-                'working' {
+            # Phase strings emitted by Invoke-RipperPendingSync's
+            # ProgressCallback: 'album-start', 'album-end', 'done'
+            # (plus 'preflight' before startWorker fires, and 'error'
+            # set by the runspace's catch handler). Treat anything
+            # in-progress (not 'done' / 'error' / 'preflight') as a
+            # working tick. Earlier code matched a literal 'working'
+            # which never appears, so the bar/labels were stuck.
+            switch -Wildcard ($shared.Phase) {
+                'done'      { $timer.Stop(); & $script:_showSummary }
+                'error'     { $timer.Stop(); & $script:_showError }
+                'preflight' { } # nothing yet
+                default {
+                    # 1-based album counter from the worker. Robocopy
+                    # gives no inner progress, so to show the user
+                    # *some* motion mid-album we credit half the album
+                    # while it's in flight (album-start) and the full
+                    # album once album-end has fired. Without this, a
+                    # single-album sync would sit at "0 / 1" the entire
+                    # time and only flip to "1 / 1" at the very end --
+                    # parents (and the agent) thought it was stuck.
                     $i = [int]$shared.AlbumIdx
                     $t = [int]$shared.AlbumTotal
+                    $progress = if ($t -gt 0) {
+                        if ($shared.Phase -eq 'album-end') { [double]$i }
+                        else { [Math]::Max(0.0, [double]$i - 0.5) }
+                    } else { 0.0 }
                     if ($t -gt 0) {
-                        $controls.OverallBar.Value = [double]$i / [double]$t
-                        $controls.OverallText.Text = "$i / $t"
+                        $controls.OverallBar.Value = $progress / [double]$t
+                        # Show whole-number completion in the label so
+                        # "0 / 1" -> "1 / 1" without a confusing 0.5.
+                        $whole = if ($shared.Phase -eq 'album-end') { $i } else { [Math]::Max(0, $i - 1) }
+                        $controls.OverallText.Text = "$whole / $t"
                     }
                     $controls.AlbumText.Text = if ($t -gt 0) { "Album $i of $t" } else { '' }
                     if ($shared.AlbumLabel) {
-                        $controls.WorkingStatusText.Text = "Syncing: $($shared.AlbumLabel)"
+                        $verb = if ($shared.Phase -eq 'album-end') { 'Synced:' } else { 'Syncing:' }
+                        $controls.WorkingStatusText.Text = "$verb $($shared.AlbumLabel)"
                         $controls.CurrentAlbumText.Text  = $shared.AlbumKey
                     }
                 }
-                'done'  { $timer.Stop(); & $script:_showSummary }
-                'error' { $timer.Stop(); & $script:_showError }
             }
         } catch {
             try { Add-Content -LiteralPath $dispatcherLog -Value "[tick] $($_.Exception.Message)`n" } catch { }

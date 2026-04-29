@@ -362,6 +362,7 @@ function Grant-RipperVpnTunnelControl {
         return $false
     }
     $existing = $existing.Trim()
+    Write-RipperLog INFO 'Wireguard' "Existing SD on '$svcName': $existing"
 
     # If our ACE is already in there, skip.
     $aceForUs = "(A;;LCRPWPLO;;;$UserSid)"
@@ -370,18 +371,24 @@ function Grant-RipperVpnTunnelControl {
         return $true
     }
 
-    # SDDL is "D:(...)(...)S:(...)" -- splice our ACE into the D:
-    # group so we don't disturb any S: (audit) ACEs already present.
-    if ($existing -match '^(?<dprefix>D:[^S]*?)(?<srest>S:.*)?$') {
-        $newSd = "$($matches.dprefix)$aceForUs$($matches.srest)"
+    # SDDL is "[O:owner][G:group]D:[flags](ace)(ace)...[S:[flags](ace)...]".
+    # Naive regex splits like `D:[^S]*?` are wrong because ACE bodies
+    # contain S characters (LCSWLO etc.). We splice using a
+    # two-anchor regex: take everything up through the LAST D:-section
+    # ACE -- which is the last `)` before either an `S:` section or
+    # end-of-string. Greedy `.*` backtracks to make the optional
+    # trailing S: section match.
+    if ($existing -match '^(?<prefix>.*D:[^()]*(?:\([^)]*\))*)(?<srest>S:.*)?$') {
+        $newSd = "$($matches.prefix)$aceForUs$($matches.srest)"
     } else {
-        # No D: section at all? Fall back to appending. Rare.
-        $newSd = $existing + "D:$aceForUs"
+        Write-RipperLog WARN 'Wireguard' "Could not parse existing SD; refusing to overwrite. SD was: $existing"
+        return $false
     }
+    Write-RipperLog INFO 'Wireguard' "New SD for '$svcName': $newSd"
 
     $out = & sc.exe sdset $svcName $newSd 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0) {
-        Write-RipperLog WARN 'Wireguard' "sc.exe sdset '$svcName' failed: $($out.Trim())"
+        Write-RipperLog WARN 'Wireguard' "sc.exe sdset '$svcName' failed (exit $LASTEXITCODE): $($out.Trim())"
         return $false
     }
     Write-RipperLog INFO 'Wireguard' "Granted SID $UserSid start/stop control on '$svcName'."

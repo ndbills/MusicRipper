@@ -51,6 +51,26 @@ Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
 
 Start-RipperLog -Context 'new-ripper-config' | Out-Null
 
+# Script-level trap: log any uncaught error with line + stack so a
+# StrictMode-3.0 surprise (e.g. a `.Count` access on a scalar that
+# the loaded JSON happens to deserialise as a single-item) shows up
+# in the log file rather than just on screen where it scrolls away
+# behind a thrown exception.
+trap {
+    try {
+        $msg = $_.Exception.Message
+        $where = if ($_.InvocationInfo) {
+            "$($_.InvocationInfo.ScriptName):$($_.InvocationInfo.ScriptLineNumber) -- $($_.InvocationInfo.Line.Trim())"
+        } else { '(no InvocationInfo)' }
+        Write-RipperLog ERROR 'New-RipperConfig' "Unhandled error: $msg | at $where"
+        if ($_.ScriptStackTrace) {
+            Write-RipperLog ERROR 'New-RipperConfig' "Stack: $($_.ScriptStackTrace -replace "`r?`n", ' >> ')"
+        }
+    } catch { }
+    # Re-throw so the user sees the error too.
+    break
+}
+
 # Read existing config (if any) so we can offer existing values as defaults.
 $configPath = Get-RipperConfigPath
 $existing   = if (Test-Path -LiteralPath $configPath) { Import-RipperConfig } else { $null }
@@ -373,40 +393,122 @@ if ($syn) {
                 # current user's SID + repo root so the child knows
                 # who to grant control to and can dot-source our
                 # Wireguard module.
+                #
+                # Implementation detail: we write the helper to a temp
+                # .ps1 file and run it with `-File`, rather than passing
+                # a heredoc to `-Command`. Heredoc-via-Command is
+                # fragile -- escape rules for embedded $vars and quoted
+                # paths under -Verb RunAs are different from the parent
+                # shell, and parse failures crash the elevated child
+                # before our try/catch (or even Start-RipperLog) can
+                # run, leaving no log and a vanishing window. A real
+                # script file makes the helper trivially debuggable
+                # (rerun manually in any elevated pwsh) and removes a
+                # whole class of escape bugs. We always `pause` at the
+                # end so the window cannot disappear regardless of
+                # success/failure.
                 $repoRoot = Split-Path -Parent $PSScriptRoot
                 $userSid  = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-                $childCmd = @"
-Set-StrictMode -Version 3.0;
-`$ErrorActionPreference = 'Stop';
-Import-Module '$repoRoot\src\lib\Logging.psd1' -Force;
-Start-RipperLog -Context 'WgInstall';
-Import-Module '$repoRoot\src\lib\Wireguard.psd1' -Force;
+                $helperPath = Join-Path ([System.IO.Path]::GetTempPath()) "musicripper-wginstall-$([guid]::NewGuid().Guid.Substring(0,8)).ps1"
+                # Build the helper script. Single-quote string literals
+                # inside the script so backslashes and $-signs in the
+                # passed paths/SIDs don't get reinterpreted by the
+                # elevated child's parser.
+                $helperBody = @"
+Set-StrictMode -Version 3.0
+`$ErrorActionPreference = 'Stop'
+`$RepoRoot   = '$repoRoot'
+`$ConfPath   = '$confPath'
+`$TunnelStem = '$tunnelStem'
+`$UserSid    = '$userSid'
+`$LogPath    = `$null
 try {
-    `$ok1 = Install-RipperVpnTunnel -ConfPath '$confPath';
-    if (-not `$ok1) { throw 'Install-RipperVpnTunnel returned false. See log for details.' }
-    `$ok2 = Grant-RipperVpnTunnelControl -Name '$tunnelStem' -UserSid '$userSid';
-    if (-not `$ok2) { throw 'Grant-RipperVpnTunnelControl returned false.' }
-    Write-Host 'WireGuard tunnel installed and start/stop control granted.' -ForegroundColor Green;
+    Import-Module (Join-Path `$RepoRoot 'src\lib\Logging.psd1') -Force
+    `$LogPath = Start-RipperLog -Context 'WgInstall'
+    Import-Module (Join-Path `$RepoRoot 'src\lib\Wireguard.psd1') -Force
+    Write-Host ''
+    Write-Host "Installing WireGuard tunnel '`$TunnelStem' from '`$ConfPath' ..." -ForegroundColor Cyan
+    `$ok1 = Install-RipperVpnTunnel -ConfPath `$ConfPath
+    if (-not `$ok1) { throw "Install-RipperVpnTunnel returned false. See log: `$LogPath" }
+    Write-Host "Granting start/stop control to SID `$UserSid ..." -ForegroundColor Cyan
+    `$ok2 = Grant-RipperVpnTunnelControl -Name `$TunnelStem -UserSid `$UserSid
+    if (-not `$ok2) { throw "Grant-RipperVpnTunnelControl returned false. See log: `$LogPath" }
+    # `wireguard.exe /installtunnelservice` registers the service with
+    # StartType=Automatic, meaning Windows would bring the tunnel up
+    # at every boot/login. That is not what we want -- the whole
+    # point of the auto-toggle is for MusicRipper to be the one (and
+    # only) thing that starts the tunnel, on demand, and only for
+    # the duration of a NAS sync. Flip it to Manual now.
+    `$svcName = "WireGuardTunnel`$`$TunnelStem"
+    Write-Host "Setting service '`$svcName' StartType to Manual ..." -ForegroundColor Cyan
+    try {
+        Set-Service -Name `$svcName -StartupType Manual -ErrorAction Stop
+    } catch {
+        Write-Host "  Set-Service failed: `$(`$_.Exception.Message). Tunnel will still work but may auto-start on boot." -ForegroundColor Yellow
+    }
+    # `wireguard.exe /installtunnelservice` auto-starts the tunnel.
+    # Leave it stopped after setup so the next rip's auto-toggle is
+    # what brings it up (and so a parent who walks away mid-setup
+    # isn't left with an unexpectedly-active VPN). The fact that the
+    # service reached Running between Install and Grant already
+    # validated the .conf -- if WG had refused the conf, Get-Service
+    # in Grant-RipperVpnTunnelControl would have failed.
+    Write-Host 'Stopping tunnel (will be re-started automatically per rip) ...' -ForegroundColor Cyan
+    [void](Stop-RipperVpnTunnel -Name `$TunnelStem)
+    Write-Host ''
+    Write-Host 'WireGuard tunnel installed and start/stop control granted.' -ForegroundColor Green
+    Write-Host "Log: `$LogPath" -ForegroundColor DarkGray
+    `$exitCode = 0
 } catch {
-    Write-Host ('WireGuard install failed: ' + `$_.Exception.Message) -ForegroundColor Red;
-    exit 2;
+    Write-Host ''
+    Write-Host '======================================================================' -ForegroundColor Red
+    Write-Host 'WireGuard install FAILED:' -ForegroundColor Red
+    Write-Host `$_.Exception.Message -ForegroundColor Red
+    if (`$_.InvocationInfo) {
+        Write-Host ''
+        Write-Host "At: `$(`$_.InvocationInfo.ScriptName):`$(`$_.InvocationInfo.ScriptLineNumber)" -ForegroundColor DarkRed
+        Write-Host "    `$(`$_.InvocationInfo.Line.Trim())" -ForegroundColor DarkRed
+    }
+    if (`$_.ScriptStackTrace) {
+        Write-Host ''
+        Write-Host 'Stack trace:' -ForegroundColor DarkRed
+        Write-Host `$_.ScriptStackTrace -ForegroundColor DarkRed
+    }
+    if (`$LogPath) {
+        Write-Host ''
+        Write-Host "Full log: `$LogPath" -ForegroundColor Yellow
+    }
+    Write-Host '======================================================================' -ForegroundColor Red
+    `$exitCode = 2
 } finally {
-    Stop-RipperLog;
+    try { Stop-RipperLog } catch { }
+    # Always pause so the window cannot vanish, regardless of how we
+    # got here. Read-Host needs a console; Start-Process -Verb RunAs
+    # gives one.
+    Write-Host ''
+    Read-Host 'Press Enter to close this window'
 }
+exit `$exitCode
 "@
+                Set-Content -LiteralPath $helperPath -Value $helperBody -Encoding UTF8
                 Write-Host 'Launching elevated helper to install the WireGuard tunnel (one UAC prompt)...' -ForegroundColor Cyan
+                Write-Host "  Helper script: $helperPath" -ForegroundColor DarkGray
                 try {
                     $proc = Start-Process -FilePath 'pwsh' `
-                        -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $childCmd) `
+                        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $helperPath) `
                         -Verb RunAs -Wait -PassThru
                     if ($proc.ExitCode -ne 0) {
-                        Write-Warning "Elevated helper exited $($proc.ExitCode); WireGuard tunnel was NOT installed. Auto-toggle will be left disabled."
+                        Write-Warning "Elevated helper exited $($proc.ExitCode); WireGuard tunnel was NOT installed. Auto-toggle will be left disabled. Helper script kept at: $helperPath"
                     } else {
                         $wgTunnelName = $tunnelStem
                         Write-RipperLog INFO 'New-RipperConfig' "WireGuard tunnel '$tunnelStem' installed via elevated helper."
+                        # Helper succeeded -- delete the temp script.
+                        # On failure we keep it around so the user can
+                        # rerun it manually for diagnosis.
+                        Remove-Item -LiteralPath $helperPath -Force -ErrorAction SilentlyContinue
                     }
                 } catch {
-                    Write-Warning "Failed to launch elevated helper: $($_.Exception.Message). WireGuard tunnel was NOT installed."
+                    Write-Warning "Failed to launch elevated helper: $($_.Exception.Message). WireGuard tunnel was NOT installed. Helper script kept at: $helperPath"
                 }
             } else {
                 Write-Host "WireGuard service '$svcName' is already installed; reusing." -ForegroundColor Green
@@ -477,7 +579,13 @@ $continuousMode = ($contStr -match '^\s*[YyTt1]')
 # a real off-machine target. Real targets land in 6.2 (OneDrive) and
 # 6.3 (SynologyNAS). Empty = no sync (current behaviour).
 $knownSync   = @('Stub','OneDrive','SynologyNAS')
-$defaultSync = if ($existing -and $existing.PSObject.Properties['SyncTargets'] -and $existing.SyncTargets) { @($existing.SyncTargets) } else { @() }
+# Wrap the whole `if` expression in @(), not just the truthy branch.
+# Under Strict Mode 3.0, `$x = if(...) { ... } else { @() }` produces
+# $null when the else branch fires (the empty array gets unrolled by
+# the if-expression's pipeline), and `$null.Count` then throws on the
+# next line. `@(if (...) { $existing.SyncTargets })` always yields an
+# array, even when the condition is false.
+$defaultSync = @(if ($existing -and $existing.PSObject.Properties['SyncTargets'] -and $existing.SyncTargets) { $existing.SyncTargets })
 $defStr      = if ($defaultSync.Count -gt 0) { $defaultSync -join ', ' } else { '<empty>' }
 $rawSync = Read-Host "Sync targets, comma-separated (known: $($knownSync -join ', '); blank for none) [$defStr] (Enter = keep)"
 if ([string]::IsNullOrWhiteSpace($rawSync)) {

@@ -214,9 +214,13 @@ function Invoke-RipperSyncToSynologyNAS {
                 }
             }
             # Mark on session state so Start-Ripper's exit hook can
-            # tear the tunnel down. Defensive: $script:RipperSession
-            # may not exist (e.g., when called from
-            # src/tools/Sync-PendingAlbums.ps1 outside the rip loop).
+            # tear the tunnel down. Two channels because Sync-To*
+            # may run inside a worker runspace (Show-PendingSyncProgress)
+            # whose $script:RipperSession is a *separate copy* from
+            # Start-Ripper's parent runspace -- writes here would never
+            # be visible at exit. Env vars are process-wide and so do
+            # cross runspace boundaries.
+            $env:MUSICRIPPER_WG_STARTED_BY_US = $wgName
             if (Test-Path 'variable:script:RipperSession') {
                 if (-not $script:RipperSession.PSObject.Properties['WgStartedByUs']) {
                     $script:RipperSession | Add-Member -NotePropertyName 'WgStartedByUs' -NotePropertyValue $false -Force
