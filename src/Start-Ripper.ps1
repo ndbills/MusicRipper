@@ -691,6 +691,12 @@ function Invoke-RipperOneDiscCycle {
                     # source of truth.
                 }
                 $cb = { param([string]$msg) $state['PostProcessStatus'] = $msg }.GetNewClosure()
+                $progCb = {
+                    param([double]$frac, [int]$tagCur, [int]$tagTot)
+                    $state['PostProcessOverallFraction'] = $frac
+                    $state['PostProcessTagCurrent']      = $tagCur
+                    $state['PostProcessTagTotal']        = $tagTot
+                }.GetNewClosure()
                 Invoke-RipperPostProcess `
                     -RipFolder         $rip.OutputDir `
                     -LogFile           $rip.LogFile `
@@ -701,7 +707,8 @@ function Invoke-RipperOneDiscCycle {
                     -AllowSideBySide:$ctx.AllowSideBySide `
                     -ForceReviewQueue:$ctx.ForceReviewQueue `
                     -Config            $ctx.Config `
-                    -StatusCallback    $cb
+                    -StatusCallback    $cb `
+                    -ProgressCallback  $progCb
             }
 
             try {
