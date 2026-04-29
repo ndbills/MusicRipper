@@ -190,10 +190,14 @@ function Stop-RipperVpnTunnel {
         Write-RipperLog INFO 'Wireguard' "Tunnel '$Name' not installed; nothing to stop."
         return $true
     }
-    if ($state -eq 'Stopped') {
-        Write-RipperLog INFO 'Wireguard' "Tunnel '$Name' already stopped."
-        return $true
-    }
+    # NOTE: don't early-return on $state -eq 'Stopped'. Test-* collapses
+    # everything that isn't 'Running' into 'Stopped', which includes the
+    # transient 'StartPending' state right after wireguard.exe
+    # /installtunnelservice -- the service is in the process of coming
+    # up but has not yet reported Running. If we returned here we'd skip
+    # the actual Stop-Service call and the service would then finish
+    # transitioning to Running and stay there. Stop-Service is a safe
+    # no-op against an already-Stopped service.
     try {
         Stop-Service -Name $svcName -ErrorAction Stop
     } catch {

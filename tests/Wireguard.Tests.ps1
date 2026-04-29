@@ -111,11 +111,11 @@ Describe 'Start-RipperVpnTunnel' {
 }
 
 Describe 'Stop-RipperVpnTunnel' {
-    It 'no-ops when already stopped' {
+    It 'still calls Stop-Service when status is Stopped (covers the StartPending transient -- see psm1)' {
         Mock -ModuleName Wireguard Get-Service { [pscustomobject]@{ Status = 'Stopped' } }
-        Mock -ModuleName Wireguard Stop-Service { throw 'should not be called' }
+        Mock -ModuleName Wireguard Stop-Service {}
         Stop-RipperVpnTunnel -Name 't' | Should -BeTrue
-        Should -Invoke -ModuleName Wireguard -CommandName Stop-Service -Times 0
+        Should -Invoke -ModuleName Wireguard -CommandName Stop-Service -Times 1
     }
     It 'returns true when the service does not exist (nothing to stop)' {
         Mock -ModuleName Wireguard Get-Service { throw [System.Management.Automation.ItemNotFoundException]::new('nope') }

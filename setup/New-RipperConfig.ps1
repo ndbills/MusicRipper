@@ -447,7 +447,7 @@ try {
     # point of the auto-toggle is for MusicRipper to be the one (and
     # only) thing that starts the tunnel, on demand, and only for
     # the duration of a NAS sync. Flip it to Manual now.
-    `$svcName = "WireGuardTunnel`$`$TunnelStem"
+    `$svcName = "WireGuardTunnel```$`$TunnelStem"
     Write-Host "Setting service '`$svcName' StartType to Manual ..." -ForegroundColor Cyan
     try {
         Set-Service -Name `$svcName -StartupType Manual -ErrorAction Stop
