@@ -250,6 +250,18 @@ function Show-RipperPendingSyncProgress {
     $window = [System.Windows.Markup.XamlReader]::Load($reader)
     if ($Owner) { try { $window.Owner = $Owner } catch { } }
 
+    # Steal foreground from whatever was last in focus -- the host pwsh
+    # window is usually minimized to the tray at startup, so without this
+    # the dialog appears behind every other window. Same idiom as
+    # Show-BetweenDiscsDialog / Show-DuplicateDiscDialog: briefly Topmost
+    # + Activate on Loaded, then drop Topmost so other windows can come
+    # in front again if the user wants to alt-tab away.
+    $window.Topmost = $true
+    $window.Add_Loaded({
+        $this.Activate() | Out-Null
+        $this.Topmost = $false
+    }.GetNewClosure())
+
     # Per Phase-4/5.2 lesson: dispatcher unhandled-exception sink.
     $logDir = Join-Path $env:LOCALAPPDATA 'MusicRipper\logs'
     if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
