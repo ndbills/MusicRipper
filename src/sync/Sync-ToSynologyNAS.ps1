@@ -171,13 +171,25 @@ function Invoke-RipperSyncToSynologyNAS {
     }
     $cred = $null
     if ($needsCred) {
+        $credErr = $null
         try {
             $cred = Import-RipperCredential
         } catch {
-            $cred = $null
+            $cred    = $null
+            $credErr = $_.Exception.Message
         }
         if (-not $cred) {
-            $diag = "HasSynologyCredential=true but credentials.clixml is missing or unreadable. Re-run setup/New-RipperConfig.ps1 to re-save the NAS credential."
+            # Distinguish "file genuinely missing" from "could not load
+            # it" -- the latter is almost always a CommandNotFoundException
+            # because a caller forgot to Import-Module Config.psd1 in
+            # their runspace, and reporting "missing or unreadable"
+            # sends them on a wild-goose chase looking for a file that's
+            # right there.
+            if ($credErr) {
+                $diag = "HasSynologyCredential=true but Import-RipperCredential failed: $credErr. (If this says 'not recognized as the name of a cmdlet', the caller forgot to Import-Module src/lib/Config.psd1 in this runspace.)"
+            } else {
+                $diag = "HasSynologyCredential=true but credentials.clixml is missing or unreadable. Re-run setup/New-RipperConfig.ps1 to re-save the NAS credential."
+            }
             Write-RipperLog WARN 'SynologyNAS' "Pre-flight failed: $diag"
             return @{
                 Target='SynologyNAS'; Status='Failed'; BytesCopied=0

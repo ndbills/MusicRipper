@@ -330,6 +330,15 @@ function Show-RipperPendingSyncProgress {
             try {
                 Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
                 Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
+                # Config.psd1 must be imported INSIDE the runspace too --
+                # Sync-ToSynologyNAS.ps1 calls Import-RipperCredential
+                # without importing Config itself (it relies on the
+                # caller to have done so). Without this line the call
+                # throws CommandNotFoundException, the catch block
+                # swallows it, and the user sees the misleading
+                # "credentials.clixml is missing or unreadable"
+                # diagnostic even though the file is right there.
+                Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1')  -Force
                 . (Join-Path $repoRoot 'src\core\Get-LibraryDiscIndex.ps1')
                 . (Join-Path $repoRoot 'src\sync\Get-LibrarySyncState.ps1')
                 . (Join-Path $repoRoot 'src\sync\Invoke-RipperSync.ps1')
