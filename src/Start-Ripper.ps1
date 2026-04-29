@@ -155,6 +155,23 @@ function Close-RipperTray {
     $letter = ($cfg.DriveLetter -replace '[:\\]','').ToUpperInvariant()
     if ($letter.Length -ne 1) { return }
 
+    # Phase 6.5 fix: short-circuit when a disc is already loaded. On some
+    # drives, opening the MCI CDAudio device while media is present
+    # triggers a re-init that ejects the tray ("door must be closed to
+    # begin reading TOC" -> driver helpfully eject-and-recloses). The
+    # whole point of Close-RipperTray is to recover from a left-open
+    # tray; if [IO.DriveInfo]::IsReady is true we're already past that
+    # state and have nothing to do.
+    try {
+        $di = [System.IO.DriveInfo]::new("${letter}:")
+        if ($di.IsReady) {
+            Write-RipperLog INFO 'Start-Ripper' "Drive ${letter}: already has a disc loaded; skipping tray-close."
+            return
+        }
+    } catch {
+        # Fall through to MCI -- IsReady can throw on weird drive states.
+    }
+
     if (-not ('MusicRipper.Mci' -as [type])) {
         Add-Type -Language CSharp -TypeDefinition @'
 using System.Runtime.InteropServices;
