@@ -14,8 +14,8 @@
   "//MusicBrainzUserAgent":    "Required by MusicBrainz ToS. Format: 'AppName/Version ( contact-email )'. Set by New-RipperConfig.ps1.",
   "MusicBrainzUserAgent": "MusicRipper/0.1 ( unknown@example.com )",
 
-  "//OneDrivePath":            "Optional: absolute path inside OneDrive to mirror the library to. null = disabled.",
-  "OneDrivePath": null,
+  "//OneDriveSyncTargetRoot":  "Phase 6.2: absolute path inside the user's OneDrive (or any local folder) where ripped albums get mirrored when 'OneDrive' is in SyncTargets. Pick the folder via setup/New-RipperConfig.ps1 (it pops a folder picker seeded at the OneDrive root detected from HKCU\\Software\\Microsoft\\OneDrive\\UserFolder). null = OneDrive sync target reports Failed (nothing to copy to).",
+  "OneDriveSyncTargetRoot": null,
 
   "//SynologyUnc":              "Optional: UNC path of NAS share (e.g. \\\\nas\\music). null = disabled.",
   "SynologyUnc": null,
@@ -38,7 +38,7 @@
   "//ContinuousMode":          "Phase 5.7: if true, MusicRipper keeps running after each disc and shows a between-discs dialog (Rip Next / Quit). Inserting a new disc auto-selects Rip Next. Default true so a parent can rip a stack of CDs without re-launching (one UAC prompt per session). Set false to restore the one-disc-per-launch flow.",
   "ContinuousMode": true,
 
-  "//SyncTargets":             "Phase 6.1: ordered list of sync-target names to invoke per album after a successful Library move. Each name maps to a function 'Invoke-RipperSyncTo<Name>' loaded from src/sync/. Built-in: 'Stub' (writes a marker file under .musicripper/stub-sync/, used for testing). Phase 6.2 will add 'OneDrive', Phase 6.3 'SynologyNAS', Phase 6.4 wires WireGuard around the NAS target. Empty list = no sync, current behaviour. Per-target results land in <LibraryRoot>/.musicripper/sync-state.json.",
+  "//SyncTargets":             "Phase 6.1+: ordered list of sync-target names to invoke per album after a successful Library move. Each name maps to a function 'Invoke-RipperSyncTo<Name>' loaded from src/sync/. Built-ins: 'Stub' (writes a marker file under .musicripper/stub-sync/, used for testing) and 'OneDrive' (Phase 6.2: robocopy mirror into OneDriveSyncTargetRoot). Phase 6.3 will add 'SynologyNAS'. Empty list = no sync, current behaviour. Per-target results land in <LibraryRoot>/.musicripper/sync-state.json.",
   "SyncTargets": [],
 
   "//LocalRetention":          "Phase 6.1: what to do with the local album folder after every configured sync target reported OK. 'Keep' (default, never touch local files), 'MoveToSentAfterAllSynced' (move to <LibraryRoot>/_Sent/ preserving the artist subdir), or 'RecycleAfterAllSynced' (send to the Windows Recycle Bin, recoverable). No-op when SyncTargets is empty or any target failed.",

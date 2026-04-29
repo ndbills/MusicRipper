@@ -356,8 +356,22 @@ function Invoke-RipperWriteTags {
         [byte[]]$CoverArtBytes,
         [switch]$SkipReplayGain,
         [string]$MetaflacPath,
-        [bool]$PreserveTimestamps = $true
+        [bool]$PreserveTimestamps = $true,
+        # Phase 6.2.D: optional UI hook fired before each per-track
+        # tag write and before the album-wide ReplayGain step. Lets
+        # Show-RipperRipProgress drive a tagging-specific bar +
+        # contribute to the overall finalize bar. Errors swallowed.
+        # Signature: param([int]$Current,[int]$Total,[string]$Phase)
+        # where Phase is 'Tag' | 'ReplayGain' and Current is 1-based.
+        [scriptblock]$ProgressCallback
     )
+
+    $reportProgress = {
+        param([int]$Current, [int]$Total, [string]$Phase)
+        if ($ProgressCallback) {
+            try { & $ProgressCallback $Current $Total $Phase } catch { }
+        }
+    }.GetNewClosure()
 
     $sw = [Diagnostics.Stopwatch]::StartNew()
     if (-not $MetaflacPath) { $MetaflacPath = Get-MetaflacPath }
@@ -412,6 +426,7 @@ function Invoke-RipperWriteTags {
     $tagsWrittenPerFile = @{}
 
     for ($i = 0; $i -lt $tracks.Count; $i++) {
+        & $reportProgress ($i + 1) $tracks.Count 'Tag'
         $flac = $tracks[$i].FullName
         $tags = New-RipperFlacTagSet -Metadata $Metadata -TrackIndex $i `
                     -DiscId $DiscId `
@@ -450,6 +465,7 @@ function Invoke-RipperWriteTags {
     # REPLAYGAIN_* tags are overwritten.
     $replayGainComputed = $false
     if (-not $SkipReplayGain) {
+        & $reportProgress $tracks.Count $tracks.Count 'ReplayGain'
         $rgArgs = New-Object 'System.Collections.Generic.List[string]'
         $rgArgs.Add('--add-replay-gain')
         foreach ($t in $tracks) { $rgArgs.Add($t.FullName) }

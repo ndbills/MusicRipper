@@ -1173,6 +1173,85 @@ failed / 1 skipped** (was 324 / 0 / 1 at end of Phase 5.11).
 
 ---
 
+## D-023 -- OneDrive sync target (Phase 6.2)
+
+**Context:** Phase 6.1 shipped the sync framework, the durable
+`sync-state.json` index, the `Stub` test target, and the
+`LocalRetention` policy. Phase 6.2 ships the first real off-box
+target: copy each finished album into a folder inside the user's
+OneDrive and let the OneDrive client upload it.
+
+**Choice:** `robocopy /E /COPY:DAT /R:2 /W:5 /NP /NFL /NDL /NJH /BYTES`.
+
+| Switch       | Why |
+|--------------|-----|
+| `/E`         | Copy subdirs incl. empty -- rare for a finished album, but harmless. |
+| `/COPY:DAT`  | Data + Attributes + Timestamps. **Skip Security** -- OneDrive's sync engine ignores NTFS ACLs, including them slows the copy and spams the OneDrive activity log. |
+| `/R:2 /W:5`  | 2 retries, 5s wait. Robocopy's defaults (1M retries x 30s) are fine for an unattended overnight pass and ruinous in the foreground rip pipeline. |
+| `/NP /NFL /NDL` | No progress %, no per-file or per-dir lines. We only need the trailing summary block. |
+| `/NJH`       | Suppress the job header. |
+| `/BYTES`     | Byte counts in the summary so we can parse `BytesCopied` without rescanning the source. |
+
+No `/MIR`. The framework already invokes one target per album;
+mirroring at the library root would risk purging anything inside
+the OneDrive folder we didn't put there.
+
+**Pre-flight:** two checks before any copy runs.
+
+1. OneDrive client must be installed for the current user. We
+   detect it via `HKCU\Software\Microsoft\OneDrive\UserFolder`
+   (set by the client at first sign-in), with fallbacks to
+   `Accounts\Personal\UserFolder` and `$env:OneDrive`. Missing ->
+   `Status='Failed'` with a Diagnostic that tells the user to
+   install + sign in then re-run `src/tools/Sync-PendingAlbums.ps1`.
+2. The configured `cfg.OneDriveSyncTargetRoot` must exist on disk.
+   We deliberately do NOT auto-create it -- creating folders inside
+   OneDrive can confuse the client, and a missing target root
+   usually means "config is stale" rather than "make a new folder,
+   please". Failed with a Diagnostic.
+
+Both pre-flight failures are recorded as `Status='Failed'` so the
+album sticks in `KeepTargetsNotOk` retention; once the user fixes
+the underlying issue, `Sync-PendingAlbums.ps1` retries cleanly.
+
+**Status mapping** (robocopy bit-flag exit codes):
+- `0..7` -> `OK` (0 = nothing to copy, 1 = files copied, 2 = extras
+  detected, 4 = mismatches detected, etc. -- all benign).
+- `>=8`  -> `Failed`. Bit 8 = "files failed to copy after retries",
+  bit 16 = "fatal error (destination unreachable / out of disk?)".
+  Diagnostic includes the last 6 lines of robocopy output.
+
+**Config:** the legacy `OneDrivePath` field is renamed to
+`OneDriveSyncTargetRoot` (Phase 6.1 shipped before any user had
+configured it; no back-compat shim needed). `setup/New-RipperConfig.ps1`
+pops a Windows Forms `FolderBrowserDialog` seeded at the registry-
+detected OneDrive root so the user navigates inside it instead of
+typing the path. Cancelling the dialog leaves the field unset; the
+user can re-run setup or hand-edit `config.json` later. **No mid-rip
+prompts** -- a missing target at sync time fails fast and drops into
+the existing retry tool, which preserves the unattended batch flow.
+
+**Files added:**
+- `src/sync/Sync-ToOneDrive.ps1` -- target + the registry helper
+  `Get-RipperOneDriveUserFolder` + the pure helpers
+  `Get-RipperOneDriveStatusFromExitCode` and
+  `Get-RipperOneDriveBytesCopied`.
+- `tests/Sync-ToOneDrive.Tests.ps1` -- exit-code mapping, byte
+  parsing, both pre-flight failures, and a real robocopy
+  integration test against a temp folder pretending to be the
+  OneDrive root.
+
+**Files changed:**
+- `src/lib/Config.psm1` -- `OneDrivePath` parameter renamed to
+  `OneDriveSyncTargetRoot`.
+- `setup/New-RipperConfig.ps1` -- folder picker + new field name.
+- `config/config.template.json` -- field rename + docstring.
+- `src/Start-Ripper.ps1` and `src/tools/Sync-PendingAlbums.ps1` --
+  dot-source the new target.
+- `tests/Config.Tests.ps1` -- field rename in fixture.
+
+---
+
 ## F-4 -- OneDrive notifier so the user sees sync status without opening the app *(deferred to Phase 8)*
 
 **Problem:** Once `Sync-ToOneDrive.ps1` lands in Phase 6.2 the

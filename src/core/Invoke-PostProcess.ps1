@@ -52,10 +52,53 @@ function Invoke-RipperPostProcess {
         # sync orchestrator + LocalRetention disposal. Omitted/null
         # means "skip Phase 6.1" -- preserves the previous behaviour
         # for callers that don't pass it (e.g. older tests).
-        [Parameter()]          [object]   $Config
+        [Parameter()]          [object]   $Config,
+        # Phase 6.2.C: optional scriptblock invoked with one string arg
+        # before each major step ("Tagging FLAC files...", "Moving to
+        # library...", "Syncing to <Target>...", etc.). Used by the
+        # progress UI to show a live post-process status line. Errors
+        # inside the callback are swallowed -- it is purely advisory.
+        [Parameter()]          [scriptblock] $StatusCallback,
+        # Phase 6.2.D: optional scriptblock fired with a fractional
+        # overall progress value [0.0 .. 1.0] using the weighting:
+        #   sidecar/quality 5%  +  tagging 50%  +  move 5%
+        #   +  sync 35%  +  retention 5%.
+        # Signature: param([double]$OverallFraction, [int]$TagCurrent, [int]$TagTotal)
+        # TagCurrent/TagTotal are 0/0 outside the tagging phase so the
+        # UI can keep a steady tagging-specific readout.
+        [Parameter()]          [scriptblock] $ProgressCallback
     )
 
+    # Per-step weights -- see file header. Must sum to 1.0.
+    $W_SIDECAR    = 0.02
+    $W_QUALITY    = 0.03
+    $W_TAG        = 0.50   # split equally per track
+    $W_MOVE       = 0.05
+    $W_SYNC       = 0.35   # split equally per target
+    $W_RETENTION  = 0.05
+
+    $script:ppOverall = 0.0
+    $script:ppTagCur  = 0
+    $script:ppTagTot  = 0
+    $reportOverall = {
+        if ($ProgressCallback) {
+            try { & $ProgressCallback $script:ppOverall $script:ppTagCur $script:ppTagTot } catch { }
+        }
+    }.GetNewClosure()
+    $bumpOverall = {
+        param([double]$delta)
+        $script:ppOverall = [Math]::Min(1.0, $script:ppOverall + $delta)
+        & $reportOverall
+    }.GetNewClosure()
+
+    $reportStatus = {
+        param([string]$Msg)
+        if ($StatusCallback) { try { & $StatusCallback $Msg } catch { } }
+    }.GetNewClosure()
+
+    & $reportStatus 'Checking rip quality...'
     $quality = Test-RipQuality -LogPath $LogFile
+    & $bumpOverall ($W_SIDECAR + $W_QUALITY)
     Write-RipperLog INFO 'PostProcess' `
         "Quality gate: $($quality.Status) -> $($quality.Destination) (prefix='$($quality.RoutingPrefix)')"
 
@@ -72,6 +115,7 @@ function Invoke-RipperPostProcess {
     }
 
     if ($quality.Destination -eq 'Library') {
+        & $reportStatus 'Tagging FLAC files...'
         $tagArgs = @{
             RipFolder = $RipFolder
             Metadata  = $Metadata
@@ -80,9 +124,53 @@ function Invoke-RipperPostProcess {
         if ($CoverArtFile -and (Test-Path -LiteralPath $CoverArtFile)) {
             $tagArgs.CoverArtBytes = [System.IO.File]::ReadAllBytes($CoverArtFile)
         }
+        # Phase 6.2.D: thread per-track progress through Invoke-RipperWriteTags
+        # so the Tagging bar advances live and contributes to overall.
+        $tagCb = {
+            param([int]$Cur, [int]$Tot, [string]$Phase)
+            $script:ppTagCur = $Cur
+            $script:ppTagTot = $Tot
+            if ($Phase -eq 'ReplayGain') {
+                & $reportStatus 'Computing ReplayGain...'
+            }
+            & $reportOverall
+        }.GetNewClosure()
+        $tagArgs.ProgressCallback = $tagCb
+        # Bump overall up to (sidecar+quality + tagging) by walking it
+        # in lockstep with the per-track callback. We track the share
+        # already attributed to tagging so the bump is incremental.
+        $script:ppTagShareAttributed = 0.0
+        $tagCbBump = {
+            param([int]$Cur, [int]$Tot, [string]$Phase)
+            $script:ppTagCur = $Cur
+            $script:ppTagTot = $Tot
+            if ($Tot -gt 0) {
+                $share = [Math]::Min(1.0, [double]$Cur / [double]$Tot) * $W_TAG
+                $delta = [Math]::Max(0.0, $share - $script:ppTagShareAttributed)
+                $script:ppTagShareAttributed = $share
+                $script:ppOverall = [Math]::Min(1.0, $script:ppOverall + $delta)
+            }
+            if ($Phase -eq 'ReplayGain') {
+                & $reportStatus 'Computing ReplayGain...'
+            }
+            & $reportOverall
+        }.GetNewClosure()
+        $tagArgs.ProgressCallback = $tagCbBump
         Invoke-RipperWriteTags @tagArgs | Out-Null
+        # Whatever didn't get attributed (e.g. SkipReplayGain wasn't set
+        # but loop-end vs final ReplayGain timing) -- top up to the full
+        # tagging share before moving on.
+        $remaining = $W_TAG - $script:ppTagShareAttributed
+        if ($remaining -gt 0) { & $bumpOverall $remaining }
+        $script:ppTagCur = 0
+        $script:ppTagTot = 0
+    } else {
+        # Review-queue rips skip tagging entirely; advance the bar by
+        # the tagging share so overall still hits 100%.
+        & $bumpOverall $W_TAG
     }
 
+    & $reportStatus 'Moving to library...'
     $move = Move-RipToLibrary `
         -RipFolder        $RipFolder `
         -LibraryRoot      $LibraryRoot `
@@ -90,6 +178,7 @@ function Invoke-RipperPostProcess {
         -Quality          $quality `
         -DiscId           $DiscId `
         -AllowSideBySide:$AllowSideBySide
+    & $bumpOverall $W_MOVE
     Write-RipperLog INFO 'PostProcess' `
         "Moved to: $($move.Target) (review=$($move.IsReviewQueue), files=$($move.FilesMoved), sideBySide=$($move.IsSideBySide))"
 
@@ -144,18 +233,54 @@ function Invoke-RipperPostProcess {
     $sync      = $null
     $retention = $null
     if (-not $move.IsReviewQueue -and $Config) {
+        # Phase 6.2.D: convert sync's StatusCallback into a hybrid that
+        # also bumps the overall bar by W_SYNC / N_targets each time a
+        # new target starts. Robocopy has no inner progress so this is
+        # the finest grain we can give the user honestly.
+        $names = @()
+        if ($Config.PSObject.Properties['SyncTargets'] -and $Config.SyncTargets) {
+            $names = @($Config.SyncTargets | Where-Object { $_ -and -not [string]::IsNullOrWhiteSpace($_) })
+        }
+        $perTargetShare = if ($names.Count -gt 0) { $W_SYNC / $names.Count } else { $W_SYNC }
+        $script:ppSyncSeen = 0
+        $syncStatusCb = {
+            param([string]$Msg)
+            if ($Msg -like 'Syncing to *') {
+                if ($script:ppSyncSeen -gt 0) {
+                    # Bump for the *previous* target finishing. The first
+                    # target's bump fires at end-of-sync below.
+                    $script:ppOverall = [Math]::Min(1.0, $script:ppOverall + $perTargetShare)
+                }
+                $script:ppSyncSeen++
+            }
+            if ($StatusCallback) { try { & $StatusCallback $Msg } catch { } }
+            & $reportOverall
+        }.GetNewClosure()
         try {
             $sync = Invoke-RipperSync `
-                -AlbumPath   $move.Target `
-                -LibraryRoot $LibraryRoot `
-                -DiscId      $DiscId `
-                -Config      $Config
+                -AlbumPath      $move.Target `
+                -LibraryRoot    $LibraryRoot `
+                -DiscId         $DiscId `
+                -Config         $Config `
+                -StatusCallback $syncStatusCb
         } catch {
             Write-RipperLog WARN 'PostProcess' "Sync orchestrator threw (non-fatal): $($_.Exception.Message)"
             $sync = @{ AlbumPath=$move.Target; Targets=@(); AllOk=$false; Skipped=$false }
         }
+        # Top up the sync share -- the per-target bumps fired N-1 times
+        # (each new target marks the previous as done); credit the last
+        # target plus any rounding remainder.
+        if ($names.Count -gt 0) {
+            $alreadyAttributed = ($script:ppSyncSeen - 1) * $perTargetShare
+            if ($alreadyAttributed -lt 0) { $alreadyAttributed = 0.0 }
+            $remaining = $W_SYNC - $alreadyAttributed
+            if ($remaining -gt 0) { & $bumpOverall $remaining }
+        } else {
+            & $bumpOverall $W_SYNC
+        }
 
         if ($sync -and -not $sync.Skipped) {
+            & $reportStatus 'Applying retention policy...'
             try {
                 $retention = Invoke-RipperLibraryRetention `
                     -AlbumPath   $move.Target `
@@ -168,7 +293,13 @@ function Invoke-RipperPostProcess {
                 $retention = @{ Action='None'; Reason="Retention threw: $($_.Exception.Message)"; NewPath=$null }
             }
         }
+        & $bumpOverall $W_RETENTION
+    } else {
+        # No sync configured / review-queue rip -- credit the remainder
+        # so overall reaches 1.0 cleanly.
+        & $bumpOverall ($W_SYNC + $W_RETENTION)
     }
+    & $reportStatus 'Done.'
 
     return @{
         Quality        = $quality

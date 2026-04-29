@@ -141,6 +141,12 @@ function Invoke-RipperSync {
     The loaded MusicRipper config object. The orchestrator reads
     `Config.SyncTargets` and forwards `Config` whole-cloth to each
     target so per-target settings live alongside the rest.
+
+.PARAMETER StatusCallback
+    Optional scriptblock invoked with a single string argument before
+    each target runs (e.g. `"Syncing to OneDrive..."`). Used by the
+    progress UI to show a live per-target status line. Errors thrown
+    inside the callback are swallowed -- it is purely advisory.
 #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -148,7 +154,8 @@ function Invoke-RipperSync {
         [Parameter(Mandatory)] [string]$AlbumPath,
         [Parameter(Mandatory)] [string]$LibraryRoot,
         [Parameter(Mandatory)] [string]$DiscId,
-        [Parameter(Mandatory)] [object]$Config
+        [Parameter(Mandatory)] [object]$Config,
+        [Parameter()]          [scriptblock]$StatusCallback
     )
 
     $names = @()
@@ -170,6 +177,9 @@ function Invoke-RipperSync {
 
     $results = @()
     foreach ($name in $names) {
+        if ($StatusCallback) {
+            try { & $StatusCallback "Syncing to $name..." } catch { }
+        }
         $fnName = "Invoke-RipperSyncTo$name"
         $cmd    = Get-Command -Name $fnName -ErrorAction SilentlyContinue
         if (-not $cmd) {
@@ -209,7 +219,10 @@ function Invoke-RipperSync {
             }
         }
 
-        Write-RipperLog INFO 'Sync' "Target '$name': Status=$($r.Status) Bytes=$($r.BytesCopied)$(if ($r.Diagnostic) { " Diag=$($r.Diagnostic)" })"
+        # WARN when a target failed so the parent-user sees yellow
+        # output even with the host window minimized. INFO otherwise.
+        $level = if ($r.Status -eq 'Failed') { 'WARN' } else { 'INFO' }
+        Write-RipperLog $level 'Sync' "Target '$name': Status=$($r.Status) Bytes=$($r.BytesCopied)$(if ($r.Diagnostic) { " Diag=$($r.Diagnostic)" })"
 
         # Persist best-effort. A flaky NAS write must not derail a
         # successful sync return.

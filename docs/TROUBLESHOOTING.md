@@ -331,3 +331,26 @@ interrupted before the retention call. Every retention decision
 (including the `Keep` no-op and the `KeepTargetsNotOk` waiting state)
 records a non-null value with `Action`, `Reason`, `AppliedAt`. See
 `docs/SYNC-TARGETS.md` for the full Action table.
+
+### "OneDrive sync target reports Failed: OneDrive client is not installed"
+Phase 6.2 detects the OneDrive client by reading
+`HKCU\Software\Microsoft\OneDrive\UserFolder` (set on first sign-in)
+with fallbacks to `Accounts\Personal\UserFolder` and `$env:OneDrive`.
+If none resolve to an existing folder, the target fails fast with
+exactly that message.
+
+Fix: install OneDrive (it ships with Windows; if it was uninstalled,
+get it from <https://www.microsoft.com/microsoft-365/onedrive/download>),
+sign in with your Microsoft account, then re-run
+`./src/tools/Sync-PendingAlbums.ps1`.
+
+### "OneDrive sync target reports Failed: OneDriveSyncTargetRoot does not exist"
+The configured `cfg.OneDriveSyncTargetRoot` (the album mirror folder
+inside OneDrive) is missing. The target deliberately doesn't auto-
+create folders inside OneDrive -- a missing folder usually means
+"config got moved/renamed" rather than "make a new one, please".
+
+Fix: re-run `./setup/New-RipperConfig.ps1` -- it pops a folder picker
+seeded at the registered OneDrive root so you can navigate to (or
+create) the right subfolder. Then re-run
+`./src/tools/Sync-PendingAlbums.ps1`.

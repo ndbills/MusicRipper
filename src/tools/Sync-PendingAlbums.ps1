@@ -65,6 +65,7 @@ Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 . (Join-Path $repoRoot 'src\core\Get-LibraryDiscIndex.ps1')
 . (Join-Path $repoRoot 'src\sync\Get-LibrarySyncState.ps1')
 . (Join-Path $repoRoot 'src\sync\Invoke-RipperSync.ps1')
+. (Join-Path $repoRoot 'src\sync\Sync-ToOneDrive.ps1')
 . (Join-Path $repoRoot 'src\sync\Invoke-LibraryRetention.ps1')
 # Recycle helper lives here -- needed if any retried entry trips
 # RecycleAfterAllSynced now that all targets are OK.
