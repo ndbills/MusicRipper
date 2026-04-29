@@ -55,9 +55,28 @@
 .PARAMETER ContactNetwork
     Pass-through to Invoke-RipperRip. Default $true.
 
+.PARAMETER PostProcessAction
+    Optional scriptblock executed on the same background runspace AFTER
+    the rip completes successfully (and is not cancelled / errored).
+    Window stays open while the action runs and switches into a
+    "Finalizing album" mode that surfaces a live status line written
+    by the action via $state['PostProcessStatus'] = 'msg'.
+
+    Signature: param($state, $ripResult, $context)
+    Returns:   any object (stored on the return value as PostProcess).
+
+.PARAMETER PostProcessContext
+    Optional hashtable forwarded to PostProcessAction as its third
+    argument. Use it to ship config / paths / discId into the action
+    without closure capture (closures across runspaces are fragile --
+    see file header).
+
 .OUTPUTS
-    pscustomobject — exactly what Invoke-RipperRip returned, or $null if
-    an unrecoverable error prevented starting the rip.
+    pscustomobject -- when -PostProcessAction is omitted (legacy
+    callers) returns exactly what Invoke-RipperRip returned. When
+    -PostProcessAction is supplied, returns:
+        @{ Rip = <ripResult>; PostProcess = <action return>; PostProcessError = <ex or $null> }
+    or $null if an unrecoverable error prevented starting the rip.
 
 .EXAMPLE
     PS> $result = Show-RipperRipProgress -DiscIdInfo $disc -Metadata $meta `
@@ -91,7 +110,9 @@ function Show-RipperRipProgress {
         [Parameter(Mandatory)] [pscustomobject]$DiscIdInfo,
         [Parameter(Mandatory)] $Metadata,
         [Parameter(Mandatory)] [string]$OutputRoot,
-        [bool]$ContactNetwork = $true
+        [bool]$ContactNetwork = $true,
+        [Parameter()] [scriptblock]$PostProcessAction,
+        [Parameter()] [hashtable]$PostProcessContext = @{}
     )
 
     # --- Build window from inline XAML -------------------------------------
@@ -142,7 +163,7 @@ function Show-RipperRipProgress {
          the percentage column line up exactly. SharedSizeGroup keeps
          the label column the same width regardless of which label is
          longer. -->
-    <Grid Grid.Row="2" Margin="0,2,0,6">
+    <Grid Grid.Row="2" x:Name="TrackBarRow" Margin="0,2,0,6">
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="Auto" SharedSizeGroup="BarLabel"/>
         <ColumnDefinition Width="*"/>
@@ -168,7 +189,7 @@ function Show-RipperRipProgress {
     </Grid>
 
     <!-- Row 4: stats (Elapsed | ETA | Speed) -->
-    <Grid Grid.Row="4" Margin="0,0,0,8">
+    <Grid Grid.Row="4" x:Name="StatsRow" Margin="0,0,0,8">
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="*"/>
         <ColumnDefinition Width="*"/>
@@ -223,8 +244,9 @@ function Show-RipperRipProgress {
     $controls = @{}
     foreach ($n in @(
         'AlbumText','ArtistText','CurrentTrackText',
-        'TrackBar','TrackPctText','OverallBar','OverallPctText',
-        'ElapsedText','EtaText','SpeedText',
+        'TrackBar','TrackPctText','TrackBarRow',
+        'OverallBar','OverallPctText','OverallPctText',
+        'StatsRow','ElapsedText','EtaText','SpeedText',
         'ArStatusText','FailedSectorsText','ModeText','CancelButton'
     )) { $controls[$n] = $window.FindName($n) }
 
@@ -265,14 +287,20 @@ function Show-RipperRipProgress {
     # key. Simpler than a ManualResetEvent for our "latest wins" progress
     # pattern.
     $state = [hashtable]::Synchronized(@{
-        Cancel         = $false        # UI -> rip (read live by the rip runspace via a scriptblock callback)
-        Progress       = $null         # rip -> UI (hashtable from Invoke-RipperRip OnProgress)
-        RipResult      = $null         # rip -> UI, set at end
-        RipError       = $null         # rip -> UI if it threw
-        RipDone        = $false        # rip -> UI: terminal state reached
-        Closing        = $false        # UI tick -> UI tick: guard against re-entry
-        UiError        = $null         # UI tick -> caller (after ShowDialog re-raises NRE)
-        StartedAt      = [DateTime]::UtcNow
+        Cancel             = $false        # UI -> rip (read live by the rip runspace via a scriptblock callback)
+        Progress           = $null         # rip -> UI (hashtable from Invoke-RipperRip OnProgress)
+        RipResult          = $null         # rip -> UI, set at end
+        RipError           = $null         # rip -> UI if it threw
+        RipDone            = $false        # rip -> UI: terminal state reached
+        Closing            = $false        # UI tick -> UI tick: guard against re-entry
+        UiError            = $null         # UI tick -> caller (after ShowDialog re-raises NRE)
+        StartedAt          = [DateTime]::UtcNow
+        # Phase 6.2.C post-process passthrough.
+        PostProcessStatus  = ''            # action -> UI: live status text
+        PostProcessResult  = $null         # action -> UI: return value
+        PostProcessError   = $null         # action -> UI: ex if action threw
+        PostProcessDone    = $false        # action -> UI: terminal
+        UiInPostProcess    = $false        # UI tick -> UI tick: did we already swap UI mode?
     })
 
     # --- Start rip on a background runspace -------------------------------
@@ -295,6 +323,15 @@ function Show-RipperRipProgress {
         Join-Path $repoRoot 'src\core\Invoke-Rip.ps1'
     }
     $rs.SessionStateProxy.SetVariable('ripScriptPath', $ripScriptPath)
+
+    # Phase 6.2.C: ship the post-process action across the runspace
+    # boundary as a string. Cross-runspace scriptblock invocation is
+    # fragile (closures lose their module context) -- re-creating from
+    # source inside the runspace gives us a clean, locally-rooted block
+    # that can dot-source whatever it needs.
+    $ppActionStr = if ($PostProcessAction) { $PostProcessAction.ToString() } else { $null }
+    $rs.SessionStateProxy.SetVariable('ppActionStr', $ppActionStr)
+    $rs.SessionStateProxy.SetVariable('ppContext',   $PostProcessContext)
 
     $ps = [powershell]::Create()
     $ps.Runspace = $rs
@@ -328,6 +365,27 @@ function Show-RipperRipProgress {
             $state['RipError'] = $_
         } finally {
             $state['RipDone'] = $true
+        }
+
+        # Phase 6.2.C: run the post-process action on this same runspace
+        # so the window can stay open with a live status line driven by
+        # $state['PostProcessStatus']. Skipped on cancel / rip-error /
+        # no-action -- the UI will just close as before.
+        $rip = $state['RipResult']
+        if ($ppActionStr -and $rip -and -not $state['RipError'] -and -not $state['Cancel'] `
+                -and $rip.Status -ne 'Cancelled' -and $rip.Status -ne 'Failed') {
+            $state['PostProcessStatus'] = 'Starting post-processing...'
+            try {
+                $ppAction = [scriptblock]::Create($ppActionStr)
+                $state['PostProcessResult'] = & $ppAction $state $rip $ppContext
+            } catch {
+                $state['PostProcessError'] = $_
+            } finally {
+                $state['PostProcessDone'] = $true
+            }
+        } else {
+            # Nothing to do; mark done so the close-gate trips immediately.
+            $state['PostProcessDone'] = $true
         }
     })
 
@@ -408,6 +466,41 @@ function Show-RipperRipProgress {
             $controls.ModeText.Text = "$($p.CorrectionMode) mode"
         }
 
+        # Phase 6.2.C: when the rip is done but the post-process
+        # action is still running, transition the window into a
+        # "Finalizing album" mode and don't close. The runspace will
+        # set $state['PostProcessDone'] = $true once it returns; the
+        # next tick falls through to the normal close path below.
+        if ($state['RipDone'] -and -not $state['PostProcessDone'] `
+                -and -not $state['Cancel'] -and -not $state['RipError']) {
+            if (-not $state['UiInPostProcess']) {
+                $state['UiInPostProcess'] = $true
+                $window.Title                       = 'Finalizing album...'
+                $controls.OverallBar.Value          = 1.0
+                $controls.OverallPctText.Text       = '100%'
+                $controls.TrackBar.Value            = 1.0
+                $controls.TrackPctText.Text         = '100%'
+                $controls.CurrentTrackText.Text     = 'Rip complete. Tagging, moving, and syncing...'
+                $controls.CurrentTrackText.FontWeight = 'SemiBold'
+                # Switch overall bar to "I'm working" mode. Robocopy
+                # gives no progress callback so a marquee is honest.
+                $controls.OverallBar.IsIndeterminate = $true
+                # Hide the rip-only chrome that no longer applies.
+                $controls.TrackBarRow.Visibility       = 'Collapsed'
+                $controls.StatsRow.Visibility          = 'Collapsed'
+                $controls.FailedSectorsText.Visibility = 'Collapsed'
+                $controls.CancelButton.Visibility      = 'Collapsed'
+            }
+            # Live status line (driven by Invoke-RipperPostProcess /
+            # Invoke-RipperSync via -StatusCallback). Reuse the AR row
+            # so we don't have to grow the window.
+            $msg = [string]$state['PostProcessStatus']
+            if ($msg) {
+                $controls.ArStatusText.Text = $msg
+            }
+            return
+        }
+
         # Check for completion (normal, error, or cancel). Use indexer
         # access on $state — see closeDelay catch comment.
         # Guard via $state['Closing'] because $timer.Stop() inside a
@@ -416,17 +509,22 @@ function Show-RipperRipProgress {
         # create a second closeDelay and call $window.Close() again
         # (throws "Cannot index into a null array" once the window is
         # mid-close). Set the guard FIRST, then do everything else.
-        if ($state['RipDone'] -and -not $state['Closing']) {
+        if ($state['RipDone'] -and $state['PostProcessDone'] -and -not $state['Closing']) {
             $state['Closing'] = $true
             $timer.Stop()
             # Brief pause so the user sees "100%" for a beat before the
             # window vanishes on a fast rip.
             if (-not $state['Cancel'] -and -not $state['RipError']) {
+                $controls.OverallBar.IsIndeterminate = $false
                 $controls.OverallBar.Value    = 1.0
                 $controls.OverallPctText.Text = '100%'
                 $controls.TrackBar.Value      = 1.0
                 $controls.TrackPctText.Text   = '100%'
-                $controls.CurrentTrackText.Text = 'Rip complete. Closing...'
+                $controls.CurrentTrackText.Text = if ($state['UiInPostProcess']) {
+                    'All done. Closing...'
+                } else {
+                    'Rip complete. Closing...'
+                }
             } elseif ($state['Cancel']) {
                 $controls.CurrentTrackText.Text = 'Cancelled.'
             } elseif ($state['RipError']) {
@@ -538,8 +636,27 @@ function Show-RipperRipProgress {
         }
         # If we have a usable rip result, return it anyway — losing it to
         # a UI cosmetic bug is the worst possible outcome.
-        if ($state['RipResult']) { return $state['RipResult'] }
+        if ($state['RipResult']) {
+            if ($PostProcessAction) {
+                return [pscustomobject]@{
+                    Rip              = $state['RipResult']
+                    PostProcess      = $state['PostProcessResult']
+                    PostProcessError = $state['PostProcessError']
+                }
+            }
+            return $state['RipResult']
+        }
         throw $state['UiError']
+    }
+    if ($PostProcessAction) {
+        # Phase 6.2.C return shape: caller passed a post-process action,
+        # so always return the structured triple even if the action ran
+        # to nothing (RipResult $null on cancel/fail).
+        return [pscustomobject]@{
+            Rip              = $state['RipResult']
+            PostProcess      = $state['PostProcessResult']
+            PostProcessError = $state['PostProcessError']
+        }
     }
     $state['RipResult']
 }

@@ -639,12 +639,79 @@ function Invoke-RipperOneDiscCycle {
             Write-RipperLog INFO 'Start-Ripper' `
                 "Starting rip: $($m.AlbumArtist) - $($m.Album) -> $inboxRoot"
 
+            # Phase 6.2.C: bundle the happy-path post-process call into
+            # a scriptblock that runs INSIDE the rip-progress window's
+            # background runspace. The window stays open and surfaces a
+            # live status line ("Tagging FLAC files...", "Syncing to
+            # OneDrive...") to the parent-user even while the host is
+            # minimized. Recovery paths (TargetExists, post-process
+            # failure) keep their existing synchronous flow below --
+            # they're rare and need user dialogs anyway.
+            $ppContext = @{
+                LibraryRoot      = $cfg.LibraryRoot
+                Metadata         = $m
+                DiscId           = $disc.DiscId
+                AllowSideBySide  = [bool]$allowSideBySide
+                ForceReviewQueue = [bool]$forceReviewQueue
+                Config           = $cfg
+                RepoRoot         = $repoRoot
+            }
+            $ppAction = {
+                param($state, $rip, $ctx)
+                Set-StrictMode -Version 3.0
+                $ErrorActionPreference = 'Stop'
+                # Re-import in this runspace -- the parent runspace's
+                # function table doesn't follow scriptblocks across the
+                # boundary (see Show-RipProgress header note).
+                . (Join-Path $ctx.RepoRoot 'src\sync\Get-LibrarySyncState.ps1')
+                . (Join-Path $ctx.RepoRoot 'src\sync\Invoke-RipperSync.ps1')
+                . (Join-Path $ctx.RepoRoot 'src\sync\Sync-ToOneDrive.ps1')
+                . (Join-Path $ctx.RepoRoot 'src\sync\Invoke-LibraryRetention.ps1')
+                . (Join-Path $ctx.RepoRoot 'src\core\Test-RipQuality.ps1')
+                . (Join-Path $ctx.RepoRoot 'src\core\Write-Tags.ps1')
+                . (Join-Path $ctx.RepoRoot 'src\core\Move-ToLibrary.ps1')
+                . (Join-Path $ctx.RepoRoot 'src\core\Get-LibraryDiscIndex.ps1')
+                . (Join-Path $ctx.RepoRoot 'src\core\New-ReviewQueueArtifacts.ps1')
+                . (Join-Path $ctx.RepoRoot 'src\core\Invoke-PostProcess.ps1')
+                . (Join-Path $ctx.RepoRoot 'src\core\Resume.ps1')
+                # Drop the resume sidecar BEFORE running post-process so
+                # a crash mid-tag leaves the next launch enough
+                # breadcrumbs to finish the job. Best-effort.
+                $state['PostProcessStatus'] = 'Writing resume sidecar...'
+                try {
+                    $coverLeaf = if ($rip.CoverArtFile) { Split-Path -Leaf $rip.CoverArtFile } else { $null }
+                    Write-RipperRipState `
+                        -RipFolder        $rip.OutputDir `
+                        -DiscId           $ctx.DiscId `
+                        -Metadata         $ctx.Metadata `
+                        -LogFileName      (Split-Path -Leaf $rip.LogFile) `
+                        -CoverArtFileName $coverLeaf | Out-Null
+                } catch {
+                    # Swallow -- sidecar is advisory; post-process is the
+                    # source of truth.
+                }
+                $cb = { param([string]$msg) $state['PostProcessStatus'] = $msg }.GetNewClosure()
+                Invoke-RipperPostProcess `
+                    -RipFolder         $rip.OutputDir `
+                    -LogFile           $rip.LogFile `
+                    -Metadata          $ctx.Metadata `
+                    -DiscId            $ctx.DiscId `
+                    -LibraryRoot       $ctx.LibraryRoot `
+                    -CoverArtFile      $rip.CoverArtFile `
+                    -AllowSideBySide:$ctx.AllowSideBySide `
+                    -ForceReviewQueue:$ctx.ForceReviewQueue `
+                    -Config            $ctx.Config `
+                    -StatusCallback    $cb
+            }
+
             try {
-                $result = Show-RipperRipProgress `
+                $progressOut = Show-RipperRipProgress `
                     -DiscIdInfo $disc `
                     -Metadata $m `
                     -OutputRoot $inboxRoot `
-                    -ContactNetwork $true
+                    -ContactNetwork $true `
+                    -PostProcessAction $ppAction `
+                    -PostProcessContext $ppContext
             } catch {
                 Write-RipperLog ERROR 'Start-Ripper' "Rip threw: $($_.Exception.Message)"
                 Show-RipperInfo "Rip failed:`n`n  $($_.Exception.Message)`n`nSee log:`n  $(Get-RipperLogPath)" `
@@ -653,12 +720,32 @@ function Invoke-RipperOneDiscCycle {
                 return _result 'Failed' "Disc ${cycleNum}: $($m.AlbumArtist) - $($m.Album) -- rip threw: $($_.Exception.Message)"
             }
 
-            if (-not $result) {
+            if (-not $progressOut) {
                 # Progress window closed before the rip started -- rare but
                 # survivable. Treat like a cancel.
                 Write-RipperLog WARN 'Start-Ripper' 'Rip returned $null (window closed early).'
                 _maybeEject $choice
                 return _result 'Cancelled' "Disc ${cycleNum}: $($m.AlbumArtist) - $($m.Album) -- progress window closed early"
+            }
+
+            # Show-RipperRipProgress returns either the bare rip result
+            # (legacy callers, no -PostProcessAction) or
+            # @{ Rip = ...; PostProcess = ...; PostProcessError = ... }.
+            # We always pass -PostProcessAction so destructure the latter.
+            if ($progressOut -is [hashtable] -or $progressOut -is [pscustomobject]) {
+                if ($progressOut.PSObject.Properties['Rip']) {
+                    $result          = $progressOut.Rip
+                    $ppFromProgress  = $progressOut.PostProcess
+                    $ppErrFromWindow = $progressOut.PostProcessError
+                } else {
+                    $result          = $progressOut
+                    $ppFromProgress  = $null
+                    $ppErrFromWindow = $null
+                }
+            } else {
+                $result          = $progressOut
+                $ppFromProgress  = $null
+                $ppErrFromWindow = $null
             }
 
             Write-RipperLog INFO 'Start-Ripper' `
@@ -671,36 +758,33 @@ function Invoke-RipperOneDiscCycle {
             $phase5Target  = $null
             $phase5Quality = $null
             if ($result.Status -ne 'Cancelled' -and $result.Status -ne 'Failed') {
-                # Drop a sidecar BEFORE running post-process so a crash mid-tag
-                # leaves the next launch enough breadcrumbs to finish the job.
-                try {
-                    $coverLeaf = if ($result.CoverArtFile) { Split-Path -Leaf $result.CoverArtFile } else { $null }
-                    Write-RipperRipState `
-                        -RipFolder        $result.OutputDir `
-                        -DiscId           $disc.DiscId `
-                        -Metadata         $m `
-                        -LogFileName      (Split-Path -Leaf $result.LogFile) `
-                        -CoverArtFileName $coverLeaf | Out-Null
-                } catch {
-                    Write-RipperLog WARN 'Start-Ripper' "Sidecar write failed: $($_.Exception.Message)"
-                }
-                try {
-                    $pp = Invoke-RipperPostProcess `
-                        -RipFolder        $result.OutputDir `
-                        -LogFile          $result.LogFile `
-                        -Metadata         $m `
-                        -DiscId           $disc.DiscId `
-                        -LibraryRoot      $cfg.LibraryRoot `
-                        -CoverArtFile     $result.CoverArtFile `
-                        -AllowSideBySide:$allowSideBySide `
-                        -ForceReviewQueue:$forceReviewQueue `
-                        -Config           $cfg
+                # Phase 6.2.C: post-process (sidecar + Invoke-RipperPostProcess)
+                # already ran inside Show-RipperRipProgress's runspace so
+                # the user saw live status. Outcomes:
+                #   $ppFromProgress  != $null   -- happy path; same shape
+                #                                  Invoke-RipperPostProcess returns.
+                #   $ppErrFromWindow != $null   -- post-process threw;
+                #                                  re-enter the same recovery
+                #                                  flow that has always handled
+                #                                  TargetExists / generic errors.
+                #   both null                   -- shouldn't happen for a
+                #                                  Verified/ProbablyGood rip,
+                #                                  but treat as generic failure.
+                if ($ppFromProgress -and -not $ppErrFromWindow) {
+                    $pp = $ppFromProgress
                     $phase5Quality = $pp.Quality
                     $phase5Target  = $pp.Target
                     try { Remove-RipperRipState -RipFolder $pp.Target } catch {
                         Write-RipperLog WARN 'Start-Ripper' "Sidecar cleanup failed: $($_.Exception.Message)"
                     }
-                } catch {
+                } else {
+                    # Synthesize the same throw-and-catch shape the legacy
+                    # path used so the recovery code below stays untouched.
+                    try {
+                        if ($ppErrFromWindow) { throw $ppErrFromWindow } else {
+                            throw "Post-process did not run (window closed early?)"
+                        }
+                    } catch {
                     # Phase 5.11: detect "target already exists" so we can
                     # offer the user an interactive recovery dialog instead
                     # of dumping the stranded rip in _inbox\.
@@ -798,6 +882,7 @@ function Invoke-RipperOneDiscCycle {
                         _maybeEject $choice
                         return _result 'Failed' "Disc ${cycleNum}: $($m.AlbumArtist) - $($m.Album) -- post-process failed: $($_.Exception.Message)"
                     }
+                }
                 }
             }
 

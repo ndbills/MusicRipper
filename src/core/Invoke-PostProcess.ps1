@@ -52,9 +52,21 @@ function Invoke-RipperPostProcess {
         # sync orchestrator + LocalRetention disposal. Omitted/null
         # means "skip Phase 6.1" -- preserves the previous behaviour
         # for callers that don't pass it (e.g. older tests).
-        [Parameter()]          [object]   $Config
+        [Parameter()]          [object]   $Config,
+        # Phase 6.2.C: optional scriptblock invoked with one string arg
+        # before each major step ("Tagging FLAC files...", "Moving to
+        # library...", "Syncing to <Target>...", etc.). Used by the
+        # progress UI to show a live post-process status line. Errors
+        # inside the callback are swallowed -- it is purely advisory.
+        [Parameter()]          [scriptblock] $StatusCallback
     )
 
+    $reportStatus = {
+        param([string]$Msg)
+        if ($StatusCallback) { try { & $StatusCallback $Msg } catch { } }
+    }.GetNewClosure()
+
+    & $reportStatus 'Checking rip quality...'
     $quality = Test-RipQuality -LogPath $LogFile
     Write-RipperLog INFO 'PostProcess' `
         "Quality gate: $($quality.Status) -> $($quality.Destination) (prefix='$($quality.RoutingPrefix)')"
@@ -72,6 +84,7 @@ function Invoke-RipperPostProcess {
     }
 
     if ($quality.Destination -eq 'Library') {
+        & $reportStatus 'Tagging FLAC files...'
         $tagArgs = @{
             RipFolder = $RipFolder
             Metadata  = $Metadata
@@ -83,6 +96,7 @@ function Invoke-RipperPostProcess {
         Invoke-RipperWriteTags @tagArgs | Out-Null
     }
 
+    & $reportStatus 'Moving to library...'
     $move = Move-RipToLibrary `
         -RipFolder        $RipFolder `
         -LibraryRoot      $LibraryRoot `
@@ -146,16 +160,18 @@ function Invoke-RipperPostProcess {
     if (-not $move.IsReviewQueue -and $Config) {
         try {
             $sync = Invoke-RipperSync `
-                -AlbumPath   $move.Target `
-                -LibraryRoot $LibraryRoot `
-                -DiscId      $DiscId `
-                -Config      $Config
+                -AlbumPath      $move.Target `
+                -LibraryRoot    $LibraryRoot `
+                -DiscId         $DiscId `
+                -Config         $Config `
+                -StatusCallback $StatusCallback
         } catch {
             Write-RipperLog WARN 'PostProcess' "Sync orchestrator threw (non-fatal): $($_.Exception.Message)"
             $sync = @{ AlbumPath=$move.Target; Targets=@(); AllOk=$false; Skipped=$false }
         }
 
         if ($sync -and -not $sync.Skipped) {
+            & $reportStatus 'Applying retention policy...'
             try {
                 $retention = Invoke-RipperLibraryRetention `
                     -AlbumPath   $move.Target `
