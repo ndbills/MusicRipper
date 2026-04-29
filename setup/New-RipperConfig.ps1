@@ -291,6 +291,14 @@ $syn = Read-WithDefault -Prompt 'Synology NAS UNC path, e.g. \\nas\music (blank 
 if ([string]::IsNullOrWhiteSpace($syn)) { $syn = $null }
 
 $hasCred = if ($existing -and $existing.PSObject.Properties['HasSynologyCredential']) { [bool]$existing.HasSynologyCredential } else { $false }
+# Disk is the source of truth -- the cfg flag is just a cache. On a
+# first-run setup (no config.json yet) $existing is $null, so without
+# this probe we'd tell the user "credential not set" and re-prompt
+# even though credentials.clixml is sitting right there.
+if (-not $hasCred) {
+    $credPathProbe = Join-Path (Get-RipperConfigRoot) 'credentials.clixml'
+    if (Test-Path -LiteralPath $credPathProbe) { $hasCred = $true }
+}
 if ($syn) {
     # Match the rest of the script's "Enter = keep" idiom. The
     # bracketed default reflects current state (stored / not set);
