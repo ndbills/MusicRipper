@@ -209,7 +209,10 @@ function Invoke-RipperSync {
             }
         }
 
-        Write-RipperLog INFO 'Sync' "Target '$name': Status=$($r.Status) Bytes=$($r.BytesCopied)$(if ($r.Diagnostic) { " Diag=$($r.Diagnostic)" })"
+        # WARN when a target failed so the parent-user sees yellow
+        # output even with the host window minimized. INFO otherwise.
+        $level = if ($r.Status -eq 'Failed') { 'WARN' } else { 'INFO' }
+        Write-RipperLog $level 'Sync' "Target '$name': Status=$($r.Status) Bytes=$($r.BytesCopied)$(if ($r.Diagnostic) { " Diag=$($r.Diagnostic)" })"
 
         # Persist best-effort. A flaky NAS write must not derail a
         # successful sync return.

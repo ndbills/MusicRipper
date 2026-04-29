@@ -231,11 +231,18 @@ function Invoke-RipperSyncToOneDrive {
     )
 
     # Pre-flight 1: OneDrive client installed?
+    # Pre-flight failures used to return silently and rely on the
+    # orchestrator's INFO summary; that hid them from a parent-user
+    # whose main PS window is minimized. WARN routes through
+    # Write-Warning, which is yellow and survives the minimized host
+    # (and is the level a future status-line UI will surface).
     $oneDrive = Get-RipperOneDriveUserFolder
     if (-not $oneDrive) {
+        $diag = "OneDrive client is not installed for this user (no HKCU\Software\Microsoft\OneDrive\UserFolder, no `$env:OneDrive). Install OneDrive and sign in, then retry with src/tools/Sync-PendingAlbums.ps1."
+        Write-RipperLog WARN 'OneDriveSync' "Pre-flight failed: $diag"
         return @{
             Target='OneDrive'; Status='Failed'; BytesCopied=0
-            Diagnostic="OneDrive client is not installed for this user (no HKCU\Software\Microsoft\OneDrive\UserFolder, no `$env:OneDrive). Install OneDrive and sign in, then retry with src/tools/Sync-PendingAlbums.ps1."
+            Diagnostic=$diag
         }
     }
 
@@ -243,15 +250,19 @@ function Invoke-RipperSyncToOneDrive {
     $rootProp = $Config.PSObject.Properties['OneDriveSyncTargetRoot']
     $root = if ($rootProp) { [string]$rootProp.Value } else { '' }
     if ([string]::IsNullOrWhiteSpace($root)) {
+        $diag = "cfg.OneDriveSyncTargetRoot is not set. Run setup/New-RipperConfig.ps1 to pick a OneDrive subfolder, then retry."
+        Write-RipperLog WARN 'OneDriveSync' "Pre-flight failed: $diag"
         return @{
             Target='OneDrive'; Status='Failed'; BytesCopied=0
-            Diagnostic="cfg.OneDriveSyncTargetRoot is not set. Run setup/New-RipperConfig.ps1 to pick a OneDrive subfolder, then retry."
+            Diagnostic=$diag
         }
     }
     if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+        $diag = "OneDriveSyncTargetRoot '$root' does not exist on disk. Re-run setup/New-RipperConfig.ps1 (or create the folder) and retry."
+        Write-RipperLog WARN 'OneDriveSync' "Pre-flight failed: $diag"
         return @{
             Target='OneDrive'; Status='Failed'; BytesCopied=0
-            Diagnostic="OneDriveSyncTargetRoot '$root' does not exist on disk. Re-run setup/New-RipperConfig.ps1 (or create the folder) and retry."
+            Diagnostic=$diag
         }
     }
 
@@ -265,9 +276,11 @@ function Invoke-RipperSyncToOneDrive {
         try {
             New-Item -ItemType Directory -Path $destParent -Force -ErrorAction Stop | Out-Null
         } catch {
+            $diag = "Could not create destination parent '$destParent': $($_.Exception.Message)"
+            Write-RipperLog WARN 'OneDriveSync' $diag
             return @{
                 Target='OneDrive'; Status='Failed'; BytesCopied=0
-                Diagnostic="Could not create destination parent '$destParent': $($_.Exception.Message)"
+                Diagnostic=$diag
             }
         }
     }
@@ -290,9 +303,11 @@ function Invoke-RipperSyncToOneDrive {
         $output = & robocopy @rcArgs 2>&1
         $exit   = $LASTEXITCODE
     } catch {
+        $diag = "robocopy could not be invoked: $($_.Exception.Message)"
+        Write-RipperLog WARN 'OneDriveSync' $diag
         return @{
             Target='OneDrive'; Status='Failed'; BytesCopied=0
-            Diagnostic="robocopy could not be invoked: $($_.Exception.Message)"
+            Diagnostic=$diag
         }
     }
 
