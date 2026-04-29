@@ -73,6 +73,7 @@ if ($existing) {
         ContinuousMode    = $true
         SyncTargets       = @()
         LocalRetention    = 'Keep'
+        RetryPendingSyncOnStartup = $true
     }
     foreach ($k in $expected.Keys) {
         if (-not $existing.PSObject.Properties[$k]) {
@@ -111,12 +112,14 @@ if ($existing) {
     $existingCont  = if ($existing.PSObject.Properties['ContinuousMode']) { [string][bool]$existing.ContinuousMode } else { '(missing — will default to: True)' }
     $existingSync  = if ($existing.PSObject.Properties['SyncTargets']    -and $existing.SyncTargets)    { (@($existing.SyncTargets) -join ', ') } else { '(missing — will default to: <empty> = no sync)' }
     $existingRet   = if ($existing.PSObject.Properties['LocalRetention']) { [string]$existing.LocalRetention } else { '(missing — will default to: Keep)' }
+    $existingRetry = if ($existing.PSObject.Properties['RetryPendingSyncOnStartup']) { [string][bool]$existing.RetryPendingSyncOnStartup } else { '(missing — will default to: True)' }
     Write-Host "  MetadataProviders     : $existingMd"
     Write-Host "  CoverArtProviders     : $existingCov"
     Write-Host "  EjectAfterRip         : $existingEject"
     Write-Host "  ContinuousMode        : $existingCont"
     Write-Host "  SyncTargets           : $existingSync"
     Write-Host "  LocalRetention        : $existingRet"
+    Write-Host "  RetryPendingSyncOnStartup: $existingRetry"
     Write-Host ""
 
     # -TopUp: non-interactive upgrade path. Write existing values back
@@ -393,6 +396,14 @@ if ($retentionOptions -notcontains $retStr) {
     $localRetention = $retStr
 }
 
+# Phase 6.5: at startup -- before any disc-rip -- show a WPF dialog that
+# retries albums whose previous sync didn't finish (e.g. NAS was off).
+# Default Y. The dialog has its own Cancel button, so a single launch
+# can still skip the retry without flipping this flag.
+$defaultRetry = if ($existing -and $existing.PSObject.Properties['RetryPendingSyncOnStartup']) { [bool]$existing.RetryPendingSyncOnStartup } else { $true }
+$retryStr = Read-WithDefault -Prompt 'RetryPendingSyncOnStartup (Y/N)' -Default ([string][bool]$defaultRetry)
+$retryPendingSyncOnStartup = ($retryStr -match '^\s*[YyTt1]')
+
 # --- Build & persist -------------------------------------------------------
 $cfg = New-RipperConfigObject `
     -LibraryRoot   $libraryRoot `
@@ -407,6 +418,7 @@ $cfg.EjectAfterRip         = $ejectAfterRip
 $cfg.ContinuousMode        = $continuousMode
 $cfg.SyncTargets           = $syncTargets
 $cfg.LocalRetention        = $localRetention
+$cfg.RetryPendingSyncOnStartup = $retryPendingSyncOnStartup
 
 # Carry over drive info if Register-Drive ran first.
 if ($existing) {

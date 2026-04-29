@@ -42,5 +42,8 @@
   "SyncTargets": [],
 
   "//LocalRetention":          "Phase 6.1: what to do with the local album folder after every configured sync target reported OK. 'Keep' (default, never touch local files), 'MoveToSentAfterAllSynced' (move to <LibraryRoot>/_Sent/ preserving the artist subdir), or 'RecycleAfterAllSynced' (send to the Windows Recycle Bin, recoverable). No-op when SyncTargets is empty or any target failed.",
-  "LocalRetention": "Keep"
+  "LocalRetention": "Keep",
+
+  "//RetryPendingSyncOnStartup": "Phase 6.5: at startup -- BEFORE any disc-rip -- show a WPF dialog that retries albums whose previous sync didn't finish (e.g. NAS was offline). Default true. Set false if you'd rather run src/tools/Sync-PendingAlbums.ps1 manually. The dialog has its own Cancel button so a single launch can still skip the retry without flipping this flag.",
+  "RetryPendingSyncOnStartup": true
 }
