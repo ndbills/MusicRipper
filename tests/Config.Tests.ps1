@@ -28,11 +28,11 @@ Describe 'New-RipperConfigObject' {
     It 'carries optional fields through' {
         $cfg = New-RipperConfigObject -LibraryRoot 'D:\Music' `
             -DriveLetter 'D:' -DriveOffset 6 `
-            -OneDrivePath 'C:\OneDrive\Music' -SynologyUnc '\\nas\music'
-        $cfg.DriveLetter  | Should -Be 'D:'
-        $cfg.DriveOffset  | Should -Be 6
-        $cfg.OneDrivePath | Should -Be 'C:\OneDrive\Music'
-        $cfg.SynologyUnc  | Should -Be '\\nas\music'
+            -OneDriveSyncTargetRoot 'C:\OneDrive\Music' -SynologyUnc '\\nas\music'
+        $cfg.DriveLetter             | Should -Be 'D:'
+        $cfg.DriveOffset             | Should -Be 6
+        $cfg.OneDriveSyncTargetRoot  | Should -Be 'C:\OneDrive\Music'
+        $cfg.SynologyUnc             | Should -Be '\\nas\music'
     }
 }
 

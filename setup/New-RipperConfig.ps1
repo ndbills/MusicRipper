@@ -102,7 +102,7 @@ if ($existing) {
     Write-Host "Existing config found at $configPath" -ForegroundColor Cyan
     Write-Host "  LibraryRoot           : $($existing.LibraryRoot)"
     Write-Host "  MusicBrainzUserAgent  : $($existing.MusicBrainzUserAgent)"
-    Write-Host "  OneDrivePath          : $($existing.OneDrivePath)"
+    Write-Host "  OneDriveSyncTargetRoot: $($existing.OneDriveSyncTargetRoot)"
     Write-Host "  SynologyUnc           : $($existing.SynologyUnc)"
     Write-Host "  DriveLetter / Offset  : $($existing.DriveLetter) / $($existing.DriveOffset)"
     $existingMd  = if ($existing.PSObject.Properties['MetadataProviders']  -and $existing.MetadataProviders)  { ($existing.MetadataProviders  -join ', ') } else { '(missing — will default to: ' + ($knownMd  -join ', ') + ')' }
@@ -130,7 +130,7 @@ if ($existing) {
         Write-Host "-TopUp: adding missing field(s) with defaults: $($missingKeys -join ', ')" -ForegroundColor Yellow
         $cfg = New-RipperConfigObject `
             -LibraryRoot   $existing.LibraryRoot `
-            -OneDrivePath  $existing.OneDrivePath `
+            -OneDriveSyncTargetRoot $existing.OneDriveSyncTargetRoot `
             -SynologyUnc   $existing.SynologyUnc
         foreach ($p in $existing.PSObject.Properties) {
             # Carry every existing key over; New-RipperConfigObject has
@@ -165,7 +165,7 @@ if ($existing) {
         Write-Host "Adding missing field(s) with defaults: $($missingKeys -join ', ')" -ForegroundColor Yellow
         $cfg = New-RipperConfigObject `
             -LibraryRoot   $existing.LibraryRoot `
-            -OneDrivePath  $existing.OneDrivePath `
+            -OneDriveSyncTargetRoot $existing.OneDriveSyncTargetRoot `
             -SynologyUnc   $existing.SynologyUnc
         foreach ($p in $existing.PSObject.Properties) {
             if ($cfg.PSObject.Properties[$p.Name]) { $cfg.$($p.Name) = $p.Value }
@@ -194,10 +194,62 @@ $email = Read-WithDefault -Prompt 'MusicBrainz contact email (required by their 
                           -Default ($defaultUa -replace '.*\(\s*', '' -replace '\s*\).*', '')
 $ua = "MusicRipper/0.1 ( $email )"
 
-# --- OneDrive (optional) ---------------------------------------------------
-$defaultOd = if ($existing) { $existing.OneDrivePath } else { '' }
-$oneDrive  = Read-WithDefault -Prompt 'OneDrive mirror path (blank to skip)' -Default $defaultOd
+# --- OneDrive (optional, Phase 6.2) --------------------------------------
+# Stores cfg.OneDriveSyncTargetRoot -- the absolute folder under
+# OneDrive that ripped albums get mirrored into. We pop a Windows
+# Forms FolderBrowserDialog seeded at the user's OneDrive root (looked
+# up via HKCU\Software\Microsoft\OneDrive\UserFolder) so the user can
+# just navigate inside it instead of typing the path. Cancelling the
+# dialog leaves the field empty -- the OneDrive sync target then
+# fails fast at sync time with a clear "not configured" message rather
+# than silently doing nothing.
+. (Join-Path $repoRoot 'src\sync\Sync-ToOneDrive.ps1')
+$defaultOd = if ($existing -and $existing.PSObject.Properties['OneDriveSyncTargetRoot']) { [string]$existing.OneDriveSyncTargetRoot } else { '' }
+$oneDriveRoot = Get-RipperOneDriveUserFolder
+if ($oneDriveRoot) {
+    Write-Host "OneDrive root detected: $oneDriveRoot" -ForegroundColor DarkGray
+} else {
+    Write-Host "OneDrive client not detected (HKCU\\Software\\Microsoft\\OneDrive\\UserFolder missing). You can still pick a folder manually." -ForegroundColor Yellow
+}
+$prompt = if ($defaultOd) {
+    "OneDrive sync target root [$defaultOd] (Enter = keep, 'pick' to browse, '-' to clear)"
+} elseif ($oneDriveRoot) {
+    "OneDrive sync target root (Enter = browse from $oneDriveRoot, '-' to skip)"
+} else {
+    "OneDrive sync target root (Enter = browse, '-' to skip)"
+}
+$ans = Read-Host $prompt
+$oneDrive = $defaultOd
+if ($ans.Trim() -eq '-') {
+    $oneDrive = ''
+} elseif ([string]::IsNullOrWhiteSpace($ans) -or $ans.Trim().ToLowerInvariant() -eq 'pick') {
+    # Browse. Use Windows Forms FolderBrowserDialog -- ships with
+    # every Windows install, no extra dependencies. Seed at the
+    # registered OneDrive root so the user can just navigate inside
+    # it; if no OneDrive is detected, seed at the existing value or
+    # %USERPROFILE%.
+    Add-Type -AssemblyName System.Windows.Forms | Out-Null
+    $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dlg.Description = 'Select the OneDrive subfolder where ripped albums should be mirrored to. Cancel to skip the OneDrive sync target.'
+    $dlg.UseDescriptionForTitle = $true
+    $dlg.ShowNewFolderButton = $true
+    $seed = if ($defaultOd -and (Test-Path -LiteralPath $defaultOd)) { $defaultOd }
+            elseif ($oneDriveRoot) { $oneDriveRoot }
+            else { [Environment]::GetFolderPath('UserProfile') }
+    $dlg.SelectedPath = $seed
+    if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        $oneDrive = $dlg.SelectedPath
+        Write-Host "  OneDrive sync target -> $oneDrive" -ForegroundColor Green
+    } else {
+        Write-Host "  OneDrive sync target left as: $(if ($defaultOd) { $defaultOd } else { '(not set)' })" -ForegroundColor DarkGray
+    }
+} else {
+    $oneDrive = $ans.Trim()
+}
 if ([string]::IsNullOrWhiteSpace($oneDrive)) { $oneDrive = $null }
+elseif (-not (Test-Path -LiteralPath $oneDrive)) {
+    Write-Warning "OneDriveSyncTargetRoot '$oneDrive' does not exist on disk. The OneDrive sync target will report Failed until the folder exists."
+}
 
 # --- Synology NAS (optional) ----------------------------------------------
 $defaultSyn = if ($existing) { $existing.SynologyUnc } else { '' }
@@ -269,7 +321,7 @@ $continuousMode = ($contStr -match '^\s*[YyTt1]')
 # Library move. Built-in 'Stub' is for testing the orchestrator without
 # a real off-machine target. Real targets land in 6.2 (OneDrive) and
 # 6.3 (SynologyNAS). Empty = no sync (current behaviour).
-$knownSync   = @('Stub')
+$knownSync   = @('Stub','OneDrive')
 $defaultSync = if ($existing -and $existing.PSObject.Properties['SyncTargets'] -and $existing.SyncTargets) { @($existing.SyncTargets) } else { @() }
 $defStr      = if ($defaultSync.Count -gt 0) { $defaultSync -join ', ' } else { '<empty>' }
 $rawSync = Read-Host "Sync targets, comma-separated (known: $($knownSync -join ', '); blank for none) [$defStr] (Enter = keep)"
@@ -306,7 +358,7 @@ if ($retentionOptions -notcontains $retStr) {
 # --- Build & persist -------------------------------------------------------
 $cfg = New-RipperConfigObject `
     -LibraryRoot   $libraryRoot `
-    -OneDrivePath  $oneDrive `
+    -OneDriveSyncTargetRoot $oneDrive `
     -SynologyUnc   $syn
 
 $cfg.MusicBrainzUserAgent  = $ua

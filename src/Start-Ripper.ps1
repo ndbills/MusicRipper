@@ -84,6 +84,7 @@ Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 . (Join-Path $repoRoot 'src\core\Resume.ps1')
 . (Join-Path $repoRoot 'src\sync\Get-LibrarySyncState.ps1')
 . (Join-Path $repoRoot 'src\sync\Invoke-RipperSync.ps1')
+. (Join-Path $repoRoot 'src\sync\Sync-ToOneDrive.ps1')
 . (Join-Path $repoRoot 'src\sync\Invoke-LibraryRetention.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-MetadataDialog.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-RipProgress.ps1')

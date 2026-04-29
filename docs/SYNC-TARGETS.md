@@ -1,8 +1,8 @@
 # Sync targets
 
-> **Status:** Phase 6.1 framework + built-in `Stub` target shipped.
-> Real targets land in 6.2 (OneDrive) and 6.3 (Synology NAS over LAN /
-> 6.4 over WireGuard). Background: [DECISIONS.md D-022](DECISIONS.md).
+> **Status:** Phase 6.1 framework + 6.2 OneDrive target shipped.
+> Synology NAS lands in 6.3 (LAN) / 6.4 (over WireGuard).
+> Background: [DECISIONS.md D-022](DECISIONS.md), [D-023](DECISIONS.md).
 
 ## What sync does, in one paragraph
 
@@ -38,12 +38,12 @@ exactly as before.
 
 ### Built-in targets
 
-| Name   | Purpose                                                                 |
-| ------ | ----------------------------------------------------------------------- |
-| `Stub` | Writes a marker file under `.musicripper\stub-sync\<rel>\.synced`. Honours `cfg.StubSyncFail = true` for failure-path testing. Use it to dry-run the framework before configuring a real target. |
+| Name       | Purpose                                                                 |
+| ---------- | ----------------------------------------------------------------------- |
+| `Stub`     | Writes a marker file under `.musicripper\stub-sync\<rel>\.synced`. Honours `cfg.StubSyncFail = true` for failure-path testing. Use it to dry-run the framework before configuring a real target. |
+| `OneDrive` | Phase 6.2: copies the album folder via `robocopy` into `cfg.OneDriveSyncTargetRoot` (a folder inside the user's OneDrive). Files appear in the OneDrive client's pending list and upload in the background. Pre-flight checks: OneDrive client installed (registry), target root exists. See [DECISIONS.md D-023](DECISIONS.md) for the robocopy switch rationale. |
 
-OneDrive (`Sync-ToOneDrive.ps1`) and SynologyNAS
-(`Sync-ToSynologyNAS.ps1`) ship in 6.2 and 6.3 respectively.
+SynologyNAS (`Sync-ToSynologyNAS.ps1`) ships in 6.3.
 
 ### Retention modes
 

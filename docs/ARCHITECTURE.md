@@ -60,7 +60,10 @@ the first thing to update.
 | `src/core/Move-ToLibrary.ps1`      | 5     | Plex layout + sanitization + `_ReviewQueue/` routing.   |
 | `src/core/New-ReviewQueueArtifacts.ps1` | 5 | `REVIEW.txt` + single-file `_image/<Album>.flac+cue`. |
 | `src/core/Get-LibraryDiscIndex.ps1` | 5.8  | Read/write the `<LibraryRoot>\.musicripper\discids.json` cross-session DiscId index. |
-| `src/postprocessors/*.ps1`         | 6     | Optional OneDrive / Synology mirror.                   |
+| `src/sync/Get-LibrarySyncState.ps1` | 6.1 | Durable sync-state index + RetentionApplied record. |
+| `src/sync/Invoke-RipperSync.ps1`  | 6.1 | Per-album sync orchestrator + built-in `Stub` target. |
+| `src/sync/Sync-ToOneDrive.ps1`    | 6.2 | OneDrive sync target (robocopy into a folder inside the OneDrive sync root). |
+| `src/sync/Invoke-LibraryRetention.ps1` | 6.1 | LocalRetention policy: Keep / MoveToSentAfterAllSynced / RecycleAfterAllSynced. |
 | `src/tools/Move-FromReviewQueue.ps1` | 7   | Promote a fixed-up review-queue album into the library. |
 | `src/tools/Complete-OrphanedRip.ps1` | 5   | Manual finish for an orphaned rip folder (sidecar or `-DiscId`). |
 | `src/tools/Show-FlacTags.ps1`      | 5     | Dump Vorbis comments + PICTURE summary for a file/folder. |

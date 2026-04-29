@@ -26,7 +26,7 @@ Phase 6.2, Synology NAS over WireGuard in Phase 6.3+).
 | 4     | Rip engine                               | ✅ complete    |
 | 5     | Quality gate, tagging, library layout    | ✅ complete    |
 | 6.1   | Sync framework + LocalRetention + Stub   | ✅ complete    |
-| 6.2   | OneDrive sync target                     | ⏳ not started |
+| 6.2   | OneDrive sync target                     | ✅ complete    |
 | 6.3   | Synology NAS sync target (LAN)           | ⏳ not started |
 | 6.4   | Synology NAS over WireGuard              | ⏳ not started |
 | 7     | Polish, packaging, parent-friendly UX    | ⏳ not started |

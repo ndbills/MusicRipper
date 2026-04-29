@@ -94,8 +94,11 @@ function New-RipperConfigObject {
     AccurateRip read offset in samples for the chosen drive. Optional at
     construction; filled by Register-Drive.ps1.
 
-.PARAMETER OneDrivePath
-    Optional absolute path inside the user's OneDrive to mirror the library to.
+.PARAMETER OneDriveSyncTargetRoot
+    Optional absolute path to the folder inside the user's OneDrive
+    (or any local folder) where ripped albums should be mirrored to
+    by the Phase 6.2 OneDrive sync target. Empty/null disables the
+    target even if 'OneDrive' is listed in `SyncTargets`.
 
 .PARAMETER SynologyUnc
     Optional UNC path (e.g. \\nas\music) for SMB sync.
@@ -112,7 +115,7 @@ function New-RipperConfigObject {
 
         [string]$DriveLetter,
         [int]$DriveOffset,
-        [string]$OneDrivePath,
+        [string]$OneDriveSyncTargetRoot,
         [string]$SynologyUnc,
         [bool]$SynologySyncReviewQueue = $false
     )
@@ -133,7 +136,7 @@ function New-RipperConfigObject {
         MusicBrainzUserAgent    = 'MusicRipper/0.1 ( unknown@example.com )'
 
         # Optional post-processor targets. Empty/null = disabled.
-        OneDrivePath            = $OneDrivePath
+        OneDriveSyncTargetRoot  = $OneDriveSyncTargetRoot
         SynologyUnc             = $SynologyUnc
         SynologySyncReviewQueue = $SynologySyncReviewQueue
 
