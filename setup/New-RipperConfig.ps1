@@ -214,15 +214,19 @@ if ($oneDriveRoot) {
 $prompt = if ($defaultOd) {
     "OneDrive sync target root [$defaultOd] (Enter = keep, 'pick' to browse, '-' to clear)"
 } elseif ($oneDriveRoot) {
-    "OneDrive sync target root (Enter = browse from $oneDriveRoot, '-' to skip)"
+    "OneDrive sync target root (Enter or 'pick' = browse from $oneDriveRoot, '-' to skip)"
 } else {
-    "OneDrive sync target root (Enter = browse, '-' to skip)"
+    "OneDrive sync target root (Enter or 'pick' = browse, '-' to skip)"
 }
 $ans = Read-Host $prompt
 $oneDrive = $defaultOd
-if ($ans.Trim() -eq '-') {
+$ansTrim = $ans.Trim()
+if ($ansTrim -eq '-') {
     $oneDrive = ''
-} elseif ([string]::IsNullOrWhiteSpace($ans) -or $ans.Trim().ToLowerInvariant() -eq 'pick') {
+} elseif ([string]::IsNullOrWhiteSpace($ans) -and $defaultOd) {
+    # Enter with an existing value = keep it; do not pop the dialog.
+    $oneDrive = $defaultOd
+} elseif ([string]::IsNullOrWhiteSpace($ans) -or $ansTrim.ToLowerInvariant() -eq 'pick') {
     # Browse. Use Windows Forms FolderBrowserDialog -- ships with
     # every Windows install, no extra dependencies. Seed at the
     # registered OneDrive root so the user can just navigate inside
@@ -244,7 +248,7 @@ if ($ans.Trim() -eq '-') {
         Write-Host "  OneDrive sync target left as: $(if ($defaultOd) { $defaultOd } else { '(not set)' })" -ForegroundColor DarkGray
     }
 } else {
-    $oneDrive = $ans.Trim()
+    $oneDrive = $ansTrim
 }
 if ([string]::IsNullOrWhiteSpace($oneDrive)) { $oneDrive = $null }
 elseif (-not (Test-Path -LiteralPath $oneDrive)) {
@@ -263,19 +267,34 @@ if ([string]::IsNullOrWhiteSpace($syn)) { $syn = $null }
 
 $hasCred = if ($existing -and $existing.PSObject.Properties['HasSynologyCredential']) { [bool]$existing.HasSynologyCredential } else { $false }
 if ($syn) {
-    $credPrompt = if ($hasCred) {
-        'A NAS credential is already stored. Re-enter? (y/N)'
-    } else {
-        'Store a NAS credential now? (Y/n) -- needed if the share is not already mapped in Explorer'
+    # Match the rest of the script's "Enter = keep" idiom. The
+    # bracketed default reflects current state (stored / not set);
+    # 'new' triggers a fresh Get-Credential prompt and saves it,
+    # '-' clears any existing credential. On first run (no cred
+    # stored yet) we default to prompting since that's the common
+    # case -- the user just typed a UNC and almost certainly needs
+    # to authenticate to it.
+    $credDefault = if ($hasCred) { 'stored' } else { 'not set' }
+    $credAns = (Read-Host "Synology NAS credential [$credDefault] (Enter = keep, 'new' to enter/replace, '-' to clear)").Trim()
+    $wantsNew   = $credAns -match '^(?i)new$'
+    $wantsClear = $credAns -eq '-'
+    # Backwards-compat: a bare 'y' still means 'enter a new credential'
+    # so muscle memory from the old y/N prompt keeps working.
+    if (-not $wantsNew -and -not $wantsClear -and $credAns -match '^(?i)[yt1]$') {
+        $wantsNew = $true
     }
-    $credAns = Read-Host $credPrompt
-    $wantsCred = if ($hasCred) {
-        $credAns -match '^\s*[YyTt1]'
-    } else {
-        # Default Y when no cred stored yet -- the common case.
-        ([string]::IsNullOrWhiteSpace($credAns)) -or ($credAns -match '^\s*[YyTt1]')
+    # First-run convenience: bare Enter with no cred stored = prompt now.
+    if (-not $wantsNew -and -not $wantsClear -and -not $hasCred -and [string]::IsNullOrEmpty($credAns)) {
+        $wantsNew = $true
     }
-    if ($wantsCred) {
+    if ($wantsClear -and $hasCred) {
+        $credPath = Join-Path (Get-RipperConfigRoot) 'credentials.clixml'
+        if (Test-Path -LiteralPath $credPath) {
+            Remove-Item -LiteralPath $credPath -Force
+        }
+        $hasCred = $false
+        Write-RipperLog INFO 'New-RipperConfig' 'Synology credential cleared.'
+    } elseif ($wantsNew) {
         $cred = Get-Credential -Message "Credentials for $syn (cancel to skip)"
         if ($cred) {
             Save-RipperCredential -Credential $cred
