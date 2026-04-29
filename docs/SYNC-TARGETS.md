@@ -1,8 +1,9 @@
 # Sync targets
 
-> **Status:** Phase 6.1 framework + 6.2 OneDrive target shipped.
-> Synology NAS lands in 6.3 (LAN) / 6.4 (over WireGuard).
-> Background: [DECISIONS.md D-022](DECISIONS.md), [D-023](DECISIONS.md).
+> **Status:** Phase 6.1 framework + 6.2 OneDrive target + 6.3 Synology NAS target shipped.
+> Phase 6.4 ships the same SynologyNAS target accessed over WireGuard
+> (no code change — just a setup-doc addition).
+> Background: [DECISIONS.md D-022](DECISIONS.md), [D-023](DECISIONS.md), [D-024](DECISIONS.md).
 
 ## What sync does, in one paragraph
 
@@ -42,8 +43,10 @@ exactly as before.
 | ---------- | ----------------------------------------------------------------------- |
 | `Stub`     | Writes a marker file under `.musicripper\stub-sync\<rel>\.synced`. Honours `cfg.StubSyncFail = true` for failure-path testing. Use it to dry-run the framework before configuring a real target. |
 | `OneDrive` | Phase 6.2: copies the album folder via `robocopy` into `cfg.OneDriveSyncTargetRoot` (a folder inside the user's OneDrive). Files appear in the OneDrive client's pending list and upload in the background. Pre-flight checks: OneDrive client installed (registry), target root exists. See [DECISIONS.md D-023](DECISIONS.md) for the robocopy switch rationale. |
+| `SynologyNAS` | Phase 6.3: copies the album folder via `robocopy` onto `cfg.SynologyUnc` (typically a Synology DSM Shared Folder, but any UNC server works). When `cfg.HasSynologyCredential = $true`, the share root is mounted via `New-SmbMapping` for the duration of each album sync using a DPAPI-protected `PSCredential` from `credentials.clixml`; otherwise the sync uses ambient session credentials. Adds robocopy `/Z` (restartable) + `/R:5 /W:10` to weather flaky home networks. Pre-flight checks: `SynologyUnc` set, credential decrypts (when required), share reachable. See [DECISIONS.md D-024](DECISIONS.md) for the auth model rationale. |
 
-SynologyNAS (`Sync-ToSynologyNAS.ps1`) ships in 6.3.
+Phase 6.4 reuses the `SynologyNAS` target unchanged over WireGuard
+(setup-doc addition only).
 
 ### Retention modes
 

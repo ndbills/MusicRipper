@@ -251,18 +251,37 @@ elseif (-not (Test-Path -LiteralPath $oneDrive)) {
     Write-Warning "OneDriveSyncTargetRoot '$oneDrive' does not exist on disk. The OneDrive sync target will report Failed until the folder exists."
 }
 
-# --- Synology NAS (optional) ----------------------------------------------
+# --- Synology NAS (optional, Phase 6.3) ----------------------------------
+# Stores cfg.SynologyUnc -- the UNC path of the NAS share that the
+# 'SynologyNAS' sync target mirrors albums onto. Optional DPAPI
+# credential lives in credentials.clixml; we only re-prompt when the
+# user opts in, so re-running setup never silently asks for the NAS
+# password again.
 $defaultSyn = if ($existing) { $existing.SynologyUnc } else { '' }
 $syn = Read-WithDefault -Prompt 'Synology NAS UNC path, e.g. \\nas\music (blank to skip)' -Default $defaultSyn
 if ([string]::IsNullOrWhiteSpace($syn)) { $syn = $null }
 
-$hasCred = $false
+$hasCred = if ($existing -and $existing.PSObject.Properties['HasSynologyCredential']) { [bool]$existing.HasSynologyCredential } else { $false }
 if ($syn) {
-    $cred = Get-Credential -Message "Credentials for $syn (cancel to skip — you'll be prompted again at sync time)"
-    if ($cred) {
-        Save-RipperCredential -Credential $cred
-        $hasCred = $true
-        Write-RipperLog INFO 'New-RipperConfig' 'Synology credential saved (DPAPI).'
+    $credPrompt = if ($hasCred) {
+        'A NAS credential is already stored. Re-enter? (y/N)'
+    } else {
+        'Store a NAS credential now? (Y/n) -- needed if the share is not already mapped in Explorer'
+    }
+    $credAns = Read-Host $credPrompt
+    $wantsCred = if ($hasCred) {
+        $credAns -match '^\s*[YyTt1]'
+    } else {
+        # Default Y when no cred stored yet -- the common case.
+        ([string]::IsNullOrWhiteSpace($credAns)) -or ($credAns -match '^\s*[YyTt1]')
+    }
+    if ($wantsCred) {
+        $cred = Get-Credential -Message "Credentials for $syn (cancel to skip)"
+        if ($cred) {
+            Save-RipperCredential -Credential $cred
+            $hasCred = $true
+            Write-RipperLog INFO 'New-RipperConfig' 'Synology credential saved (DPAPI).'
+        }
     }
 }
 
@@ -321,7 +340,7 @@ $continuousMode = ($contStr -match '^\s*[YyTt1]')
 # Library move. Built-in 'Stub' is for testing the orchestrator without
 # a real off-machine target. Real targets land in 6.2 (OneDrive) and
 # 6.3 (SynologyNAS). Empty = no sync (current behaviour).
-$knownSync   = @('Stub','OneDrive')
+$knownSync   = @('Stub','OneDrive','SynologyNAS')
 $defaultSync = if ($existing -and $existing.PSObject.Properties['SyncTargets'] -and $existing.SyncTargets) { @($existing.SyncTargets) } else { @() }
 $defStr      = if ($defaultSync.Count -gt 0) { $defaultSync -join ', ' } else { '<empty>' }
 $rawSync = Read-Host "Sync targets, comma-separated (known: $($knownSync -join ', '); blank for none) [$defStr] (Enter = keep)"

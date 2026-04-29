@@ -1533,3 +1533,40 @@ already in the library but **not** indexed in `.musicripper\discids.json`
 MusicRipper after merge to confirm the dialog appears, each branch
 behaves, and discarded folders land in the Recycle Bin recoverable.
 
+
+## D-024 -- Synology NAS sync target (Phase 6.3)
+
+**Context:** Phase 6.2 shipped the OneDrive sync target. Phase 6.3 adds `SynologyNAS` -- the third built-in sync target after `Stub` and `OneDrive`. It mirrors one album per call onto an SMB share (typically a Synology DSM Shared Folder, though any UNC server works) via robocopy, optionally authenticating with a DPAPI-protected credential captured at setup time.
+
+**Decision:** Implement as `src/sync/Sync-ToSynologyNAS.ps1` exporting `Invoke-RipperSyncToSynologyNAS`. Re-uses the OneDrive target's pure helpers (`Get-RipperOneDriveStatusFromExitCode`, `Get-RipperOneDriveBytesCopied`) since the robocopy output shape is identical -- duplicating the parsers would create two places to fix any future robocopy quirk.
+
+**Authentication model:** When `cfg.HasSynologyCredential = True`, the target loads the DPAPI-protected `PSCredential` via `Import-RipperCredential` (file at `%LOCALAPPDATA%\MusicRipper\credentials.clixml`), mounts the share root via `New-SmbMapping` for the duration of one album sync, then unmounts via `Remove-SmbMapping` in `finally`. When the flag is false, no mount is attempted and robocopy uses ambient session credentials.
+
+**Why `New-SmbMapping` over `cmdkey /add`:** `cmdkey` writes the credential into Windows Credential Manager (DPAPI-encrypted but visible to other processes running as the same user) and *leaves it there* if the rip is killed mid-pipeline -- a parent-friendly tool can't rely on the user knowing to clean that up. `cmdkey` also takes the password on the command line, briefly visible to any process that snoops `Win32_Process`. `New-SmbMapping` keeps the credential in-process, scopes the mapping to the current logon session (auto-cleared on PowerShell exit), and supports concurrent mounts to the same server from different sessions. The `cmdkey` path could be added later as a separate sync-target type if a user really needs it.
+
+**Robocopy switch differences vs OneDrive:**
+- `/Z` (restartable) added: a NAS link drop mid-album is far more likely than a OneDrive folder write failing, and resume saves a full re-copy on transient blips. Worth the per-file overhead on flaky home networks.
+- `/R:5 /W:10` (vs OneDrive's `2/5`): home WiFi rebounds in 30s; bumped retries are still bounded so the foreground rip pipeline never hangs forever.
+
+**Pre-flight checks (all fail fast with `Status='Failed'` + diagnostic):**
+1. `cfg.SynologyUnc` is set.
+2. If `cfg.HasSynologyCredential = True`, `credentials.clixml` exists and decrypts.
+3. (Post-mount) `Test-Path` on the configured root succeeds. This surfaces "NAS off" / "wrong password" before robocopy spends 30s timing out.
+
+**Setup UX (`setup/New-RipperConfig.ps1`):** When the user enters a UNC, prompt:
+- If a credential is already stored: "A NAS credential is already stored. Re-enter? (y/N)" -- defaults N so re-running setup never silently asks for the NAS password again.
+- If no credential is stored: "Store a NAS credential now? (Y/n) -- needed if the share is not already mapped in Explorer" -- defaults Y (the common case).
+
+**Files added/changed:**
+- `src/sync/Sync-ToSynologyNAS.ps1` -- new target.
+- `src/Start-Ripper.ps1` -- dot-source at top + inside the post-process runspace.
+- `src/tools/Sync-PendingAlbums.ps1` -- dot-source.
+- `setup/New-RipperConfig.ps1` -- `knownSync` += `'SynologyNAS'` and the new credential-prompt logic.
+- `config/config.template.json` -- updated `SynologyUnc` / `HasSynologyCredential` / `SynologySyncReviewQueue` comments.
+- `tests/Sync-ToSynologyNAS.Tests.ps1` -- 16 tests covering helpers, pre-flight, robocopy integration (via local folder), and SMB mount lifecycle (mocked).
+- `docs/SYNC-TARGETS.md` -- `SynologyNAS` row in built-in targets table.
+- `README.md` -- Phase 6.3 marked complete.
+
+**Pester:** 400/0/1 green.
+
+**Cross-references:** D-022 (sync framework), D-023 (OneDrive target). Phase 6.4 will reuse this same target over WireGuard -- no code change expected, just a setup-doc addition for the VPN tunnel.
