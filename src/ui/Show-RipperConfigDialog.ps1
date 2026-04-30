@@ -159,6 +159,87 @@ function Get-RipperOrderedCheckboxState {
 }
 
 
+function Invoke-RipperConfigCheckboxRebuild {
+<#
+.SYNOPSIS
+    Internal: render an ItemsControl's children from $StateRef.Value
+    (an array of @{ Name; Checked } entries). Each row gets a
+    CheckBox + an Up button + a Down button. Re-invoked on every
+    reorder so positional captures (`$localIndex`) line up with the
+    new order.
+
+.DESCRIPTION
+    Lifted to a real top-level function rather than an in-function
+    scriptblock because dispatcher click closures captured via
+    GetNewClosure() can't reliably resolve a sibling local
+    scriptblock variable when invoked later (the scope is gone by
+    the time the user clicks Up/Down). A named function sits in the
+    script's command lookup table forever, so the closures find it.
+
+.PARAMETER StateRef
+    A pscustomobject with a single `Value` property holding the
+    array of @{ Name; Checked } entries. Wrapped so the click
+    closures can reassign the array (Move-RipperConfigEditorListItem
+    returns a new array).
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $ItemsControl,
+        [Parameter(Mandatory)] [pscustomobject]$StateRef
+    )
+
+    $ItemsControl.Items.Clear()
+    $stateRef = $StateRef    # alias so closures match the local name
+    for ($i = 0; $i -lt $stateRef.Value.Count; $i++) {
+        $entry  = $stateRef.Value[$i]
+        $row    = New-Object System.Windows.Controls.Grid
+        $row.Margin = '0,2,0,2'
+        $col1 = New-Object System.Windows.Controls.ColumnDefinition; $col1.Width = 'Auto'
+        $col2 = New-Object System.Windows.Controls.ColumnDefinition; $col2.Width = '*'
+        $col3 = New-Object System.Windows.Controls.ColumnDefinition; $col3.Width = 'Auto'
+        $col4 = New-Object System.Windows.Controls.ColumnDefinition; $col4.Width = 'Auto'
+        $row.ColumnDefinitions.Add($col1); $row.ColumnDefinitions.Add($col2)
+        $row.ColumnDefinitions.Add($col3); $row.ColumnDefinitions.Add($col4)
+
+        $cb = New-Object System.Windows.Controls.CheckBox
+        $cb.Content   = $entry.Name
+        $cb.IsChecked = [bool]$entry.Checked
+        $cb.VerticalAlignment = 'Center'
+        $cb.Margin    = '4,0,0,0'
+        $localIndex   = $i
+        $cb.Add_Checked({   $stateRef.Value[$localIndex].Checked = $true  }.GetNewClosure())
+        $cb.Add_Unchecked({ $stateRef.Value[$localIndex].Checked = $false }.GetNewClosure())
+        [System.Windows.Controls.Grid]::SetColumn($cb, 0)
+        $row.Children.Add($cb) | Out-Null
+
+        $itemsControl = $ItemsControl   # closure-captured alias
+        $up = New-Object System.Windows.Controls.Button
+        $up.Content = [char]0x25B2  # ▲
+        $up.Width = 28; $up.Height = 22; $up.Margin = '6,0,2,0'
+        $up.ToolTip = "Move '$($entry.Name)' up"
+        $up.Add_Click({
+            $stateRef.Value = Move-RipperConfigEditorListItem -List $stateRef.Value -Index $localIndex -Direction -1
+            Invoke-RipperConfigCheckboxRebuild -ItemsControl $itemsControl -StateRef $stateRef
+        }.GetNewClosure())
+        [System.Windows.Controls.Grid]::SetColumn($up, 2)
+        $row.Children.Add($up) | Out-Null
+
+        $down = New-Object System.Windows.Controls.Button
+        $down.Content = [char]0x25BC  # ▼
+        $down.Width = 28; $down.Height = 22; $down.Margin = '0,0,4,0'
+        $down.ToolTip = "Move '$($entry.Name)' down"
+        $down.Add_Click({
+            $stateRef.Value = Move-RipperConfigEditorListItem -List $stateRef.Value -Index $localIndex -Direction 1
+            Invoke-RipperConfigCheckboxRebuild -ItemsControl $itemsControl -StateRef $stateRef
+        }.GetNewClosure())
+        [System.Windows.Controls.Grid]::SetColumn($down, 3)
+        $row.Children.Add($down) | Out-Null
+
+        $ItemsControl.Items.Add($row) | Out-Null
+    }
+}
+
+
 function Show-RipperConfigDialog {
 <#
 .SYNOPSIS
@@ -191,13 +272,26 @@ function Show-RipperConfigDialog {
     Add-Type -AssemblyName PresentationCore      | Out-Null
 
     if (-not $Config) {
-        $Config = New-RipperConfigObject -LibraryRoot ''
+        $Config = New-RipperConfigObject -LibraryRoot ' '
+        $Config.LibraryRoot = ''
     }
 
-    # Working copy so Cancel really cancels.
-    $cfg = [pscustomobject]@{}
+    # Working copy so Cancel really cancels. Start from a fresh
+    # default so any field added after the on-disk file was last
+    # written gets a sane value (older configs predate WG /
+    # RetryPendingSyncOnStartup / etc -- under StrictMode 3 a missing
+    # property read throws). Then overlay every field that *is*
+    # present in $Config so the user's choices win.
+    # NB: New-RipperConfigObject's -LibraryRoot is [Mandatory] and
+    # rejects '', so we seed with a single space then blank it.
+    $cfg = New-RipperConfigObject -LibraryRoot ' '
+    $cfg.LibraryRoot = ''
     foreach ($p in $Config.PSObject.Properties) {
-        Add-Member -InputObject $cfg -MemberType NoteProperty -Name $p.Name -Value $p.Value -Force
+        if ($cfg.PSObject.Properties[$p.Name]) {
+            $cfg.($p.Name) = $p.Value
+        } else {
+            Add-Member -InputObject $cfg -MemberType NoteProperty -Name $p.Name -Value $p.Value -Force
+        }
     }
 
     $availMeta = @(Get-RipperAvailableMetadataProviders)
@@ -521,65 +615,14 @@ function Show-RipperConfigDialog {
     $credStatus.Text = if ([bool]$cfg.HasSynologyCredential) { "Credential: stored (DPAPI)" } else { "Credential: none stored" }
 
     # ---- ordered checkbox-list rendering --------------------------
-    $rebuildList = {
-        param($itemsControl, $stateRef)
-        $itemsControl.Items.Clear()
-        for ($i = 0; $i -lt $stateRef.Value.Count; $i++) {
-            $entry  = $stateRef.Value[$i]
-            $row    = New-Object System.Windows.Controls.Grid
-            $row.Margin = '0,2,0,2'
-            $col1 = New-Object System.Windows.Controls.ColumnDefinition; $col1.Width = 'Auto'
-            $col2 = New-Object System.Windows.Controls.ColumnDefinition; $col2.Width = '*'
-            $col3 = New-Object System.Windows.Controls.ColumnDefinition; $col3.Width = 'Auto'
-            $col4 = New-Object System.Windows.Controls.ColumnDefinition; $col4.Width = 'Auto'
-            $row.ColumnDefinitions.Add($col1); $row.ColumnDefinitions.Add($col2)
-            $row.ColumnDefinitions.Add($col3); $row.ColumnDefinitions.Add($col4)
-
-            $cb = New-Object System.Windows.Controls.CheckBox
-            $cb.Content   = $entry.Name
-            $cb.IsChecked = [bool]$entry.Checked
-            $cb.VerticalAlignment = 'Center'
-            $cb.Margin    = '4,0,0,0'
-            $localIndex   = $i
-            $cb.Add_Checked({   $stateRef.Value[$localIndex].Checked = $true  }.GetNewClosure())
-            $cb.Add_Unchecked({ $stateRef.Value[$localIndex].Checked = $false }.GetNewClosure())
-            [System.Windows.Controls.Grid]::SetColumn($cb, 0)
-            $row.Children.Add($cb) | Out-Null
-
-            $up = New-Object System.Windows.Controls.Button
-            $up.Content = [char]0x25B2  # ▲
-            $up.Width = 28; $up.Height = 22; $up.Margin = '6,0,2,0'
-            $up.ToolTip = "Move '$($entry.Name)' up"
-            $up.Add_Click({
-                $stateRef.Value = Move-RipperConfigEditorListItem -List $stateRef.Value -Index $localIndex -Direction -1
-                & $rebuildList $itemsControl $stateRef
-            }.GetNewClosure())
-            [System.Windows.Controls.Grid]::SetColumn($up, 2)
-            $row.Children.Add($up) | Out-Null
-
-            $down = New-Object System.Windows.Controls.Button
-            $down.Content = [char]0x25BC  # ▼
-            $down.Width = 28; $down.Height = 22; $down.Margin = '0,0,4,0'
-            $down.ToolTip = "Move '$($entry.Name)' down"
-            $down.Add_Click({
-                $stateRef.Value = Move-RipperConfigEditorListItem -List $stateRef.Value -Index $localIndex -Direction 1
-                & $rebuildList $itemsControl $stateRef
-            }.GetNewClosure())
-            [System.Windows.Controls.Grid]::SetColumn($down, 3)
-            $row.Children.Add($down) | Out-Null
-
-            $itemsControl.Items.Add($row) | Out-Null
-        }
-    }
-
     # Reference wrappers so closures can reassign the array.
     $metaRef = [pscustomobject]@{ Value = $stateMeta }
     $artRef  = [pscustomobject]@{ Value = $stateArt  }
     $syncRef = [pscustomobject]@{ Value = $stateSync }
 
-    & $rebuildList $metaList $metaRef
-    & $rebuildList $artList  $artRef
-    & $rebuildList $syncList $syncRef
+    Invoke-RipperConfigCheckboxRebuild -ItemsControl $metaList -StateRef $metaRef
+    Invoke-RipperConfigCheckboxRebuild -ItemsControl $artList  -StateRef $artRef
+    Invoke-RipperConfigCheckboxRebuild -ItemsControl $syncList -StateRef $syncRef
 
     # ---- Browse buttons -------------------------------------------
     $libBrowse.Add_Click({
