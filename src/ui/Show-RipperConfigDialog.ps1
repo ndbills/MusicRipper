@@ -1,0 +1,718 @@
+<#
+.SYNOPSIS
+    Phase 6.6.B: WPF tabbed config editor.
+
+.DESCRIPTION
+    A single tabbed window that lets a user edit every field in the
+    config object. Designed to replace the wall-of-Read-Host wizard
+    in setup/New-RipperConfig.ps1 for non-CLI users (and to be the
+    first-run hook from Start-Ripper when no config exists).
+
+    Tabs:
+      General        LibraryRoot (path+Browse), MusicBrainzUserAgent,
+                     EjectAfterRip, ContinuousMode,
+                     RetryPendingSyncOnStartup. Drive is read-only
+                     here -- it's managed by setup/Register-Drive.ps1
+                     which probes AccurateRip.
+      Metadata       Ordered checkbox list of metadata providers
+                     (drives cfg.MetadataProviders order).
+      Cover art      Ordered checkbox list of cover-art providers
+                     (drives cfg.CoverArtProviders order).
+      Sync           Ordered checkbox list of sync targets (drives
+                     cfg.SyncTargets), plus per-target paths
+                     (OneDriveSyncTargetRoot, SynologyUnc), the
+                     credential Set/Clear buttons, the
+                     SynologySyncReviewQueue checkbox, and
+                     LocalRetention combobox.
+      WireGuard      WireGuardTunnelName (no .conf install here --
+                     setup/New-RipperConfig still owns the install/
+                     SDDL flow), WireGuardAutoToggle,
+                     WireGuardKeepAliveBetweenDiscs.
+
+    Returns the saved config object (already persisted via
+    Save-RipperConfig) on OK, or $null on Cancel / window close.
+
+    Uses the same dispatcher-unhandled-exception sink pattern as
+    Show-BetweenDiscsDialog.
+
+.NOTES
+    Phase 6.6 explicit decision: NO live-reload. The contract is
+    "save and restart". The Configure... button on the between-discs
+    dialog (added in 6.6.C) will surface a "Restart MusicRipper to
+    apply." message after a save.
+
+    The pure-logic predicates (`Test-RipperConfigEditorComplete`,
+    `Move-RipperConfigEditorListItem`) are exported so the Pester
+    suite can cover them without spinning a Window.
+#>
+
+Set-StrictMode -Version 3.0
+
+# Load deps. ConfigPrompt gives us the folder/file picker shims
+# already used by the CLI (so the Browse buttons match the CLI Enter
+# behaviour visually). Config is required for Save + DPAPI helpers.
+# ConfigDiscovery feeds the option lists.
+$libRoot = Join-Path $PSScriptRoot '..\lib'
+Import-Module (Join-Path $libRoot 'ConfigPrompt.psd1')    -Force
+Import-Module (Join-Path $libRoot 'Config.psd1')          -Force
+Import-Module (Join-Path $libRoot 'ConfigDiscovery.psd1') -Force
+
+
+function Test-RipperConfigEditorComplete {
+<#
+.SYNOPSIS
+    Pure predicate: should the OK button be enabled given the current
+    in-progress config? Pulled out so tests don't need a Window.
+
+.DESCRIPTION
+    -FirstRun       LibraryRoot + a real (non-placeholder) MusicBrainz
+                    contact email + at least one sync target selected.
+                    These are the irreducible requirements for the
+                    rest of the pipeline to even function.
+    Otherwise       LibraryRoot only. (We let an existing user
+                    temporarily blank out MB or sync targets to
+                    experiment -- they already proved they could
+                    finish setup once.)
+#>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)] [pscustomobject]$Config,
+        [switch]$FirstRun
+    )
+    if (-not $Config.LibraryRoot)               { return $false }
+    if ($Config.LibraryRoot.Trim().Length -eq 0) { return $false }
+    if (-not $FirstRun) { return $true }
+
+    # First-run-only checks below.
+    $ua = $Config.MusicBrainzUserAgent
+    if (-not $ua)                          { return $false }
+    if ($ua -match 'unknown@example\.com') { return $false }
+    # Crude email regex: present + has @ and a dot in the domain.
+    if ($ua -notmatch '\(\s*\S+@\S+\.\S+\s*\)') { return $false }
+
+    $st = $Config.SyncTargets
+    if (-not $st -or @($st).Count -eq 0) { return $false }
+    return $true
+}
+
+function Move-RipperConfigEditorListItem {
+<#
+.SYNOPSIS
+    Pure helper: move the item at $Index of $List up (-1) or down
+    (+1), clamping at the ends. Returns the new array (does not
+    mutate the input).
+#>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)] [object[]]$List,
+        [Parameter(Mandatory)] [int]$Index,
+        [Parameter(Mandatory)] [ValidateSet(-1,1)] [int]$Direction
+    )
+    $n = $List.Count
+    if ($n -le 1)             { return @($List) }
+    if ($Index -lt 0 -or $Index -ge $n) { return @($List) }
+    $target = $Index + $Direction
+    if ($target -lt 0 -or $target -ge $n) { return @($List) }
+    $copy = @($List)
+    $tmp  = $copy[$Index]
+    $copy[$Index]  = $copy[$target]
+    $copy[$target] = $tmp
+    return $copy
+}
+
+function Get-RipperOrderedCheckboxState {
+<#
+.SYNOPSIS
+    Combine the saved order with the currently-discovered options
+    into a single ordered list of @{ Name; Checked } items.
+
+.DESCRIPTION
+    The on-disk array is the source of truth for ORDER + CHECKED;
+    discovery adds any new option (appended, unchecked) and drops
+    any saved name that no longer exists on disk.
+#>
+    [CmdletBinding()]
+    [OutputType([pscustomobject[]])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]]$Saved,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]]$Available
+    )
+    $availMap = @{}
+    foreach ($a in $Available) { $availMap[$a] = $true }
+    $out = New-Object 'System.Collections.Generic.List[pscustomobject]'
+    $seen = @{}
+    foreach ($name in $Saved) {
+        if ($availMap.ContainsKey($name) -and -not $seen.ContainsKey($name)) {
+            $out.Add([pscustomobject]@{ Name = $name; Checked = $true })
+            $seen[$name] = $true
+        }
+    }
+    foreach ($name in $Available) {
+        if (-not $seen.ContainsKey($name)) {
+            $out.Add([pscustomobject]@{ Name = $name; Checked = $false })
+            $seen[$name] = $true
+        }
+    }
+    return @($out)
+}
+
+
+function Show-RipperConfigDialog {
+<#
+.SYNOPSIS
+    Open the Phase 6.6.B WPF config editor.
+
+.PARAMETER Config
+    The starting config object. If omitted, a fresh
+    `New-RipperConfigObject -LibraryRoot ''` is used (intended for
+    the first-run path).
+
+.PARAMETER FirstRun
+    Tightens the OK-enable predicate (see
+    Test-RipperConfigEditorComplete) and changes the title bar.
+
+.PARAMETER ConfigPath
+    Override the on-disk save destination. Tests use this.
+
+.OUTPUTS
+    The saved config object on OK, or $null on Cancel.
+#>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [pscustomobject]$Config,
+        [switch]$FirstRun,
+        [string]$ConfigPath
+    )
+
+    Add-Type -AssemblyName PresentationFramework | Out-Null
+    Add-Type -AssemblyName PresentationCore      | Out-Null
+
+    if (-not $Config) {
+        $Config = New-RipperConfigObject -LibraryRoot ''
+    }
+
+    # Working copy so Cancel really cancels.
+    $cfg = [pscustomobject]@{}
+    foreach ($p in $Config.PSObject.Properties) {
+        Add-Member -InputObject $cfg -MemberType NoteProperty -Name $p.Name -Value $p.Value -Force
+    }
+
+    $availMeta = @(Get-RipperAvailableMetadataProviders)
+    $availArt  = @(Get-RipperAvailableCoverArtProviders)
+    $availSync = @(Get-RipperAvailableSyncTargets)
+
+    # Initial ordered states.
+    $stateMeta = Get-RipperOrderedCheckboxState -Saved (@($cfg.MetadataProviders))   -Available $availMeta
+    $stateArt  = Get-RipperOrderedCheckboxState -Saved (@($cfg.CoverArtProviders))   -Available $availArt
+    $stateSync = Get-RipperOrderedCheckboxState -Saved (@($cfg.SyncTargets))         -Available $availSync
+
+    $titleBase = if ($FirstRun) { 'MusicRipper - First-time setup' } else { 'MusicRipper - Settings' }
+    $titleEsc  = [System.Security.SecurityElement]::Escape($titleBase)
+
+    # The XAML is intentionally simple: every dynamic widget is named
+    # so we can wire it up imperatively below. Per-tab content sits
+    # in its own Grid so adding/removing fields later is local.
+    $xaml = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="$titleEsc"
+        Width="780" Height="640"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="CanResize"
+        MinWidth="640" MinHeight="520">
+  <Grid Margin="10">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <TabControl Grid.Row="0" x:Name="Tabs">
+
+      <!-- ====================== GENERAL ====================== -->
+      <TabItem Header="General">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="14">
+
+            <TextBlock Text="Library root" FontWeight="Bold"/>
+            <TextBlock Text="Where ripped albums land. Album folders go in &lt;LibraryRoot&gt;\&lt;Album Artist&gt;\&lt;Album&gt; (Year)\..."
+                       Foreground="#666" TextWrapping="Wrap" Margin="0,2,0,4"/>
+            <Grid Margin="0,0,0,14">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+              </Grid.ColumnDefinitions>
+              <TextBox x:Name="LibraryRootText" Grid.Column="0" Padding="4"
+                       ToolTip="Absolute path to the library root."/>
+              <Button  x:Name="LibraryRootBrowse" Grid.Column="1"
+                       Content="Browse..." Padding="10,4" Margin="6,0,0,0"
+                       ToolTip="Open a folder picker."/>
+            </Grid>
+
+            <TextBlock Text="MusicBrainz contact" FontWeight="Bold"/>
+            <TextBlock Text="MusicBrainz requires a contact string in the form 'AppName/Version ( email@example.com )' so they can reach out about misbehaving clients."
+                       Foreground="#666" TextWrapping="Wrap" Margin="0,2,0,4"/>
+            <TextBox x:Name="MbUaText" Padding="4" Margin="0,0,0,14"
+                     ToolTip="Format: 'MusicRipper/0.1 ( you@example.com )'"/>
+
+            <CheckBox x:Name="EjectCheck" Content="Eject the disc after each rip"
+                      Margin="0,0,0,8"
+                      ToolTip="Default on. The confirm dialog also exposes a per-rip override."/>
+
+            <CheckBox x:Name="ContinuousCheck" Content="Continuous mode (keep running between discs)"
+                      Margin="0,0,0,8"
+                      ToolTip="Default on. After each disc a between-discs dialog offers Rip Next / Quit."/>
+
+            <CheckBox x:Name="RetryPendingCheck" Content="Retry pending syncs at startup"
+                      Margin="0,0,0,14"
+                      ToolTip="Default on. Albums whose previous sync didn't finish (e.g. NAS offline) get retried before the first rip."/>
+
+            <Separator Margin="0,4,0,12"/>
+
+            <TextBlock Text="Optical drive" FontWeight="Bold"/>
+            <TextBlock x:Name="DriveInfoText"
+                       Foreground="#666" TextWrapping="Wrap" Margin="0,2,0,2"/>
+            <TextBlock Text="(Re-run setup\Register-Drive.ps1 to change drive selection or re-probe the AccurateRip offset.)"
+                       Foreground="#888" FontStyle="Italic" TextWrapping="Wrap"/>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <!-- ====================== METADATA ====================== -->
+      <TabItem Header="Metadata">
+        <Grid Margin="14">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+          </Grid.RowDefinitions>
+
+          <StackPanel Grid.Row="0">
+            <TextBlock Text="Disc-id metadata providers (in priority order)" FontWeight="Bold"/>
+            <TextBlock Text="Tried top-to-bottom for each disc. When two or more match, an extra synthesized 'Merged (...)' candidate is added (earlier providers win on conflict). Drag with the up/down buttons to reorder."
+                       Foreground="#666" TextWrapping="Wrap" Margin="0,2,0,8"/>
+          </StackPanel>
+
+          <Border Grid.Row="1" BorderBrush="#ccc" BorderThickness="1" Padding="6">
+            <ItemsControl x:Name="MetaList"/>
+          </Border>
+        </Grid>
+      </TabItem>
+
+      <!-- ====================== COVER ART ====================== -->
+      <TabItem Header="Cover art">
+        <Grid Margin="14">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+          </Grid.RowDefinitions>
+
+          <StackPanel Grid.Row="0">
+            <TextBlock Text="Cover-art providers (in priority order)" FontWeight="Bold"/>
+            <TextBlock Text="First non-empty bytes win. CoverArtArchive needs an MB ReleaseMbid and only fires for MB-derived candidates; iTunesSearch and Deezer fall back to artist+album text search."
+                       Foreground="#666" TextWrapping="Wrap" Margin="0,2,0,8"/>
+          </StackPanel>
+
+          <Border Grid.Row="1" BorderBrush="#ccc" BorderThickness="1" Padding="6">
+            <ItemsControl x:Name="ArtList"/>
+          </Border>
+        </Grid>
+      </TabItem>
+
+      <!-- ====================== SYNC ====================== -->
+      <TabItem Header="Sync">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="14">
+
+            <TextBlock Text="Sync targets (in invocation order)" FontWeight="Bold"/>
+            <TextBlock Text="Each sync target is invoked per album after a successful Library move. 'Stub' is a built-in marker target used for testing. Per-target results land in &lt;LibraryRoot&gt;\.musicripper\sync-state.json."
+                       Foreground="#666" TextWrapping="Wrap" Margin="0,2,0,8"/>
+            <Border BorderBrush="#ccc" BorderThickness="1" Padding="6" Margin="0,0,0,14">
+              <ItemsControl x:Name="SyncList"/>
+            </Border>
+
+            <TextBlock Text="OneDrive sync target root" FontWeight="Bold"/>
+            <TextBlock Text="Required when 'OneDrive' is enabled. Pick a folder inside your OneDrive that albums should be mirrored into."
+                       Foreground="#666" TextWrapping="Wrap" Margin="0,2,0,4"/>
+            <Grid Margin="0,0,0,12">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+              </Grid.ColumnDefinitions>
+              <TextBox x:Name="OneDriveText" Grid.Column="0" Padding="4"
+                       ToolTip="Absolute path to a folder inside your OneDrive."/>
+              <Button  x:Name="OneDriveBrowse" Grid.Column="1"
+                       Content="Browse..." Padding="10,4" Margin="6,0,0,0"/>
+            </Grid>
+
+            <TextBlock Text="Synology / NAS UNC path" FontWeight="Bold"/>
+            <TextBlock Text="Required when 'SynologyNAS' is enabled. e.g. \\nas\music. Any UNC server works -- the name is historical."
+                       Foreground="#666" TextWrapping="Wrap" Margin="0,2,0,4"/>
+            <TextBox x:Name="SynUncText" Padding="4" Margin="0,0,0,8"
+                     ToolTip="UNC path of the share, e.g. \\nas\music."/>
+
+            <CheckBox x:Name="SynRqCheck" Content="Mirror _ReviewQueue/ to the NAS too (reserved -- not yet wired up)"
+                      Margin="0,0,0,8" IsEnabled="False"
+                      ToolTip="Reserved for a future opt-in; currently unused by the SynologyNAS target."/>
+
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+              <TextBlock x:Name="CredStatusText" VerticalAlignment="Center"
+                         Margin="0,0,10,0" FontWeight="Bold"/>
+              <Button x:Name="CredSetButton"   Content="Set..."   Padding="10,4" Margin="0,0,6,0"
+                      ToolTip="Prompt for a username + password and store it via DPAPI (per-Windows-user, machine-bound)."/>
+              <Button x:Name="CredClearButton" Content="Clear"    Padding="10,4"
+                      ToolTip="Delete the stored credential so syncs use ambient session credentials."/>
+            </StackPanel>
+
+            <TextBlock Text="Local retention after successful sync" FontWeight="Bold"/>
+            <TextBlock Text="What to do with the local album folder after every configured sync target reports OK. No-op when no sync targets are configured or any target failed."
+                       Foreground="#666" TextWrapping="Wrap" Margin="0,2,0,4"/>
+            <ComboBox x:Name="RetentionCombo" Margin="0,0,0,8" Width="320" HorizontalAlignment="Left">
+              <ComboBoxItem Content="Keep"                     Tag="Keep"
+                            ToolTip="Never touch local files (default)."/>
+              <ComboBoxItem Content="Move to _Sent\ when synced" Tag="MoveToSentAfterAllSynced"
+                            ToolTip="Move folder to &lt;LibraryRoot&gt;\_Sent\ preserving the artist subdir."/>
+              <ComboBoxItem Content="Recycle when synced"      Tag="RecycleAfterAllSynced"
+                            ToolTip="Send folder to the Windows Recycle Bin (recoverable)."/>
+            </ComboBox>
+
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <!-- ====================== WIREGUARD ====================== -->
+      <TabItem Header="WireGuard">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="14">
+
+            <TextBlock Text="Tunnel name" FontWeight="Bold"/>
+            <TextBlock Text="Bare tunnel name (typically the .conf filename without extension) of a WireGuard tunnel installed via wireguard.exe /installtunnelservice. Leave blank for no VPN management."
+                       Foreground="#666" TextWrapping="Wrap" Margin="0,2,0,4"/>
+            <TextBox x:Name="WgTunnelText" Padding="4" Margin="0,0,0,4"
+                     ToolTip="Bare tunnel name, e.g. 'home-vpn' (no .conf suffix)."/>
+            <TextBlock Text="(Use setup\New-RipperConfig.ps1 to install a new .conf and grant the SDDL needed for unattended start/stop.)"
+                       Foreground="#888" FontStyle="Italic" TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+            <CheckBox x:Name="WgAutoCheck" Content="Auto-toggle tunnel around NAS syncs"
+                      Margin="0,0,0,8"
+                      ToolTip="Master switch. When off, MusicRipper never starts/stops the tunnel (e.g. always-on VPN)."/>
+
+            <CheckBox x:Name="WgKeepAliveCheck" Content="Keep tunnel up between discs (whole session)"
+                      Margin="0,0,0,8"
+                      ToolTip="When off (default), the tunnel comes up only for the duration of each individual sync. When on, the first sync pins it for the rest of the session and it's torn down at exit."/>
+
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+    </TabControl>
+
+    <!-- ====================== FOOTER ====================== -->
+    <Grid Grid.Row="1" Margin="0,10,0,0">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="Auto"/>
+      </Grid.ColumnDefinitions>
+      <TextBlock x:Name="ValidationText" Grid.Column="0"
+                 Foreground="#a00" VerticalAlignment="Center"
+                 TextWrapping="Wrap" Margin="0,0,10,0"/>
+      <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+        <Button x:Name="CancelButton" Content="Cancel" Width="110" Height="32" Margin="0,0,8,0"
+                ToolTip="Discard changes and close."/>
+        <Button x:Name="OkButton"     Content="Save"   Width="130" Height="32"
+                IsDefault="True" Background="#0a7" Foreground="White" FontWeight="Bold"
+                ToolTip="Save to %LOCALAPPDATA%\MusicRipper\config.json. Restart MusicRipper to apply."/>
+      </StackPanel>
+    </Grid>
+
+  </Grid>
+</Window>
+"@
+
+    $reader = [System.Xml.XmlNodeReader]::new(([xml]$xaml))
+    $window = [Windows.Markup.XamlReader]::Load($reader)
+
+    # Topmost-then-clear (Phase 5.11 lesson: pwsh host is minimised).
+    $window.Topmost = $true
+    $window.Add_Loaded({
+        $this.Activate() | Out-Null
+        $this.Topmost = $false
+    }.GetNewClosure())
+
+    # Dispatcher unhandled-exception sink.
+    $sidecar = Join-Path $env:LOCALAPPDATA 'MusicRipper\logs\config-dialog-dispatcher.log'
+    $window.Dispatcher.add_UnhandledException({
+        param($s, $e)
+        try {
+            $ex  = $e.Exception
+            $msg = "`n=== $(Get-Date -Format o) ===`n$($ex.GetType().FullName): $($ex.Message)`n$($ex.StackTrace)"
+            if ($ex.InnerException) {
+                $msg += "`n-- inner: $($ex.InnerException.GetType().FullName): $($ex.InnerException.Message)"
+            }
+            try {
+                $dir = Split-Path -Parent $sidecar
+                if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+                Add-Content -LiteralPath $sidecar -Value $msg -ErrorAction SilentlyContinue
+            } catch {}
+        } catch {}
+        $e.Handled = $true
+    })
+
+    # ---- find named widgets ---------------------------------------
+    $libText      = $window.FindName('LibraryRootText')
+    $libBrowse    = $window.FindName('LibraryRootBrowse')
+    $mbUaText     = $window.FindName('MbUaText')
+    $ejectCheck   = $window.FindName('EjectCheck')
+    $contCheck    = $window.FindName('ContinuousCheck')
+    $retryCheck   = $window.FindName('RetryPendingCheck')
+    $driveInfo    = $window.FindName('DriveInfoText')
+
+    $metaList     = $window.FindName('MetaList')
+    $artList      = $window.FindName('ArtList')
+    $syncList     = $window.FindName('SyncList')
+
+    $oneDriveText  = $window.FindName('OneDriveText')
+    $oneDriveBrowse= $window.FindName('OneDriveBrowse')
+    $synUncText    = $window.FindName('SynUncText')
+    $synRqCheck    = $window.FindName('SynRqCheck')
+    $credStatus    = $window.FindName('CredStatusText')
+    $credSet       = $window.FindName('CredSetButton')
+    $credClear     = $window.FindName('CredClearButton')
+    $retentionCb   = $window.FindName('RetentionCombo')
+
+    $wgTunnelText  = $window.FindName('WgTunnelText')
+    $wgAutoCheck   = $window.FindName('WgAutoCheck')
+    $wgKeepCheck   = $window.FindName('WgKeepAliveCheck')
+
+    $valText       = $window.FindName('ValidationText')
+    $okBtn         = $window.FindName('OkButton')
+    $cancelBtn     = $window.FindName('CancelButton')
+
+    # ---- seed values from $cfg ------------------------------------
+    $libText.Text       = if ($cfg.LibraryRoot)            { [string]$cfg.LibraryRoot } else { '' }
+    $mbUaText.Text      = if ($cfg.MusicBrainzUserAgent)   { [string]$cfg.MusicBrainzUserAgent } else { '' }
+    $ejectCheck.IsChecked  = [bool]$cfg.EjectAfterRip
+    $contCheck.IsChecked   = [bool]$cfg.ContinuousMode
+    $retryCheck.IsChecked  = [bool]$cfg.RetryPendingSyncOnStartup
+    $oneDriveText.Text  = if ($cfg.OneDriveSyncTargetRoot) { [string]$cfg.OneDriveSyncTargetRoot } else { '' }
+    $synUncText.Text    = if ($cfg.SynologyUnc)            { [string]$cfg.SynologyUnc } else { '' }
+    $synRqCheck.IsChecked  = [bool]$cfg.SynologySyncReviewQueue
+    $wgTunnelText.Text  = if ($cfg.WireGuardTunnelName)    { [string]$cfg.WireGuardTunnelName } else { '' }
+    $wgAutoCheck.IsChecked = [bool]$cfg.WireGuardAutoToggle
+    $wgKeepCheck.IsChecked = [bool]$cfg.WireGuardKeepAliveBetweenDiscs
+
+    foreach ($it in $retentionCb.Items) {
+        if ([string]$it.Tag -eq [string]$cfg.LocalRetention) {
+            $retentionCb.SelectedItem = $it
+            break
+        }
+    }
+    if (-not $retentionCb.SelectedItem) { $retentionCb.SelectedIndex = 0 }
+
+    $driveLetter = if ($cfg.PSObject.Properties['DriveLetter']) { $cfg.DriveLetter } else { $null }
+    $driveOffset = if ($cfg.PSObject.Properties['DriveOffset']) { $cfg.DriveOffset } else { $null }
+    $driveInfo.Text = if ($driveLetter) {
+        "Drive: $driveLetter   |   AccurateRip offset: $(if ($null -ne $driveOffset) { $driveOffset } else { '(unknown)' })"
+    } else {
+        "Drive: (not registered yet)"
+    }
+
+    $credStatus.Text = if ([bool]$cfg.HasSynologyCredential) { "Credential: stored (DPAPI)" } else { "Credential: none stored" }
+
+    # ---- ordered checkbox-list rendering --------------------------
+    $rebuildList = {
+        param($itemsControl, $stateRef)
+        $itemsControl.Items.Clear()
+        for ($i = 0; $i -lt $stateRef.Value.Count; $i++) {
+            $entry  = $stateRef.Value[$i]
+            $row    = New-Object System.Windows.Controls.Grid
+            $row.Margin = '0,2,0,2'
+            $col1 = New-Object System.Windows.Controls.ColumnDefinition; $col1.Width = 'Auto'
+            $col2 = New-Object System.Windows.Controls.ColumnDefinition; $col2.Width = '*'
+            $col3 = New-Object System.Windows.Controls.ColumnDefinition; $col3.Width = 'Auto'
+            $col4 = New-Object System.Windows.Controls.ColumnDefinition; $col4.Width = 'Auto'
+            $row.ColumnDefinitions.Add($col1); $row.ColumnDefinitions.Add($col2)
+            $row.ColumnDefinitions.Add($col3); $row.ColumnDefinitions.Add($col4)
+
+            $cb = New-Object System.Windows.Controls.CheckBox
+            $cb.Content   = $entry.Name
+            $cb.IsChecked = [bool]$entry.Checked
+            $cb.VerticalAlignment = 'Center'
+            $cb.Margin    = '4,0,0,0'
+            $localIndex   = $i
+            $cb.Add_Checked({   $stateRef.Value[$localIndex].Checked = $true  }.GetNewClosure())
+            $cb.Add_Unchecked({ $stateRef.Value[$localIndex].Checked = $false }.GetNewClosure())
+            [System.Windows.Controls.Grid]::SetColumn($cb, 0)
+            $row.Children.Add($cb) | Out-Null
+
+            $up = New-Object System.Windows.Controls.Button
+            $up.Content = [char]0x25B2  # ▲
+            $up.Width = 28; $up.Height = 22; $up.Margin = '6,0,2,0'
+            $up.ToolTip = "Move '$($entry.Name)' up"
+            $up.Add_Click({
+                $stateRef.Value = Move-RipperConfigEditorListItem -List $stateRef.Value -Index $localIndex -Direction -1
+                & $rebuildList $itemsControl $stateRef
+            }.GetNewClosure())
+            [System.Windows.Controls.Grid]::SetColumn($up, 2)
+            $row.Children.Add($up) | Out-Null
+
+            $down = New-Object System.Windows.Controls.Button
+            $down.Content = [char]0x25BC  # ▼
+            $down.Width = 28; $down.Height = 22; $down.Margin = '0,0,4,0'
+            $down.ToolTip = "Move '$($entry.Name)' down"
+            $down.Add_Click({
+                $stateRef.Value = Move-RipperConfigEditorListItem -List $stateRef.Value -Index $localIndex -Direction 1
+                & $rebuildList $itemsControl $stateRef
+            }.GetNewClosure())
+            [System.Windows.Controls.Grid]::SetColumn($down, 3)
+            $row.Children.Add($down) | Out-Null
+
+            $itemsControl.Items.Add($row) | Out-Null
+        }
+    }
+
+    # Reference wrappers so closures can reassign the array.
+    $metaRef = [pscustomobject]@{ Value = $stateMeta }
+    $artRef  = [pscustomobject]@{ Value = $stateArt  }
+    $syncRef = [pscustomobject]@{ Value = $stateSync }
+
+    & $rebuildList $metaList $metaRef
+    & $rebuildList $artList  $artRef
+    & $rebuildList $syncList $syncRef
+
+    # ---- Browse buttons -------------------------------------------
+    $libBrowse.Add_Click({
+        $picked = Show-RipperFolderPicker -Description 'Pick the music library root' -SeedPath $libText.Text
+        if ($picked) { $libText.Text = $picked }
+    }.GetNewClosure())
+
+    $oneDriveBrowse.Add_Click({
+        $picked = Show-RipperFolderPicker -Description 'Pick a folder inside OneDrive to mirror albums into' -SeedPath $oneDriveText.Text
+        if ($picked) { $oneDriveText.Text = $picked }
+    }.GetNewClosure())
+
+    # ---- Credential buttons ---------------------------------------
+    $credSet.Add_Click({
+        try {
+            $c = Get-Credential -Message 'Enter the username + password used to mount the NAS share'
+            if ($c) {
+                Save-RipperCredential -Credential $c
+                $cfg.HasSynologyCredential = $true
+                $credStatus.Text = "Credential: stored (DPAPI)"
+            }
+        } catch {
+            [System.Windows.MessageBox]::Show("Failed to save credential: $($_.Exception.Message)", 'MusicRipper', 'OK', 'Error') | Out-Null
+        }
+    }.GetNewClosure())
+
+    $credClear.Add_Click({
+        try {
+            $credPath = Join-Path (Get-RipperConfigRoot) 'credentials.clixml'
+            if (Test-Path -LiteralPath $credPath) {
+                Remove-Item -LiteralPath $credPath -Force
+            }
+            $cfg.HasSynologyCredential = $false
+            $credStatus.Text = "Credential: none stored"
+        } catch {
+            [System.Windows.MessageBox]::Show("Failed to clear credential: $($_.Exception.Message)", 'MusicRipper', 'OK', 'Error') | Out-Null
+        }
+    }.GetNewClosure())
+
+    # ---- Validation / OK enable -----------------------------------
+    $applyToCfg = {
+        # Mutate $cfg in-place from current widget values. Used both
+        # by the live OK-enable check and by the final Save.
+        $cfg.LibraryRoot                  = $libText.Text.Trim()
+        $cfg.MusicBrainzUserAgent         = $mbUaText.Text.Trim()
+        $cfg.EjectAfterRip                = [bool]$ejectCheck.IsChecked
+        $cfg.ContinuousMode               = [bool]$contCheck.IsChecked
+        $cfg.RetryPendingSyncOnStartup    = [bool]$retryCheck.IsChecked
+        $cfg.OneDriveSyncTargetRoot       = $(if ($oneDriveText.Text.Trim()) { $oneDriveText.Text.Trim() } else { $null })
+        $cfg.SynologyUnc                  = $(if ($synUncText.Text.Trim())  { $synUncText.Text.Trim() }  else { $null })
+        $cfg.SynologySyncReviewQueue      = [bool]$synRqCheck.IsChecked
+        $cfg.WireGuardTunnelName          = $(if ($wgTunnelText.Text.Trim()) { $wgTunnelText.Text.Trim() } else { $null })
+        $cfg.WireGuardAutoToggle          = [bool]$wgAutoCheck.IsChecked
+        $cfg.WireGuardKeepAliveBetweenDiscs = [bool]$wgKeepCheck.IsChecked
+
+        $sel = $retentionCb.SelectedItem
+        if ($sel) { $cfg.LocalRetention = [string]$sel.Tag }
+
+        $cfg.MetadataProviders = [string[]]@($metaRef.Value | Where-Object Checked | ForEach-Object Name)
+        $cfg.CoverArtProviders = [string[]]@($artRef.Value  | Where-Object Checked | ForEach-Object Name)
+        $cfg.SyncTargets       = [string[]]@($syncRef.Value | Where-Object Checked | ForEach-Object Name)
+    }
+
+    $refreshOk = {
+        & $applyToCfg
+        $ok = Test-RipperConfigEditorComplete -Config $cfg -FirstRun:$FirstRun
+        $okBtn.IsEnabled = $ok
+        if ($ok) {
+            $valText.Text = ''
+        } elseif ($FirstRun) {
+            $missing = New-Object System.Collections.Generic.List[string]
+            if (-not $cfg.LibraryRoot)                                        { $missing.Add('Library root') }
+            if (-not $cfg.MusicBrainzUserAgent -or
+                $cfg.MusicBrainzUserAgent -match 'unknown@example\.com' -or
+                $cfg.MusicBrainzUserAgent -notmatch '\(\s*\S+@\S+\.\S+\s*\)') { $missing.Add('MusicBrainz contact (with real email)') }
+            if (-not $cfg.SyncTargets -or @($cfg.SyncTargets).Count -eq 0)    { $missing.Add('at least one sync target') }
+            $valText.Text = "Required: " + ($missing -join '; ')
+        } else {
+            $valText.Text = "Library root is required."
+        }
+    }
+
+    # Wire change events so OK enables/disables live.
+    foreach ($tb in @($libText, $mbUaText, $oneDriveText, $synUncText, $wgTunnelText)) {
+        $tb.Add_TextChanged({ & $refreshOk }.GetNewClosure())
+    }
+    foreach ($cb in @($ejectCheck, $contCheck, $retryCheck, $synRqCheck, $wgAutoCheck, $wgKeepCheck)) {
+        $cb.Add_Checked(  { & $refreshOk }.GetNewClosure())
+        $cb.Add_Unchecked({ & $refreshOk }.GetNewClosure())
+    }
+    $retentionCb.Add_SelectionChanged({ & $refreshOk }.GetNewClosure())
+    # Sync-list checkbox toggles also update the predicate; the
+    # individual cb.Add_Checked closures already mutate $stateSync,
+    # but they need to also call $refreshOk to propagate. Cheapest
+    # path: re-render hooks the new cbs via $rebuildList, but we want
+    # the OK to refresh too -- so do it after each click via
+    # PreviewMouseUp on the items panel.
+    $syncList.AddHandler(
+        [System.Windows.Controls.Primitives.ToggleButton]::CheckedEvent,
+        [System.Windows.RoutedEventHandler]{ & $refreshOk })
+    $syncList.AddHandler(
+        [System.Windows.Controls.Primitives.ToggleButton]::UncheckedEvent,
+        [System.Windows.RoutedEventHandler]{ & $refreshOk })
+
+    & $refreshOk
+
+    # ---- OK / Cancel ----------------------------------------------
+    $script:result = $null
+    $okBtn.Add_Click({
+        & $applyToCfg
+        if (-not (Test-RipperConfigEditorComplete -Config $cfg -FirstRun:$FirstRun)) {
+            return
+        }
+        try {
+            if ($ConfigPath) {
+                Save-RipperConfig -Config $cfg -Path $ConfigPath
+            } else {
+                Save-RipperConfig -Config $cfg
+            }
+            $script:result = $cfg
+            $window.DialogResult = $true
+            $window.Close()
+        } catch {
+            [System.Windows.MessageBox]::Show("Failed to save config: $($_.Exception.Message)", 'MusicRipper', 'OK', 'Error') | Out-Null
+        }
+    }.GetNewClosure())
+
+    $cancelBtn.Add_Click({
+        $script:result = $null
+        $window.DialogResult = $false
+        $window.Close()
+    }.GetNewClosure())
+
+    [void]$window.ShowDialog()
+    return $script:result
+}
