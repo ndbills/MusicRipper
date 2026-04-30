@@ -95,9 +95,61 @@ Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 . (Join-Path $repoRoot 'src\ui\Show-CredentialDialog.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-RegisterDriveDialog.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-RipperConfigDialog.ps1')
+. (Join-Path $repoRoot 'src\ui\Show-FatalErrorDialog.ps1')
 
 $logPath = Start-RipperLog -Context 'start-ripper'
 Write-RipperLog INFO 'Start-Ripper' 'Phase 5 entry: config + disc-id + metadata + confirm + rip + quality/tag/move.'
+
+# Phase 7: top-level safety net. Per-disc errors are caught inside
+# Invoke-RipperOneDiscCycle and surfaced via plain MessageBox so the
+# rip loop continues. This `trap` catches anything that escapes that
+# layer -- startup wiring problems, the resync flow, between-discs
+# polish, the WireGuard cleanup blocks, anything in helper-function
+# bodies that wasn't try/catch'd. The trap shows the friendly fatal-
+# error dialog (Copy-log-path button + Open-log-folder), logs the
+# full exception detail, then exits with non-zero so an outer caller
+# (Install-MusicRipper, scheduled task, future GUI launcher) can tell
+# something went wrong.
+#
+# Why `trap` instead of a giant try/catch around the script body:
+# the body is ~1000 lines spanning helpers, the resync block, the
+# disc loop, and exit-time WG cleanup. A trap is a single-statement
+# script-scope handler that fires on any uncaught script-terminating
+# error, which is exactly the layer we want to handle.
+trap {
+    $err = $_
+    $exception = if ($err -is [System.Management.Automation.ErrorRecord]) { $err.Exception } else { [Exception]$err }
+    try {
+        Write-RipperLog ERROR 'Start-Ripper' "FATAL: $($exception.GetType().FullName): $($exception.Message)"
+        if ($err.ScriptStackTrace) {
+            Write-RipperLog ERROR 'Start-Ripper' "Stack: $($err.ScriptStackTrace)"
+        }
+        if ($exception.StackTrace) {
+            Write-RipperLog ERROR 'Start-Ripper' "CLR Stack: $($exception.StackTrace)"
+        }
+    } catch {
+        # Logging itself failed (probably never started). Fall through
+        # to the dialog regardless so the user sees something.
+    }
+    try {
+        $activeLog = $null
+        try { $activeLog = Get-RipperLogPath } catch {}
+        Show-RipperFatalErrorDialog -Exception $exception -LogPath $activeLog
+    } catch {
+        # WPF dialog itself failed (broken pwsh, missing PresentationFramework).
+        # Last-ditch fallback so the parent gets *something*.
+        try {
+            Add-Type -AssemblyName System.Windows.Forms | Out-Null
+            [System.Windows.Forms.MessageBox]::Show(
+                "MusicRipper hit an unrecoverable error and the friendly dialog also failed:`n`n  $($exception.Message)`n`nPlease share %LOCALAPPDATA%\MusicRipper\logs\ with the maintainer.",
+                'MusicRipper - fatal error',
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        } catch {}
+    }
+    try { Stop-RipperLog } catch {}
+    exit 1
+}
 
 # Phase 5.7: session-scoped state shared across continuous-mode iterations.
 # Reset implicitly each Start-Ripper launch (script-scope locals).
