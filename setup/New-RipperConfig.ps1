@@ -46,8 +46,9 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1')  -Force
-Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
+Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1')        -Force
+Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1')       -Force
+Import-Module (Join-Path $repoRoot 'src\lib\ConfigPrompt.psd1') -Force
 
 Start-RipperLog -Context 'new-ripper-config' | Out-Null
 
@@ -205,29 +206,34 @@ if ($existing) {
 }
 
 # --- Library root (required) ----------------------------------------------
-$defaultLib = if ($existing) { $existing.LibraryRoot } else { Join-Path ([Environment]::GetFolderPath('MyMusic')) 'MusicRipper' }
-$libraryRoot = Read-WithDefault -Prompt 'Library root path' -Default $defaultLib
-if ([string]::IsNullOrWhiteSpace($libraryRoot)) { throw "Library root is required." }
+Write-RipperConfigSection 'Library'
+$defaultLib = if ($existing) { [string]$existing.LibraryRoot } else { Join-Path ([Environment]::GetFolderPath('MyMusic')) 'MusicRipper' }
+$libraryRoot = Read-RipperPathPrompt `
+    -Label 'Library root path' `
+    -Current $defaultLib `
+    -Type Folder `
+    -AllowClear $false
+if ([string]::IsNullOrWhiteSpace($libraryRoot)) { throw 'Library root is required.' }
 if (-not (Test-Path -LiteralPath $libraryRoot)) {
     New-Item -ItemType Directory -Path $libraryRoot -Force | Out-Null
     Write-RipperLog INFO 'New-RipperConfig' "Created library root '$libraryRoot'."
 }
 
 # --- MusicBrainz UA / contact email ---------------------------------------
+Write-RipperConfigSection 'MusicBrainz contact (required by their ToS)'
 $defaultUa = if ($existing) { $existing.MusicBrainzUserAgent } else { 'MusicRipper/0.1 ( unknown@example.com )' }
-$email = Read-WithDefault -Prompt 'MusicBrainz contact email (required by their ToS)' `
+$email = Read-WithDefault -Prompt 'MusicBrainz contact email' `
                           -Default ($defaultUa -replace '.*\(\s*', '' -replace '\s*\).*', '')
 $ua = "MusicRipper/0.1 ( $email )"
 
 # --- OneDrive (optional, Phase 6.2) --------------------------------------
-# Stores cfg.OneDriveSyncTargetRoot -- the absolute folder under
-# OneDrive that ripped albums get mirrored into. We pop a Windows
-# Forms FolderBrowserDialog seeded at the user's OneDrive root (looked
-# up via HKCU\Software\Microsoft\OneDrive\UserFolder) so the user can
-# just navigate inside it instead of typing the path. Cancelling the
-# dialog leaves the field empty -- the OneDrive sync target then
-# fails fast at sync time with a clear "not configured" message rather
-# than silently doing nothing.
+# Stores cfg.OneDriveSyncTargetRoot. Read-RipperPathPrompt opens a
+# FolderBrowserDialog seeded at the user's OneDrive root (HKCU
+# \Software\Microsoft\OneDrive\UserFolder) when the user presses
+# Enter on a fresh field or types 'pick' on an existing one.
+# Cancelling the picker keeps the existing value (or leaves it
+# unset), and '-' explicitly clears.
+Write-RipperConfigSection 'OneDrive sync target (optional)'
 . (Join-Path $repoRoot 'src\sync\Sync-ToOneDrive.ps1')
 $defaultOd = if ($existing -and $existing.PSObject.Properties['OneDriveSyncTargetRoot']) { [string]$existing.OneDriveSyncTargetRoot } else { '' }
 $oneDriveRoot = Get-RipperOneDriveUserFolder
@@ -236,45 +242,12 @@ if ($oneDriveRoot) {
 } else {
     Write-Host "OneDrive client not detected (HKCU\\Software\\Microsoft\\OneDrive\\UserFolder missing). You can still pick a folder manually." -ForegroundColor Yellow
 }
-$prompt = if ($defaultOd) {
-    "OneDrive sync target root [$defaultOd] (Enter = keep, 'pick' to browse, '-' to clear)"
-} elseif ($oneDriveRoot) {
-    "OneDrive sync target root (Enter or 'pick' = browse from $oneDriveRoot, '-' to skip)"
-} else {
-    "OneDrive sync target root (Enter or 'pick' = browse, '-' to skip)"
-}
-$ans = Read-Host $prompt
-$oneDrive = $defaultOd
-$ansTrim = $ans.Trim()
-if ($ansTrim -eq '-') {
-    $oneDrive = ''
-} elseif ([string]::IsNullOrWhiteSpace($ans) -and $defaultOd) {
-    # Enter with an existing value = keep it; do not pop the dialog.
-    $oneDrive = $defaultOd
-} elseif ([string]::IsNullOrWhiteSpace($ans) -or $ansTrim.ToLowerInvariant() -eq 'pick') {
-    # Browse. Use Windows Forms FolderBrowserDialog -- ships with
-    # every Windows install, no extra dependencies. Seed at the
-    # registered OneDrive root so the user can just navigate inside
-    # it; if no OneDrive is detected, seed at the existing value or
-    # %USERPROFILE%.
-    Add-Type -AssemblyName System.Windows.Forms | Out-Null
-    $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dlg.Description = 'Select the OneDrive subfolder where ripped albums should be mirrored to. Cancel to skip the OneDrive sync target.'
-    $dlg.UseDescriptionForTitle = $true
-    $dlg.ShowNewFolderButton = $true
-    $seed = if ($defaultOd -and (Test-Path -LiteralPath $defaultOd)) { $defaultOd }
-            elseif ($oneDriveRoot) { $oneDriveRoot }
-            else { [Environment]::GetFolderPath('UserProfile') }
-    $dlg.SelectedPath = $seed
-    if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-        $oneDrive = $dlg.SelectedPath
-        Write-Host "  OneDrive sync target -> $oneDrive" -ForegroundColor Green
-    } else {
-        Write-Host "  OneDrive sync target left as: $(if ($defaultOd) { $defaultOd } else { '(not set)' })" -ForegroundColor DarkGray
-    }
-} else {
-    $oneDrive = $ansTrim
-}
+$oneDrive = Read-RipperPathPrompt `
+    -Label 'OneDrive sync target root' `
+    -Current $defaultOd `
+    -Type Folder `
+    -SeedRoot $oneDriveRoot `
+    -AllowClear $true
 if ([string]::IsNullOrWhiteSpace($oneDrive)) { $oneDrive = $null }
 elseif (-not (Test-Path -LiteralPath $oneDrive)) {
     Write-Warning "OneDriveSyncTargetRoot '$oneDrive' does not exist on disk. The OneDrive sync target will report Failed until the folder exists."
@@ -286,6 +259,7 @@ elseif (-not (Test-Path -LiteralPath $oneDrive)) {
 # credential lives in credentials.clixml; we only re-prompt when the
 # user opts in, so re-running setup never silently asks for the NAS
 # password again.
+Write-RipperConfigSection 'Synology NAS sync target (optional)'
 $defaultSyn = if ($existing) { $existing.SynologyUnc } else { '' }
 $syn = Read-WithDefault -Prompt 'Synology NAS UNC path, e.g. \\nas\music (blank to skip)' -Default $defaultSyn
 if ([string]::IsNullOrWhiteSpace($syn)) { $syn = $null }
@@ -354,6 +328,8 @@ if ($syn) {
 #      + Grant-RipperVpnTunnelControl. This is the ONE UAC prompt.
 #   4. Save WireGuardTunnelName + WireGuardAutoToggle to cfg.
 
+if ($syn) { Write-RipperConfigSection 'WireGuard auto-toggle (optional)' }
+
 $wgTunnelName = $null
 if ($existing -and $existing.PSObject.Properties['WireGuardTunnelName']) {
     $wgTunnelName = $existing.WireGuardTunnelName
@@ -380,8 +356,13 @@ if ($syn) {
     }
 
     if ($wgWanted) {
-        $confPath = Read-Host 'Path to WireGuard .conf file (blank to skip)'
-        $confPath = $confPath.Trim().Trim('"').Trim("'")
+        $confPath = Read-RipperPathPrompt `
+            -Label 'Path to WireGuard .conf file' `
+            -Current '' `
+            -Type File `
+            -FileFilter 'WireGuard config (*.conf)|*.conf|All files (*.*)|*.*' `
+            -AllowClear $true `
+            -MustExist $true
         if ([string]::IsNullOrWhiteSpace($confPath)) {
             Write-RipperLog INFO 'New-RipperConfig' 'WireGuard setup skipped (no .conf path provided).'
         } elseif (-not (Test-Path -LiteralPath $confPath)) {
@@ -537,6 +518,7 @@ exit `$exitCode
 # Names that don't match a known provider are accepted but warned about
 # (the orchestrator skips unknowns at runtime with a WARN log line).
 # ($knownMd / $knownCov were computed at the top of the script.)
+Write-RipperConfigSection 'Metadata + cover-art providers'
 
 function Read-ProviderList {
     [CmdletBinding()]
@@ -568,6 +550,7 @@ $coverArtProviders = Read-ProviderList -Prompt 'Cover-art providers (priority or
 # wait for green check, eject, repeat). The confirm dialog still
 # surfaces a per-rip checkbox seeded from this value, so power users
 # can flip it per-disc without editing the config.
+Write-RipperConfigSection 'Per-rip behavior'
 $defaultEject = if ($existing -and $existing.PSObject.Properties['EjectAfterRip']) { [bool]$existing.EjectAfterRip } else { $true }
 $ejectStr = Read-WithDefault -Prompt 'Eject disc after rip? (Y/N)' -Default ($(if ($defaultEject) { 'Y' } else { 'N' }))
 $ejectAfterRip = ($ejectStr -match '^\s*[YyTt1]')
@@ -586,6 +569,7 @@ $continuousMode = ($contStr -match '^\s*[YyTt1]')
 # Library move. Built-in 'Stub' is for testing the orchestrator without
 # a real off-machine target. Real targets land in 6.2 (OneDrive) and
 # 6.3 (SynologyNAS). Empty = no sync (current behaviour).
+Write-RipperConfigSection 'Sync targets + retention'
 $knownSync   = @('Stub','OneDrive','SynologyNAS')
 # Wrap the whole `if` expression in @(), not just the truthy branch.
 # Under Strict Mode 3.0, `$x = if(...) { ... } else { @() }` produces
