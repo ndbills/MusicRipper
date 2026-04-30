@@ -82,6 +82,21 @@ function Test-RipperConfigEditorComplete {
     )
     if (-not $Config.LibraryRoot)               { return $false }
     if ($Config.LibraryRoot.Trim().Length -eq 0) { return $false }
+
+    # Cross-field rule (applies in BOTH first-run and edit mode):
+    # if OneDrive is an enabled sync target, OneDriveSyncTargetRoot
+    # must be set, otherwise sync would fail at runtime.
+    $st = @($Config.SyncTargets)
+    if ($st -contains 'OneDrive') {
+        $od = $Config.OneDriveSyncTargetRoot
+        if (-not $od -or ([string]$od).Trim().Length -eq 0) { return $false }
+    }
+    # Same rule for SynologyNAS -- requires the UNC share to be set.
+    if ($st -contains 'SynologyNAS') {
+        $unc = $Config.SynologyUnc
+        if (-not $unc -or ([string]$unc).Trim().Length -eq 0) { return $false }
+    }
+
     if (-not $FirstRun) { return $true }
 
     # First-run-only checks below.
@@ -631,7 +646,12 @@ function Show-RipperConfigDialog {
     }.GetNewClosure())
 
     $oneDriveBrowse.Add_Click({
-        $picked = Show-RipperFolderPicker -Description 'Pick a folder inside OneDrive to mirror albums into' -SeedPath $oneDriveText.Text
+        $seed = if ($oneDriveText.Text -and $oneDriveText.Text.Trim()) {
+            $oneDriveText.Text
+        } else {
+            Get-RipperOneDriveRoot
+        }
+        $picked = Show-RipperFolderPicker -Description 'Pick a folder inside OneDrive to mirror albums into' -SeedPath $seed
         if ($picked) { $oneDriveText.Text = $picked }
     }.GetNewClosure())
 
@@ -699,9 +719,27 @@ function Show-RipperConfigDialog {
                 $cfg.MusicBrainzUserAgent -match 'unknown@example\.com' -or
                 $cfg.MusicBrainzUserAgent -notmatch '\(\s*\S+@\S+\.\S+\s*\)') { $missing.Add('MusicBrainz contact (with real email)') }
             if (-not $cfg.SyncTargets -or @($cfg.SyncTargets).Count -eq 0)    { $missing.Add('at least one sync target') }
+            if (@($cfg.SyncTargets) -contains 'OneDrive' -and
+                (-not $cfg.OneDriveSyncTargetRoot -or
+                 ([string]$cfg.OneDriveSyncTargetRoot).Trim().Length -eq 0))  { $missing.Add('OneDrive folder (required by the OneDrive sync target)') }
+            if (@($cfg.SyncTargets) -contains 'SynologyNAS' -and
+                (-not $cfg.SynologyUnc -or
+                 ([string]$cfg.SynologyUnc).Trim().Length -eq 0))             { $missing.Add('Synology UNC path (required by the SynologyNAS sync target)') }
             $valText.Text = "Required: " + ($missing -join '; ')
         } else {
-            $valText.Text = "Library root is required."
+            $bits = New-Object System.Collections.Generic.List[string]
+            if (-not $cfg.LibraryRoot) { $bits.Add('Library root is required.') }
+            if (@($cfg.SyncTargets) -contains 'OneDrive' -and
+                (-not $cfg.OneDriveSyncTargetRoot -or
+                 ([string]$cfg.OneDriveSyncTargetRoot).Trim().Length -eq 0)) {
+                $bits.Add('OneDrive sync target is enabled -- pick a OneDrive folder.')
+            }
+            if (@($cfg.SyncTargets) -contains 'SynologyNAS' -and
+                (-not $cfg.SynologyUnc -or
+                 ([string]$cfg.SynologyUnc).Trim().Length -eq 0)) {
+                $bits.Add('SynologyNAS sync target is enabled -- enter the NAS UNC path.')
+            }
+            $valText.Text = ($bits -join ' ')
         }
     }
 

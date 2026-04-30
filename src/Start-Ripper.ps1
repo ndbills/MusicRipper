@@ -92,6 +92,7 @@ Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 . (Join-Path $repoRoot 'src\ui\Show-BetweenDiscsDialog.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-DuplicateDiscDialog.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-TargetExistsDialog.ps1')
+. (Join-Path $repoRoot 'src\ui\Show-RipperConfigDialog.ps1')
 
 $logPath = Start-RipperLog -Context 'start-ripper'
 Write-RipperLog INFO 'Start-Ripper' 'Phase 5 entry: config + disc-id + metadata + confirm + rip + quality/tag/move.'
@@ -209,10 +210,19 @@ namespace MusicRipper {
 # --- Config check ----------------------------------------------------------
 $configPath = Get-RipperConfigPath
 if (-not (Test-Path -LiteralPath $configPath)) {
-    Show-RipperInfo "Config not found at $configPath.`n`nRun setup\New-RipperConfig.ps1 first." `
-        'MusicRipper' 'Warning'
-    Stop-RipperLog
-    return
+    Write-RipperLog INFO 'Start-Ripper' "No config at '$configPath' -- launching first-run config editor."
+    $configDir = Split-Path -Parent $configPath
+    if (-not (Test-Path -LiteralPath $configDir)) {
+        New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+    }
+    $saved = Show-RipperConfigDialog -FirstRun -ConfigPath $configPath
+    if (-not $saved -or -not (Test-Path -LiteralPath $configPath)) {
+        Show-RipperInfo "Setup cancelled. MusicRipper needs a config to run.`n`nRe-launch when you're ready to finish setup, or run setup\New-RipperConfig.ps1 from a terminal." `
+            'MusicRipper' 'Warning'
+        Stop-RipperLog
+        return
+    }
+    Write-RipperLog INFO 'Start-Ripper' "First-run config saved to '$configPath'."
 }
 $cfg = Import-RipperConfig
 

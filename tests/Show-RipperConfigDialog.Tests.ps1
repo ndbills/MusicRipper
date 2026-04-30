@@ -25,9 +25,11 @@ BeforeAll {
             [string[]]$SyncTargets              = @('Stub')
         )
         [pscustomobject]@{
-            LibraryRoot          = $LibraryRoot
-            MusicBrainzUserAgent = "MusicRipper/0.1 ( $Email )"
-            SyncTargets          = $SyncTargets
+            LibraryRoot             = $LibraryRoot
+            MusicBrainzUserAgent    = "MusicRipper/0.1 ( $Email )"
+            SyncTargets             = $SyncTargets
+            OneDriveSyncTargetRoot  = $null
+            SynologyUnc             = $null
         }
     }
 }
@@ -76,6 +78,56 @@ Describe 'Test-RipperConfigEditorComplete' {
         It 'rejects a missing LibraryRoot' {
             $cfg = New-MinimalCfg -LibraryRoot ''
             (Test-RipperConfigEditorComplete -Config $cfg -FirstRun) | Should -BeFalse
+        }
+    }
+
+    Context 'OneDrive cross-field rule' {
+        It 'non-FirstRun: rejects OneDrive checked but no OneDrive root' {
+            $cfg = New-MinimalCfg -SyncTargets @('OneDrive')
+            (Test-RipperConfigEditorComplete -Config $cfg) | Should -BeFalse
+        }
+        It 'non-FirstRun: accepts OneDrive checked when OneDrive root is set' {
+            $cfg = New-MinimalCfg -SyncTargets @('OneDrive')
+            $cfg.OneDriveSyncTargetRoot = 'C:\Users\Me\OneDrive\Music'
+            (Test-RipperConfigEditorComplete -Config $cfg) | Should -BeTrue
+        }
+        It 'non-FirstRun: ignores OneDrive root when OneDrive is not in SyncTargets' {
+            $cfg = New-MinimalCfg -SyncTargets @('Stub')
+            (Test-RipperConfigEditorComplete -Config $cfg) | Should -BeTrue
+        }
+        It 'FirstRun: rejects OneDrive checked but no OneDrive root' {
+            $cfg = New-MinimalCfg -SyncTargets @('OneDrive')
+            (Test-RipperConfigEditorComplete -Config $cfg -FirstRun) | Should -BeFalse
+        }
+        It 'FirstRun: accepts OneDrive checked when OneDrive root is set' {
+            $cfg = New-MinimalCfg -SyncTargets @('OneDrive')
+            $cfg.OneDriveSyncTargetRoot = 'C:\Users\Me\OneDrive\Music'
+            (Test-RipperConfigEditorComplete -Config $cfg -FirstRun) | Should -BeTrue
+        }
+    }
+
+    Context 'SynologyNAS cross-field rule' {
+        It 'non-FirstRun: rejects SynologyNAS checked but no UNC path' {
+            $cfg = New-MinimalCfg -SyncTargets @('SynologyNAS')
+            (Test-RipperConfigEditorComplete -Config $cfg) | Should -BeFalse
+        }
+        It 'non-FirstRun: accepts SynologyNAS checked when UNC is set' {
+            $cfg = New-MinimalCfg -SyncTargets @('SynologyNAS')
+            $cfg.SynologyUnc = '\\nas\music'
+            (Test-RipperConfigEditorComplete -Config $cfg) | Should -BeTrue
+        }
+        It 'non-FirstRun: ignores SynologyUnc when SynologyNAS is not in SyncTargets' {
+            $cfg = New-MinimalCfg -SyncTargets @('Stub')
+            (Test-RipperConfigEditorComplete -Config $cfg) | Should -BeTrue
+        }
+        It 'FirstRun: rejects SynologyNAS checked but no UNC path' {
+            $cfg = New-MinimalCfg -SyncTargets @('SynologyNAS')
+            (Test-RipperConfigEditorComplete -Config $cfg -FirstRun) | Should -BeFalse
+        }
+        It 'FirstRun: accepts SynologyNAS checked when UNC is set' {
+            $cfg = New-MinimalCfg -SyncTargets @('SynologyNAS')
+            $cfg.SynologyUnc = '\\nas\music'
+            (Test-RipperConfigEditorComplete -Config $cfg -FirstRun) | Should -BeTrue
         }
     }
 }

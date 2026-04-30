@@ -9,7 +9,8 @@
         'Read-RipperPathPrompt',
         'Show-RipperFolderPicker',
         'Show-RipperFilePicker',
-        'Write-RipperConfigSection'
+        'Write-RipperConfigSection',
+        'Get-RipperOneDriveRoot'
     )
     CmdletsToExport   = @()
     VariablesToExport = @()

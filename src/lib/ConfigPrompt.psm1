@@ -65,6 +65,13 @@ function Show-RipperFolderPicker {
     } else {
         [Environment]::GetFolderPath('UserProfile')
     }
+    # Set both: InitialDirectory (Vista-style dialog, .NET 7+) makes
+    # the picker open *inside* $seed; SelectedPath is the legacy
+    # fallback and pre-selects the folder under the parent if
+    # InitialDirectory isn't honored on older runtimes.
+    if ($dlg.PSObject.Properties['InitialDirectory']) {
+        $dlg.InitialDirectory = $seed
+    }
     $dlg.SelectedPath = $seed
     if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         return $dlg.SelectedPath
@@ -258,8 +265,54 @@ function Write-RipperConfigSection {
     Write-Host ('=== ' + $Title + ' ===') -ForegroundColor Cyan
 }
 
+function Get-RipperOneDriveRoot {
+<#
+.SYNOPSIS
+    Best-effort discovery of the user's OneDrive root folder for use
+    as a seed in folder pickers.
+
+.DESCRIPTION
+    Order of preference:
+      1. $env:OneDrive (set by the OneDrive client when running).
+      2. $env:OneDriveCommercial (work/school OneDrive).
+      3. HKCU:\Software\Microsoft\OneDrive\Accounts\Personal\UserFolder
+         (registry value written by the client).
+      4. <UserProfile>\OneDrive if that path exists on disk.
+      5. C:\Users (a sensible jumping-off point on Windows even if
+         OneDrive isn't installed).
+
+    Always returns a string; never $null. The returned path is not
+    guaranteed to exist (callers should still Test-Path before using
+    it as a SelectedPath, which Show-RipperFolderPicker already does).
+#>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    foreach ($var in 'OneDrive','OneDriveCommercial') {
+        $val = [Environment]::GetEnvironmentVariable($var)
+        if ($val -and (Test-Path -LiteralPath $val)) { return $val }
+    }
+
+    try {
+        $regKey = 'HKCU:\Software\Microsoft\OneDrive\Accounts\Personal'
+        if (Test-Path -LiteralPath $regKey) {
+            $folder = (Get-ItemProperty -LiteralPath $regKey -ErrorAction Stop).UserFolder
+            if ($folder -and (Test-Path -LiteralPath $folder)) { return $folder }
+        }
+    } catch {
+        # Registry read failed -- fall through.
+    }
+
+    $profileGuess = Join-Path ([Environment]::GetFolderPath('UserProfile')) 'OneDrive'
+    if (Test-Path -LiteralPath $profileGuess) { return $profileGuess }
+
+    return 'C:\Users'
+}
+
 Export-ModuleMember -Function `
     Read-RipperPathPrompt, `
     Show-RipperFolderPicker, `
     Show-RipperFilePicker, `
-    Write-RipperConfigSection
+    Write-RipperConfigSection, `
+    Get-RipperOneDriveRoot
