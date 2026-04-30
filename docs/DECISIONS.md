@@ -1725,3 +1725,35 @@ Originally agreed to add a small WPF info dialog when the tunnel can't come up m
 - `tests/Wireguard.Tests.ps1` -- +6 tests for refcount + keep-alive (mocked at the `Test/Start/Stop-RipperVpnTunnel` wrapper layer, not `Get-Service`, since those primitives are unit-tested elsewhere in the same file).
 
 **Pester:** 440/0/1 green (was 434/0/1; +6 new tests).
+## D-027 -- Phase 7 polish + packaging (Phase 7)
+
+**Status:** Accepted.
+
+**Context.** Phase 7 closes out the parent-handoff backlog from plan.md: a one-shot installer (Install-MusicRipper.ps1), a top-level error handler that doesn't dump PowerShell stack traces in front of a parent, a tool to promote re-tagged albums out of _ReviewQueue/, and a polish pass on the between-discs loop. None of this changes the rip pipeline; it changes what the parent sees when something is the user-visible surface.
+
+**Decisions.**
+
+1. Top-level error handler is a script-scope 	rap in Start-Ripper.ps1, NOT a giant try/catch around the script body. The body is ~1000 lines spanning helpers, the resync block, the disc loop, and exit-time WG cleanup; a trap is a single-statement script-scope handler that fires on any uncaught script-terminating error, which is exactly the layer we want. The handler shows Show-RipperFatalErrorDialog (Copy-log-path button + Open-log-folder), logs full detail (exception type + message + ScriptStackTrace + CLR StackTrace), and exits 1 so callers can detect.
+
+2. Move-FromReviewQueue.ps1 reads tags from track-1 of the source folder via metaflac --show-tag (same Get-MetaflacPath helper Write-Tags + Update-AlbumTags use), reuses Get-RipperLibraryTargetDir from Move-ToLibrary so the target layout is bit-identical, and best-effort seeds discids.json (Phase 5.8 cross-session duplicate-disc detection). Pure-logic helpers are exported for Pester (Resolve-RipperReviewSourceMetadata, Get-RipperReviewPromotionPlan, Read-RipperReviewTxtDiscId). 19 tests, mocked metaflac at the Read-RipperFlacTagValue layer + tempdir-based end-to-end walk.
+
+3. Install-MusicRipper.ps1 has two modes: default (copy repo into %LOCALAPPDATA%\MusicRipper via robocopy then chain setup\Install-Dependencies + setup\Install-Shortcut) and -InPlace (skip the copy for engineers who cloned). robocopy was the right tool: handles long paths, idempotent, easy /XD /XF excludes (.git, .vs, .vscode, pester scratch, testResults.xml). Hands off to the Phase 6.6 WPF first-run flow on first shortcut launch -- no headless config wizard from the installer; that's now redundant with the WPF editor.
+
+4. The 'rip another disc' loop polish was copy-only (Show-BetweenDiscsDialog): friendlier title (singular/plural CD count), friendlier headline ('Ready for the next CD!'), watch text rephrased as instruction not narration ('Pop the next CD into D: -- the rip will start automatically.'), Quit relabelled 'I'm done -- Quit'. Added a one-line tip about stack ripping. No behavioural changes -- the auto-detect DispatcherTimer + button wiring are unchanged from Phase 5.7.
+
+**Files.**
+- Install-MusicRipper.ps1 (new, repo root, 265 lines).
+- src/tools/Move-FromReviewQueue.ps1 (new, 482 lines).
+- 	ests/Move-FromReviewQueue.Tests.ps1 (new, 19 tests).
+- src/ui/Show-FatalErrorDialog.ps1 (new, 220 lines, WPF + Copy-log-path + Open-log-folder).
+- src/Start-Ripper.ps1 -- script-scope 	rap calling the dialog, dot-source the new dialog.
+- src/ui/Show-BetweenDiscsDialog.ps1 -- copy polish only.
+- docs/PARENTS-QUICKSTART.md -- full rewrite, 5-step parent walkthrough with [screenshot: ...] placeholders.
+- docs/REVIEW-WORKFLOW.md -- documents Move-FromReviewQueue.ps1 above the manual hand-move recipe.
+
+**Rejected alternatives.**
+- *Big try/catch around Start-Ripper body*: 1000-line indent rewrite for no functional difference vs `trap`.
+- *Silent error handler that just exits*: violates the plan's 'friendly dialog with Copy log path button' promise; parents need to be told something happened.
+- *Drop -InPlace*: makes engineer dev loops painful (would have to run the copy on every test).
+- *Do the screenshot capture in code*: requires a fresh PC; the [screenshot: ...] markers + suggested filenames let the engineer fill these in incrementally without blocking the rest of Phase 7 from merging.
+

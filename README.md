@@ -32,14 +32,13 @@ Phase 6.2, Synology NAS over WireGuard in Phase 6.3+).
 | 6.4   | Synology NAS over WireGuard              | ✅ complete    |
 | 6.4.1 | Refcounted WG tunnel lifecycle           | ✅ complete    |
 | 6.6   | WPF first-run + config editor overhaul   | ✅ complete    |
-| 7     | Polish, packaging, parent-friendly UX    | ⏳ not started |
+| 7     | Polish, packaging, parent-friendly UX    | ✅ complete    |
 
 ## 3-line quickstart (engineer install)
 
 ```powershell
 git clone <this-repo> C:\bin\MusicRipper ; cd C:\bin\MusicRipper
-./setup/Install-Dependencies.ps1   # winget: PS7, CUETools, Picard
-./setup/Install-Shortcut.ps1       # Desktop shortcut "Rip a CD"
+./Install-MusicRipper.ps1 -InPlace   # chains setup steps; or omit -InPlace to copy into %LOCALAPPDATA%\MusicRipper
 ```
 
 Double-click the Desktop shortcut. On first launch the WPF settings
@@ -88,8 +87,8 @@ MusicRipper/
 ├── docs/
 │   ├── ARCHITECTURE.md             # Diagrams + how the pieces fit together
 │   ├── SETUP.md                    # Engineer install + drive calibration
-│   ├── PARENTS-QUICKSTART.md       # Stub (Phase 7)
-│   ├── REVIEW-WORKFLOW.md          # Stub (Phase 7)
+│   ├── PARENTS-QUICKSTART.md       # One-page parent walkthrough (Phase 7)
+│   ├── REVIEW-WORKFLOW.md          # Clearing _ReviewQueue/ + Move-FromReviewQueue (Phase 7)
 │   ├── SYNC-TARGETS.md             # Sync framework + how to add a target (Phase 6.1+)
 │   ├── SYNOLOGY-SHARE-SETUP.md     # Stub (Phase 6.3)
 │   ├── DECISIONS.md                # Architectural decision log
@@ -119,8 +118,8 @@ path, drive offset, sync targets, NAS credentials — lives in
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — diagrams, pipeline, module map.
 - [docs/SETUP.md](docs/SETUP.md) — engineer install + drive calibration.
-- [docs/PARENTS-QUICKSTART.md](docs/PARENTS-QUICKSTART.md) — one-page user guide *(Phase 7)*.
-- [docs/REVIEW-WORKFLOW.md](docs/REVIEW-WORKFLOW.md) — clearing `_ReviewQueue/` *(Phase 7)*.
+- [docs/PARENTS-QUICKSTART.md](docs/PARENTS-QUICKSTART.md) — one-page user guide.
+- [docs/REVIEW-WORKFLOW.md](docs/REVIEW-WORKFLOW.md) — clearing `_ReviewQueue/` + Move-FromReviewQueue helper.
 - [docs/SYNC-TARGETS.md](docs/SYNC-TARGETS.md) — sync framework + how to add a target *(Phase 6.1+)*.
 - [docs/SYNOLOGY-SHARE-SETUP.md](docs/SYNOLOGY-SHARE-SETUP.md) — DSM walkthrough *(Phase 6.3)*.
 - [docs/DECISIONS.md](docs/DECISIONS.md) — running architectural decision log.
