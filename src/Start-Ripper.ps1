@@ -233,44 +233,59 @@ $cfg = Import-RipperConfig
 # parent re-saved config without ever picking the drive), pop the config
 # editor instead of dumping the user into the rip queue with a "no
 # DriveLetter" error every cycle. Re-load $cfg if they save.
+#
+# Phase 6.6.F.2: don't make a missing drive fatal. A user with no
+# optical drive (e.g. a test laptop, a NAS-only retry session) still
+# needs to reach the pending-sync flow. If they decline registration
+# OR save without picking a drive, we fall through with $skipRipLoop=$true
+# -- the startup resync still runs, but the disc loop is skipped.
+$skipRipLoop = $false
 if (-not $cfg.DriveLetter -or $null -eq $cfg.DriveOffset) {
     Add-Type -AssemblyName System.Windows.Forms | Out-Null
     Write-RipperLog INFO 'Start-Ripper' 'No DriveLetter/DriveOffset in config -- prompting to register.'
     $ans = [System.Windows.Forms.MessageBox]::Show(
-        "MusicRipper hasn't registered an optical drive yet, so it can't read discs.`n`nOpen the settings editor now to register one?",
+        "MusicRipper hasn't registered an optical drive yet.`n`n" +
+        "  Yes  - open Settings to register one now`n" +
+        "  No   - skip for now (you can still re-sync pending albums; ripping will be unavailable)`n" +
+        "  Cancel - quit MusicRipper",
         'MusicRipper - drive not configured',
-        [System.Windows.Forms.MessageBoxButtons]::YesNo,
-        [System.Windows.Forms.MessageBoxIcon]::Warning)
-    if ($ans -ne [System.Windows.Forms.DialogResult]::Yes) {
-        Write-RipperLog INFO 'Start-Ripper' 'User declined to register drive; exiting.'
-        Stop-RipperLog
-        return
+        [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
+        [System.Windows.Forms.MessageBoxIcon]::Question)
+    switch ($ans) {
+        ([System.Windows.Forms.DialogResult]::Cancel) {
+            Write-RipperLog INFO 'Start-Ripper' 'User cancelled at drive prompt; exiting.'
+            Stop-RipperLog
+            return
+        }
+        ([System.Windows.Forms.DialogResult]::No) {
+            Write-RipperLog INFO 'Start-Ripper' 'User skipped drive registration; entering no-drive mode (pending-sync only).'
+            $skipRipLoop = $true
+        }
+        ([System.Windows.Forms.DialogResult]::Yes) {
+            $saved = $null
+            try {
+                $saved = Show-RipperConfigDialog -Config $cfg -ConfigPath $configPath
+            } catch {
+                Write-RipperLog ERROR 'Start-Ripper' "Show-RipperConfigDialog threw: $($_.Exception.GetType().FullName): $($_.Exception.Message)"
+                if ($_.ScriptStackTrace) { Write-RipperLog ERROR 'Start-Ripper' "Stack: $($_.ScriptStackTrace)" }
+                Show-RipperInfo "The settings editor failed to open:`n`n  $($_.Exception.Message)`n`nSee the log for details." `
+                    'MusicRipper' 'Error'
+                Stop-RipperLog
+                return
+            }
+            if ($saved) {
+                $cfg = Import-RipperConfig
+            }
+            if (-not $cfg.DriveLetter -or $null -eq $cfg.DriveOffset) {
+                Write-RipperLog INFO 'Start-Ripper' 'Still no drive after Settings; entering no-drive mode (pending-sync only).'
+                Show-RipperInfo "No drive was registered.`n`nMusicRipper will run in pending-sync mode only -- ripping will be unavailable until a drive is registered." `
+                    'MusicRipper' 'Information'
+                $skipRipLoop = $true
+            } else {
+                Write-RipperLog INFO 'Start-Ripper' "Drive registered: $($cfg.DriveLetter) (offset=$($cfg.DriveOffset))."
+            }
+        }
     }
-    $saved = $null
-    try {
-        $saved = Show-RipperConfigDialog -Config $cfg -ConfigPath $configPath
-    } catch {
-        Write-RipperLog ERROR 'Start-Ripper' "Show-RipperConfigDialog threw: $($_.Exception.GetType().FullName): $($_.Exception.Message)"
-        if ($_.ScriptStackTrace) { Write-RipperLog ERROR 'Start-Ripper' "Stack: $($_.ScriptStackTrace)" }
-        Show-RipperInfo "The settings editor failed to open:`n`n  $($_.Exception.Message)`n`nSee the log for details." `
-            'MusicRipper' 'Error'
-        Stop-RipperLog
-        return
-    }
-    if (-not $saved) {
-        Show-RipperInfo "MusicRipper still has no drive configured.`n`nRe-launch when you're ready to finish setup." `
-            'MusicRipper' 'Warning'
-        Stop-RipperLog
-        return
-    }
-    $cfg = Import-RipperConfig
-    if (-not $cfg.DriveLetter -or $null -eq $cfg.DriveOffset) {
-        Show-RipperInfo "Settings saved, but no drive was registered.`n`nOpen Settings again and use the 'Register drive...' button on the General tab." `
-            'MusicRipper' 'Warning'
-        Stop-RipperLog
-        return
-    }
-    Write-RipperLog INFO 'Start-Ripper' "Drive registered: $($cfg.DriveLetter) (offset=$($cfg.DriveOffset))."
 }
 
 # --- Phase 6.4.1: WireGuard exit-time safety net --------------------------
@@ -1150,6 +1165,14 @@ if ($retryOnStartup) {
 }
 
 do {
+    # Phase 6.6.F.2: no-drive mode -- the user declined to register a
+    # drive (or saved without one). Pending-sync above already ran;
+    # there's nothing for the disc loop to do, so bail out cleanly.
+    if ($skipRipLoop) {
+        Write-RipperLog INFO 'Start-Ripper' 'No-drive mode: skipping disc loop.'
+        break
+    }
+
     # Rotate the log: stop the previous (setup or per-disc) log and open a
     # fresh per-disc file. The per-disc log captures everything from disc-id
     # read through eject for THIS disc only -- great for forensic review.
