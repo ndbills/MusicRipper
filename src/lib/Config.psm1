@@ -223,8 +223,18 @@ function New-RipperConfigObject {
         # MusicRipper never starts/stops the tunnel itself even if
         # WireGuardTunnelName is set, useful for users who run their
         # own always-on VPN.
-        WireGuardTunnelName     = $null
-        WireGuardAutoToggle     = $true
+        #
+        # `WireGuardKeepAliveBetweenDiscs` (Phase 6.4.1): when false
+        # (default), the tunnel is held up only for the duration of a
+        # single sync (one robocopy invocation), so a 30-disc rip
+        # session bounces the tunnel 30 times. When true, the first
+        # sync's acquire keeps the tunnel up for the rest of the
+        # session and it's torn down on exit -- saves ~2-3s of
+        # re-handshake per disc at the cost of holding the VPN open
+        # the whole time.
+        WireGuardTunnelName             = $null
+        WireGuardAutoToggle             = $true
+        WireGuardKeepAliveBetweenDiscs  = $false
     }
 }
 

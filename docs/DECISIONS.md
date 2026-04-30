@@ -1688,3 +1688,40 @@ Originally agreed to add a small WPF info dialog when the tunnel can't come up m
 **Pester:** 434/0/1 green (was 413/0/1; +21 new WG tests).
 
 **Cross-references:** D-022 (sync framework), D-024 (NAS target), D-025 (startup pending-sync retry -- the safety net for tunnel-down rips).
+
+### Amendment (Phase 6.4.1) -- refcounted lifecycle, tunnel up only during transfer
+
+**Date:** 2026-04-29
+**Phase:** 6.4.1
+**Status:** Implemented.
+
+**What changed.** The original D-026 design brought the tunnel up on the first sync attempt and held it open until session exit. After the 6.4 manual-verification round, the user pushed back on this: *"the tunnel should only be open during the NAS target copy. as soon as the copy is completed, the tunnel service should stop."* The right primitive is a **refcounted acquire/release** wrapper, not a one-shot start-and-leave-it-up flag.
+
+**New module surface (`src/lib/Wireguard.psm1`).**
+- `Add-RipperVpnTunnelRef -Name` -- on the 0->1 transition, calls `Test-RipperVpnTunnel` and either records `OwnedByUs=$false` (if already Running -- some other consumer is holding it) or `Start-RipperVpnTunnel` + `OwnedByUs=$true`. Returns `$false` if the service isn't installed or the start failed.
+- `Remove-RipperVpnTunnelRef -Name` -- decrements; on the 1->0 transition stops the tunnel **iff `OwnedByUs`**. Defensive: a stray Remove without a paired Add is a WARN no-op, never tears down a tunnel some other consumer is still using.
+- `Use-RipperVpnTunnel -Name -ScriptBlock` -- the convenience wrapper: Add, run, Remove in a finally. Throws if Add failed.
+- `Enable-RipperVpnTunnelSessionKeepAlive -Name` / `Disable-RipperVpnTunnelSessionKeepAlive [-Name]` -- a session-scoped extra ref. When enabled, the tunnel survives across syncs in the session; when disabled (or at exit), the extra ref is released and the tunnel comes down with the last per-sync release. Coordinated across runspaces via `$env:MUSICRIPPER_WG_SESSION_REF` so the worker runspaces (rip-progress, pending-sync) and the main runspace all agree on whether keep-alive is in effect.
+
+**Why refcounting (vs the old `RipperSession.WgStartedByUs` flag).** The flag was set in `$script:RipperSession`, which is per-runspace. The pending-sync worker runspace could not see the flag the main runspace set (and vice versa), so the exit hook missed teardowns when a sync started in a worker. Refcounting moves the lifecycle into the module's own state and makes each acquire/release pair self-contained -- no cross-runspace state needed for the per-sync case at all. The keep-alive case still needs cross-runspace coordination, but a single env var is enough (it answers exactly one yes/no question: "is anyone holding a session-scoped ref?").
+
+**OwnedByUs invariant.** We never call `Stop-Service` on a tunnel we did not start. If the user has the tunnel up via the WireGuard tray app for unrelated reasons, our Add records `OwnedByUs=$false` and our Remove is a no-op. This makes MusicRipper a polite citizen on a machine where WireGuard might be doing other work.
+
+**`Sync-ToSynologyNAS.ps1` rewrite.** The auto-toggle block is gone. The whole SMB-mount + robocopy + unmount section is now wrapped in `try { Add-RipperVpnTunnelRef ... } finally { Remove-RipperVpnTunnelRef ... }`. Credential decryption happens **before** the acquire because it doesn't need the tunnel. If `cfg.WireGuardKeepAliveBetweenDiscs` is `$true`, an extra `Enable-RipperVpnTunnelSessionKeepAlive` call before the per-sync Add bumps the refcount so the per-sync Remove never drops it to 0 -- the tunnel stays up across the whole stack and only comes down at exit.
+
+**`Start-Ripper.ps1` exit hooks.** The `PowerShell.Exiting` engine event and the bottom-of-script teardown now both call `Disable-RipperVpnTunnelSessionKeepAlive` first (drops the keep-alive ref if any) and then defensively `Test-RipperVpnTunnel` + `Stop-RipperVpnTunnel` if the service is somehow still Running. The defensive stop logs a WARN when it actually had to do something, because reaching that path means a per-sync `finally` was bypassed by a hard crash and we want to know about it.
+
+**New cfg knob.** `WireGuardKeepAliveBetweenDiscs` (default `$false`):
+- `$false` (default, minimal exposure): the tunnel comes up at the start of each sync and is torn down at the end. Saves nothing but adds the WG handshake (~2-3s) per disc when ripping a stack. Right default for "parent rips one disc, walks away."
+- `$true` (rip-a-stack mode): first sync's start pins the tunnel for the rest of the session; per-sync acquires/releases are no-ops; tunnel comes down at exit. Saves the per-disc handshake when ripping a multi-disc stack.
+
+**Files changed.**
+- `src/lib/Wireguard.psm1` -- appended ~190 lines: `$script:WgRefs`, `Get-RipperVpnTunnelRefState`, `Add/Remove-RipperVpnTunnelRef`, `Use-RipperVpnTunnel`, `Enable/Disable-RipperVpnTunnelSessionKeepAlive`.
+- `src/lib/Wireguard.psd1` -- 6 new exports.
+- `src/lib/Config.psm1` -- `WireGuardKeepAliveBetweenDiscs = $false` default.
+- `config/config.template.json` -- new doc + field; `WireGuardAutoToggle` doc updated to "around each NAS sync."
+- `src/sync/Sync-ToSynologyNAS.ps1` -- replaced `Start-RipperVpnTunnel`-then-set-flag block with `Add-RipperVpnTunnelRef` + outer `try/finally(Remove)`; optional `Enable-RipperVpnTunnelSessionKeepAlive` when `KeepAliveBetweenDiscs`. Removed `RipperSession.WgStartedByUs` writes.
+- `src/Start-Ripper.ps1` -- removed `WgStartedByUs` from `$script:RipperSession`; exit hooks call `Disable-RipperVpnTunnelSessionKeepAlive` + defensive `Stop-RipperVpnTunnel`; env var renamed to `MUSICRIPPER_WG_SESSION_REF`.
+- `tests/Wireguard.Tests.ps1` -- +6 tests for refcount + keep-alive (mocked at the `Test/Start/Stop-RipperVpnTunnel` wrapper layer, not `Get-Service`, since those primitives are unit-tested elsewhere in the same file).
+
+**Pester:** 440/0/1 green (was 434/0/1; +6 new tests).

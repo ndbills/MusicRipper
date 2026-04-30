@@ -179,13 +179,13 @@ function Invoke-RipperSyncToSynologyNAS {
         }
     }
 
-    # Phase 6.4: bring the WireGuard tunnel up before pre-flight #2
-    # (UNC reachability) so we don't false-fail "share not reachable"
-    # when the only reason it's unreachable is that the VPN is down.
-    # We mark $script:RipperSession.WgStartedByUs=true if we started
-    # it, so Start-Ripper's exit hook knows to tear it down. We do NOT
-    # tear it down here -- the parent could be ripping a 30-disc stack
-    # and bouncing the tunnel between every disc would be silly.
+    # Phase 6.4 / 6.4.1: gather WireGuard settings; we acquire the
+    # tunnel ref *just before* the SMB mount and release it immediately
+    # after the robocopy/unmount, so the VPN is open only while the
+    # NAS is actually being touched. Refcounting (in src/lib/Wireguard.psm1)
+    # makes the tunnel agnostic to the sync target -- multiple targets
+    # could each Use-RipperVpnTunnel and only the outermost release
+    # would actually stop the service.
     $autoToggle = $false
     if ($Config.PSObject.Properties['WireGuardAutoToggle']) {
         $autoToggle = [bool]$Config.WireGuardAutoToggle
@@ -194,42 +194,14 @@ function Invoke-RipperSyncToSynologyNAS {
     if ($Config.PSObject.Properties['WireGuardTunnelName']) {
         $wgName = [string]$Config.WireGuardTunnelName
     }
-    if ($autoToggle -and -not [string]::IsNullOrWhiteSpace($wgName)) {
-        # Defensive: if the Wireguard module didn't load (very old
-        # checkout, missing winget install, whatever), just warn and
-        # press on -- the rip pipeline must not crash because the WG
-        # helpers are missing.
-        $haveWg = [bool](Get-Command -Name Test-RipperVpnTunnel -ErrorAction SilentlyContinue)
-        if (-not $haveWg) {
-            Write-RipperLog WARN 'SynologyNAS' "WireGuardAutoToggle is true but src/lib/Wireguard.psm1 is not loaded. Continuing without auto-toggle; the share must already be reachable."
-        } elseif (-not (Test-RipperVpnTunnel -Name $wgName)) {
-            Write-RipperLog INFO 'SynologyNAS' "Bringing WireGuard tunnel '$wgName' up before NAS sync."
-            $started = Start-RipperVpnTunnel -Name $wgName
-            if (-not $started) {
-                $diag = "WireGuard tunnel '$wgName' failed to come up. NAS share is unlikely to be reachable. Check the WG service status (Get-Service WireGuardTunnel`$$wgName) and the .conf endpoint."
-                Write-RipperLog WARN 'SynologyNAS' "Pre-flight failed: $diag"
-                return @{
-                    Target='SynologyNAS'; Status='Failed'; BytesCopied=0
-                    Diagnostic=$diag
-                }
-            }
-            # Mark on session state so Start-Ripper's exit hook can
-            # tear the tunnel down. Two channels because Sync-To*
-            # may run inside a worker runspace (Show-PendingSyncProgress)
-            # whose $script:RipperSession is a *separate copy* from
-            # Start-Ripper's parent runspace -- writes here would never
-            # be visible at exit. Env vars are process-wide and so do
-            # cross runspace boundaries.
-            $env:MUSICRIPPER_WG_STARTED_BY_US = $wgName
-            if (Test-Path 'variable:script:RipperSession') {
-                if (-not $script:RipperSession.PSObject.Properties['WgStartedByUs']) {
-                    $script:RipperSession | Add-Member -NotePropertyName 'WgStartedByUs' -NotePropertyValue $false -Force
-                }
-                $script:RipperSession.WgStartedByUs = $true
-            }
-        } else {
-            Write-RipperLog INFO 'SynologyNAS' "WireGuard tunnel '$wgName' already up; reusing."
-        }
+    $keepAlive = $false
+    if ($Config.PSObject.Properties['WireGuardKeepAliveBetweenDiscs']) {
+        $keepAlive = [bool]$Config.WireGuardKeepAliveBetweenDiscs
+    }
+    $useWg = $autoToggle -and -not [string]::IsNullOrWhiteSpace($wgName) -and `
+             [bool](Get-Command -Name Add-RipperVpnTunnelRef -ErrorAction SilentlyContinue)
+    if ($autoToggle -and -not [string]::IsNullOrWhiteSpace($wgName) -and -not $useWg) {
+        Write-RipperLog WARN 'SynologyNAS' "WireGuardAutoToggle is true but src/lib/Wireguard.psm1 is not loaded. Continuing without auto-toggle; the share must already be reachable."
     }
 
     # Pre-flight 2: stored credential available if requested?
@@ -266,6 +238,34 @@ function Invoke-RipperSyncToSynologyNAS {
         }
     }
 
+    # Phase 6.4.1: acquire the WireGuard tunnel ref *just before* we
+    # start touching the NAS, and release it in the outer finally
+    # below so the VPN is open only for the duration of the actual
+    # transfer. With cfg.WireGuardKeepAliveBetweenDiscs=true we also
+    # bump a session-level ref (managed via env-var sentinel for
+    # cross-runspace visibility) so consecutive syncs don't bounce
+    # the tunnel.
+    $wgAcquired = $false
+    if ($useWg) {
+        if ($keepAlive) {
+            # Best-effort: if the keep-alive ref fails to acquire, fall
+            # through to the per-sync acquire below, which will surface
+            # the real error.
+            [void](Enable-RipperVpnTunnelSessionKeepAlive -Name $wgName)
+        }
+        $wgOk = Add-RipperVpnTunnelRef -Name $wgName
+        if (-not $wgOk) {
+            $diag = "WireGuard tunnel '$wgName' failed to come up. NAS share is unlikely to be reachable. Check the WG service status (Get-Service 'WireGuardTunnel`$$wgName') and the .conf endpoint."
+            Write-RipperLog WARN 'SynologyNAS' "Pre-flight failed: $diag"
+            return @{
+                Target='SynologyNAS'; Status='Failed'; BytesCopied=0
+                Diagnostic=$diag
+            }
+        }
+        $wgAcquired = $true
+    }
+
+    try {
     # Optional SMB mount. We mount the share root (not the subfolder
     # under it -- New-SmbMapping is share-scoped) for the duration of
     # the copy and unmount in finally. If $unc is a local path (used
@@ -391,6 +391,15 @@ function Invoke-RipperSyncToSynologyNAS {
             } catch {
                 Write-RipperLog WARN 'SynologyNAS' "Failed to unmount '$mountedRoot': $($_.Exception.Message). It will be cleared when PowerShell exits."
             }
+        }
+    }
+    } finally {
+        # Phase 6.4.1: release our per-sync ref. With keep-alive off
+        # this drops refcount to 0 and Stop-Service is called. With
+        # keep-alive on the session-level ref keeps refcount at 1 so
+        # the tunnel stays up for the next sync.
+        if ($wgAcquired) {
+            [void](Remove-RipperVpnTunnelRef -Name $wgName)
         }
     }
 }

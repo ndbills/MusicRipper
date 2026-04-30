@@ -179,6 +179,84 @@ Describe 'Install-RipperVpnTunnel' {
     }
 }
 
+Describe 'Refcounted lifecycle (Phase 6.4.1)' {
+    BeforeEach {
+        # Reset the module-scope refcount state between tests so order
+        # doesn't matter. Mock the higher-level wrappers (not Get-Service)
+        # so we don't have to manage a stateful Get-Service queue --
+        # those are unit-tested separately above.
+        InModuleScope Wireguard { $script:WgRefs = @{} }
+        $env:MUSICRIPPER_WG_SESSION_REF = $null
+    }
+    It 'first acquire brings the tunnel up; last release stops it' {
+        Mock -ModuleName Wireguard Test-RipperVpnTunnel  { 'Stopped' }
+        Mock -ModuleName Wireguard Start-RipperVpnTunnel { $true }
+        Mock -ModuleName Wireguard Stop-RipperVpnTunnel  { $true }
+        Add-RipperVpnTunnelRef -Name 't' | Should -BeTrue
+        Should -Invoke -ModuleName Wireguard -CommandName Start-RipperVpnTunnel -Times 1
+        $state = Get-RipperVpnTunnelRefState -Name 't'
+        $state.RefCount  | Should -Be 1
+        $state.OwnedByUs | Should -BeTrue
+        Remove-RipperVpnTunnelRef -Name 't' | Should -BeTrue
+        Should -Invoke -ModuleName Wireguard -CommandName Stop-RipperVpnTunnel -Times 1
+        $stateAfter = Get-RipperVpnTunnelRefState -Name 't'
+        $stateAfter.RefCount  | Should -Be 0
+        $stateAfter.OwnedByUs | Should -BeFalse
+    }
+    It 'nested acquires only call Start once and Stop once' {
+        Mock -ModuleName Wireguard Test-RipperVpnTunnel  { 'Stopped' }
+        Mock -ModuleName Wireguard Start-RipperVpnTunnel { $true }
+        Mock -ModuleName Wireguard Stop-RipperVpnTunnel  { $true }
+        Add-RipperVpnTunnelRef -Name 't' | Out-Null
+        Add-RipperVpnTunnelRef -Name 't' | Out-Null
+        (Get-RipperVpnTunnelRefState -Name 't').RefCount | Should -Be 2
+        Remove-RipperVpnTunnelRef -Name 't' | Out-Null
+        Should -Invoke -ModuleName Wireguard -CommandName Stop-RipperVpnTunnel -Times 0
+        Remove-RipperVpnTunnelRef -Name 't' | Out-Null
+        Should -Invoke -ModuleName Wireguard -CommandName Start-RipperVpnTunnel -Times 1
+        Should -Invoke -ModuleName Wireguard -CommandName Stop-RipperVpnTunnel  -Times 1
+    }
+    It 'does NOT stop a tunnel that was already up before our acquire' {
+        Mock -ModuleName Wireguard Test-RipperVpnTunnel  { 'Running' }
+        Mock -ModuleName Wireguard Start-RipperVpnTunnel { throw 'should not be called' }
+        Mock -ModuleName Wireguard Stop-RipperVpnTunnel  { throw 'should not be called' }
+        Add-RipperVpnTunnelRef -Name 't' | Should -BeTrue
+        Should -Invoke -ModuleName Wireguard -CommandName Start-RipperVpnTunnel -Times 0
+        (Get-RipperVpnTunnelRefState -Name 't').OwnedByUs | Should -BeFalse
+        Remove-RipperVpnTunnelRef -Name 't' | Out-Null
+        Should -Invoke -ModuleName Wireguard -CommandName Stop-RipperVpnTunnel -Times 0
+    }
+    It 'Use-RipperVpnTunnel releases the ref even when the scriptblock throws' {
+        Mock -ModuleName Wireguard Test-RipperVpnTunnel  { 'Stopped' }
+        Mock -ModuleName Wireguard Start-RipperVpnTunnel { $true }
+        Mock -ModuleName Wireguard Stop-RipperVpnTunnel  { $true }
+        { Use-RipperVpnTunnel -Name 't' -ScriptBlock { throw 'boom' } } | Should -Throw 'boom'
+        (Get-RipperVpnTunnelRefState -Name 't').RefCount | Should -Be 0
+        Should -Invoke -ModuleName Wireguard -CommandName Stop-RipperVpnTunnel -Times 1
+    }
+    It 'session keep-alive holds an extra ref so per-sync release does NOT stop' {
+        Mock -ModuleName Wireguard Test-RipperVpnTunnel  { 'Stopped' }
+        Mock -ModuleName Wireguard Start-RipperVpnTunnel { $true }
+        Mock -ModuleName Wireguard Stop-RipperVpnTunnel  { $true }
+        Enable-RipperVpnTunnelSessionKeepAlive -Name 't' | Should -BeTrue
+        $env:MUSICRIPPER_WG_SESSION_REF | Should -Be 't'
+        Add-RipperVpnTunnelRef    -Name 't' | Out-Null   # per-sync acquire
+        Remove-RipperVpnTunnelRef -Name 't' | Out-Null   # per-sync release
+        Should -Invoke -ModuleName Wireguard -CommandName Stop-RipperVpnTunnel -Times 0
+        (Get-RipperVpnTunnelRefState -Name 't').RefCount | Should -Be 1
+        Disable-RipperVpnTunnelSessionKeepAlive | Out-Null
+        Should -Invoke -ModuleName Wireguard -CommandName Stop-RipperVpnTunnel -Times 1
+        (Get-RipperVpnTunnelRefState -Name 't').RefCount | Should -Be 0
+        $env:MUSICRIPPER_WG_SESSION_REF | Should -BeNullOrEmpty
+    }
+    It 'returns false when the tunnel service is not installed' {
+        Mock -ModuleName Wireguard Test-RipperVpnTunnel  { 'NotInstalled' }
+        Mock -ModuleName Wireguard Start-RipperVpnTunnel { throw 'should not be called' }
+        Add-RipperVpnTunnelRef -Name 'absent' | Should -BeFalse
+        (Get-RipperVpnTunnelRefState -Name 'absent').RefCount | Should -Be 0
+    }
+}
+
 Describe 'Sync-ToSynologyNAS WireGuard hook (Phase 6.4)' {
     BeforeAll {
         $repoRoot = Split-Path -Parent $PSScriptRoot

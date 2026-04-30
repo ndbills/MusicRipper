@@ -30,6 +30,7 @@ Phase 6.2, Synology NAS over WireGuard in Phase 6.3+).
 | 6.3   | Synology NAS sync target (LAN)           | ✅ complete    |
 | 6.5   | Startup pending-sync resync UI           | ✅ complete    |
 | 6.4   | Synology NAS over WireGuard              | ✅ complete    |
+| 6.4.1 | Refcounted WG tunnel lifecycle           | ✅ complete    |
 | 7     | Polish, packaging, parent-friendly UX    | ⏳ not started |
 
 ## 3-line quickstart (engineer install)

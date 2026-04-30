@@ -70,19 +70,32 @@ operator's reference; design rationale lives in `DECISIONS.md`.
 
 #### What happens at rip time
 
-Before each NAS sync, `Sync-ToSynologyNAS.ps1`:
+Each NAS sync wraps its work in a refcounted tunnel
+acquire/release (Phase 6.4.1):
 
-1. Reads `cfg.WireGuardTunnelName` + `cfg.WireGuardAutoToggle`.
-2. If both set and the tunnel service is not Running, calls
-   `Start-Service WireGuardTunnel$<Name>` and waits for it to
-   reach Running (15s default timeout).
-3. Marks `$script:RipperSession.WgStartedByUs = $true`.
-4. Runs the existing UNC pre-flight + robocopy.
+1. `Sync-ToSynologyNAS.ps1` reads `cfg.WireGuardTunnelName` +
+   `cfg.WireGuardAutoToggle` + `cfg.WireGuardKeepAliveBetweenDiscs`.
+2. Credential decryption (no tunnel needed).
+3. **Acquire** the tunnel via `Add-RipperVpnTunnelRef`. On the
+   0->1 transition this calls `Start-Service WireGuardTunnel$<Name>`
+   and waits for Running (15s default timeout).
+4. UNC pre-flight + SMB mount + robocopy.
+5. **Release** in a `finally`: `Remove-RipperVpnTunnelRef`. On the
+   1->0 transition, if MusicRipper was the one that started the
+   tunnel, calls `Stop-Service`. If the tunnel was already up
+   before the acquire (some other consumer is using it), the
+   release is a polite no-op.
 
-When MusicRipper exits (last `Stop-RipperLog`), if `WgStartedByUs`
-is true the script calls `Stop-Service` on the tunnel. Tunnel does
-**not** bounce between discs in a stack -- one rip session, one
-tunnel-up/tunnel-down cycle.
+By default the tunnel is up only for the duration of the SMB
+copy. Set `cfg.WireGuardKeepAliveBetweenDiscs = true` if you're
+ripping a stack and want to skip the per-disc handshake (~2-3s);
+the first sync's start pins the tunnel for the rest of the
+session, and it comes down at exit.
+
+When MusicRipper exits (last `Stop-RipperLog`), the bottom-of-
+script teardown drops any session-scoped keep-alive ref and then
+defensively `Stop-Service`'s the tunnel if it's still Running --
+the safety net for the "a hard crash bypassed our `finally`" case.
 
 #### When the tunnel won't come up
 
@@ -99,10 +112,14 @@ network where the tunnel works -- no manual intervention needed.
 - Status: `Get-Service WireGuardTunnel$<Name>`
 - Start/stop: `Start-Service WireGuardTunnel$<Name>` /
   `Stop-Service WireGuardTunnel$<Name>` (no elevation needed if
-  setup ran successfully).
+  setup ran successfully). MusicRipper's refcount layer respects
+  this -- if you started it manually, MusicRipper's release is a
+  no-op (it never stops a tunnel it didn't start).
 - Disable auto-toggle without uninstalling the tunnel: set
   `cfg.WireGuardAutoToggle = false` in `config.json` (or re-run
   `setup/New-RipperConfig.ps1`).
+- Keep the tunnel up across discs in a stack-rip session: set
+  `cfg.WireGuardKeepAliveBetweenDiscs = true`.
 - Remove entirely: delete `cfg.WireGuardTunnelName` and run
   `wireguard.exe /uninstalltunnelservice <Name>` from an elevated
   prompt (or use the WireGuard tray app's "Remove tunnel" UI).

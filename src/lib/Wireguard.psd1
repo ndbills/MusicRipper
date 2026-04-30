@@ -12,7 +12,13 @@
         'Install-RipperVpnTunnel',
         'Uninstall-RipperVpnTunnel',
         'Grant-RipperVpnTunnelControl',
-        'Get-RipperVpnTunnelServiceName'
+        'Get-RipperVpnTunnelServiceName',
+        'Use-RipperVpnTunnel',
+        'Add-RipperVpnTunnelRef',
+        'Remove-RipperVpnTunnelRef',
+        'Get-RipperVpnTunnelRefState',
+        'Enable-RipperVpnTunnelSessionKeepAlive',
+        'Disable-RipperVpnTunnelSessionKeepAlive'
     )
     CmdletsToExport   = @()
     AliasesToExport   = @()

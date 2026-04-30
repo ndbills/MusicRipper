@@ -420,3 +420,204 @@ function Grant-RipperVpnTunnelControl {
     Write-RipperLog INFO 'Wireguard' "Granted SID $UserSid start/stop control on '$svcName'."
     return $true
 }
+
+# --- Phase 6.4.1: refcounted lifecycle wrapper ----------------------------
+# Per-tunnel state lives in $script: scope of THIS module instance. Each
+# runspace that imports the module gets its own copy, which is fine
+# because each runspace's own sync calls are sequential. Cross-runspace
+# bookkeeping is handled by the caller (Start-Ripper exit hook +
+# $env:MUSICRIPPER_WG_SESSION_REF env-var sentinel for the keep-alive
+# case).
+#
+#   $script:WgRefs[<name>] = @{ RefCount = <int>; OwnedByUs = <bool> }
+#
+# OwnedByUs is set when WE were the one who flipped the tunnel from
+# Stopped to Running. We never stop a tunnel a different process or a
+# previous session brought up.
+$script:WgRefs = @{}
+
+function Get-RipperVpnTunnelRefState {
+<#
+.SYNOPSIS
+    Diagnostic helper -- returns the in-process refcount state for the
+    named tunnel. Used by tests; not for production callers.
+#>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string]$Name)
+    if (-not $script:WgRefs.ContainsKey($Name)) {
+        return @{ RefCount = 0; OwnedByUs = $false }
+    }
+    # Return a clone so tests can't accidentally mutate state.
+    $s = $script:WgRefs[$Name]
+    @{ RefCount = [int]$s.RefCount; OwnedByUs = [bool]$s.OwnedByUs }
+}
+
+function Add-RipperVpnTunnelRef {
+<#
+.SYNOPSIS
+    Increment the refcount for the named tunnel. Brings the tunnel up
+    on the 0 -> 1 transition (and remembers that WE started it so the
+    matching Remove-RipperVpnTunnelRef can stop it on the way back to
+    0). On every subsequent acquire just bumps the counter. Returns
+    $true on success / no-op, $false if the tunnel could not be
+    started.
+
+.DESCRIPTION
+    Pair with Remove-RipperVpnTunnelRef in a try/finally, or use
+    Use-RipperVpnTunnel which does that for you.
+#>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([Parameter(Mandatory)] [string]$Name)
+    if (-not $script:WgRefs.ContainsKey($Name)) {
+        $script:WgRefs[$Name] = @{ RefCount = 0; OwnedByUs = $false }
+    }
+    $s = $script:WgRefs[$Name]
+    if ($s.RefCount -eq 0) {
+        $state = Test-RipperVpnTunnel -Name $Name -Detailed
+        if ($state -eq 'Running') {
+            # Already up before we got here -- don't take ownership;
+            # release will be a no-op.
+            $s.OwnedByUs = $false
+            Write-RipperLog INFO 'Wireguard' "Acquired ref to tunnel '$Name' (already up; not owned)."
+        } elseif ($state -eq 'NotInstalled') {
+            Write-RipperLog WARN 'Wireguard' "Cannot acquire tunnel '$Name': service not installed."
+            return $false
+        } else {
+            $started = Start-RipperVpnTunnel -Name $Name
+            if (-not $started) { return $false }
+            $s.OwnedByUs = $true
+        }
+    }
+    $s.RefCount++
+    return $true
+}
+
+function Remove-RipperVpnTunnelRef {
+<#
+.SYNOPSIS
+    Decrement the refcount for the named tunnel. On the 1 -> 0
+    transition, stops the tunnel IFF Add-RipperVpnTunnelRef was the one
+    that started it. No-op if RefCount is already 0 (defensive: a stray
+    Remove without a paired Add must not bring down a tunnel some other
+    consumer is still holding).
+#>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([Parameter(Mandatory)] [string]$Name)
+    if (-not $script:WgRefs.ContainsKey($Name)) {
+        Write-RipperLog WARN 'Wireguard' "Remove-RipperVpnTunnelRef '$Name': no acquire on record; ignoring."
+        return $true
+    }
+    $s = $script:WgRefs[$Name]
+    if ($s.RefCount -le 0) {
+        Write-RipperLog WARN 'Wireguard' "Remove-RipperVpnTunnelRef '$Name': refcount already 0; ignoring."
+        return $true
+    }
+    $s.RefCount--
+    if ($s.RefCount -eq 0 -and $s.OwnedByUs) {
+        $stopped = Stop-RipperVpnTunnel -Name $Name
+        $s.OwnedByUs = $false
+        return $stopped
+    }
+    return $true
+}
+
+function Use-RipperVpnTunnel {
+<#
+.SYNOPSIS
+    Refcounted lifecycle wrapper: acquire the named tunnel, run the
+    scriptblock, release in a finally. The tunnel is brought up on the
+    first acquire and (if WE started it) torn down on the last release.
+
+.DESCRIPTION
+    The right way for a sync target to gate work on a WG tunnel.
+    Nested acquires are safe; the tunnel stays up across all of them
+    and only comes down on the outermost release. Exceptions inside
+    the scriptblock are re-thrown after release.
+
+    Returns the result of the scriptblock when acquire succeeds; throws
+    a terminating error when acquire fails (so the caller's catch can
+    convert it into a sync-target Failed result).
+
+.PARAMETER Name
+    Tunnel name (see Get-RipperVpnTunnelServiceName).
+
+.PARAMETER ScriptBlock
+    Work to do while the tunnel is held up. May return any value
+    (passed through to the caller).
+
+.EXAMPLE
+    Use-RipperVpnTunnel -Name 'home-wg' -ScriptBlock {
+        robocopy $src $unc /MIR
+    }
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$Name,
+        [Parameter(Mandatory)] [scriptblock]$ScriptBlock
+    )
+    $ok = Add-RipperVpnTunnelRef -Name $Name
+    if (-not $ok) {
+        throw "Could not bring WireGuard tunnel '$Name' up; sync cannot proceed."
+    }
+    try {
+        & $ScriptBlock
+    } finally {
+        [void](Remove-RipperVpnTunnelRef -Name $Name)
+    }
+}
+
+function Enable-RipperVpnTunnelSessionKeepAlive {
+<#
+.SYNOPSIS
+    Phase 6.4.1: hold an extra refcount on the named tunnel for the
+    rest of the session, so it stays up between consecutive sync
+    operations (e.g. between discs in continuous-mode rip). Idempotent;
+    safe to call before every sync. Pair with
+    Disable-RipperVpnTunnelSessionKeepAlive at session exit.
+
+.DESCRIPTION
+    Used when cfg.WireGuardKeepAliveBetweenDiscs is true. Without this
+    extra ref, a 30-disc rip session would bounce the tunnel 30 times
+    (each disc's Use-RipperVpnTunnel acquires + releases on its own).
+    With this ref, the first per-sync acquire brings it up, the
+    keep-alive ref pins it at refcount=1 even after the per-sync
+    release, and Disable-* on session exit drops the last ref.
+
+    Sets $env:MUSICRIPPER_WG_SESSION_REF=<name> so the parent runspace
+    (Start-Ripper) can disable on exit even if the worker that
+    originally enabled has already terminated.
+#>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([Parameter(Mandatory)] [string]$Name)
+    # Already enabled in this runspace? No-op.
+    if ($env:MUSICRIPPER_WG_SESSION_REF -eq $Name) {
+        return $true
+    }
+    $ok = Add-RipperVpnTunnelRef -Name $Name
+    if (-not $ok) { return $false }
+    $env:MUSICRIPPER_WG_SESSION_REF = $Name
+    Write-RipperLog INFO 'Wireguard' "Session keep-alive enabled for tunnel '$Name'."
+    return $true
+}
+
+function Disable-RipperVpnTunnelSessionKeepAlive {
+<#
+.SYNOPSIS
+    Drop the keep-alive refcount on the named tunnel. Idempotent. Reads
+    the tunnel name from $env:MUSICRIPPER_WG_SESSION_REF if -Name is
+    omitted, so an exit hook in a different runspace from the one that
+    enabled keep-alive can still clean up correctly.
+#>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([string]$Name)
+    if (-not $Name) { $Name = $env:MUSICRIPPER_WG_SESSION_REF }
+    if ([string]::IsNullOrWhiteSpace($Name)) { return $true }
+    [void](Remove-RipperVpnTunnelRef -Name $Name)
+    $env:MUSICRIPPER_WG_SESSION_REF = $null
+    Write-RipperLog INFO 'Wireguard' "Session keep-alive disabled for tunnel '$Name'."
+    return $true
+}
