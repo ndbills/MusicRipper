@@ -31,6 +31,7 @@ Phase 6.2, Synology NAS over WireGuard in Phase 6.3+).
 | 6.5   | Startup pending-sync resync UI           | ✅ complete    |
 | 6.4   | Synology NAS over WireGuard              | ✅ complete    |
 | 6.4.1 | Refcounted WG tunnel lifecycle           | ✅ complete    |
+| 6.6   | WPF first-run + config editor overhaul   | ✅ complete    |
 | 7     | Polish, packaging, parent-friendly UX    | ⏳ not started |
 
 ## 3-line quickstart (engineer install)
@@ -38,18 +39,23 @@ Phase 6.2, Synology NAS over WireGuard in Phase 6.3+).
 ```powershell
 git clone <this-repo> C:\bin\MusicRipper ; cd C:\bin\MusicRipper
 ./setup/Install-Dependencies.ps1   # winget: PS7, CUETools, Picard
-./setup/New-RipperConfig.ps1 ; ./setup/Register-Drive.ps1 ; ./setup/Install-Shortcut.ps1
+./setup/Install-Shortcut.ps1       # Desktop shortcut "Rip a CD"
 ```
 
-After that, the Desktop shortcut **"Rip a CD"** is the entry point.
-It identifies the disc, queries MusicBrainz, pops the confirm dialog,
-and (on **Rip**) performs a secure FLAC rip with live progress, an
-AccurateRip / CTDB verification pass, and an EAC-style CUE + log.
-Clean rips are tagged (full Vorbis set + embedded cover + ReplayGain)
-and filed under `<LibraryRoot>\<AlbumArtist>\<Album> (<Year>)\`.
-Suspect rips, low-confidence MusicBrainz matches, and unknown discs
-route to `<LibraryRoot>\_ReviewQueue\` with a `REVIEW.txt` and a
-single-file `_image\<Album>.flac` for inspection.
+Double-click the Desktop shortcut. On first launch the WPF settings
+editor opens (library root, MusicBrainz email, drive registration with
+progress bar, OneDrive / Synology NAS sync targets, WireGuard `.conf`
+picker). Save and you're ripping.
+
+After setup the shortcut identifies each inserted disc, queries
+MusicBrainz, pops the confirm dialog, and (on **Rip**) performs a
+secure FLAC rip with live progress, an AccurateRip / CTDB verification
+pass, and an EAC-style CUE + log. Clean rips are tagged (full Vorbis
+set + embedded cover + ReplayGain) and filed under
+`<LibraryRoot>\<AlbumArtist>\<Album> (<Year>)\`. Suspect rips,
+low-confidence MusicBrainz matches, and unknown discs route to
+`<LibraryRoot>\_ReviewQueue\` with a `REVIEW.txt` and a single-file
+`_image\<Album>.flac` for inspection.
 
 ## Directory map
 
@@ -57,8 +63,8 @@ single-file `_image\<Album>.flac` for inspection.
 MusicRipper/
 ├── setup/                          # One-time, run as admin
 │   ├── Install-Dependencies.ps1    # winget: PS7, CUETools, Xiph.FLAC, Picard
-│   ├── Register-Drive.ps1          # Detect drive + AccurateRip offset
-│   ├── New-RipperConfig.ps1        # Create per-machine config.json
+│   ├── Register-Drive.ps1          # Detect drive + AccurateRip offset (also called from WPF)
+│   ├── New-RipperConfig.ps1        # Headless config wizard (WPF editor preferred)
 │   └── Install-Shortcut.ps1        # Desktop shortcut "Rip a CD"
 │
 ├── src/
