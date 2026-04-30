@@ -46,8 +46,9 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1')  -Force
-Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
+Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1')        -Force
+Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1')       -Force
+Import-Module (Join-Path $repoRoot 'src\lib\ConfigPrompt.psd1') -Force
 
 Start-RipperLog -Context 'new-ripper-config' | Out-Null
 
@@ -205,29 +206,34 @@ if ($existing) {
 }
 
 # --- Library root (required) ----------------------------------------------
-$defaultLib = if ($existing) { $existing.LibraryRoot } else { Join-Path ([Environment]::GetFolderPath('MyMusic')) 'MusicRipper' }
-$libraryRoot = Read-WithDefault -Prompt 'Library root path' -Default $defaultLib
-if ([string]::IsNullOrWhiteSpace($libraryRoot)) { throw "Library root is required." }
+Write-RipperConfigSection 'Library'
+$defaultLib = if ($existing) { [string]$existing.LibraryRoot } else { Join-Path ([Environment]::GetFolderPath('MyMusic')) 'MusicRipper' }
+$libraryRoot = Read-RipperPathPrompt `
+    -Label 'Library root path' `
+    -Current $defaultLib `
+    -Type Folder `
+    -AllowClear $false
+if ([string]::IsNullOrWhiteSpace($libraryRoot)) { throw 'Library root is required.' }
 if (-not (Test-Path -LiteralPath $libraryRoot)) {
     New-Item -ItemType Directory -Path $libraryRoot -Force | Out-Null
     Write-RipperLog INFO 'New-RipperConfig' "Created library root '$libraryRoot'."
 }
 
 # --- MusicBrainz UA / contact email ---------------------------------------
+Write-RipperConfigSection 'MusicBrainz contact (required by their ToS)'
 $defaultUa = if ($existing) { $existing.MusicBrainzUserAgent } else { 'MusicRipper/0.1 ( unknown@example.com )' }
-$email = Read-WithDefault -Prompt 'MusicBrainz contact email (required by their ToS)' `
+$email = Read-WithDefault -Prompt 'MusicBrainz contact email' `
                           -Default ($defaultUa -replace '.*\(\s*', '' -replace '\s*\).*', '')
 $ua = "MusicRipper/0.1 ( $email )"
 
 # --- OneDrive (optional, Phase 6.2) --------------------------------------
-# Stores cfg.OneDriveSyncTargetRoot -- the absolute folder under
-# OneDrive that ripped albums get mirrored into. We pop a Windows
-# Forms FolderBrowserDialog seeded at the user's OneDrive root (looked
-# up via HKCU\Software\Microsoft\OneDrive\UserFolder) so the user can
-# just navigate inside it instead of typing the path. Cancelling the
-# dialog leaves the field empty -- the OneDrive sync target then
-# fails fast at sync time with a clear "not configured" message rather
-# than silently doing nothing.
+# Stores cfg.OneDriveSyncTargetRoot. Read-RipperPathPrompt opens a
+# FolderBrowserDialog seeded at the user's OneDrive root (HKCU
+# \Software\Microsoft\OneDrive\UserFolder) when the user presses
+# Enter on a fresh field or types 'pick' on an existing one.
+# Cancelling the picker keeps the existing value (or leaves it
+# unset), and '-' explicitly clears.
+Write-RipperConfigSection 'OneDrive sync target (optional)'
 . (Join-Path $repoRoot 'src\sync\Sync-ToOneDrive.ps1')
 $defaultOd = if ($existing -and $existing.PSObject.Properties['OneDriveSyncTargetRoot']) { [string]$existing.OneDriveSyncTargetRoot } else { '' }
 $oneDriveRoot = Get-RipperOneDriveUserFolder
@@ -236,45 +242,12 @@ if ($oneDriveRoot) {
 } else {
     Write-Host "OneDrive client not detected (HKCU\\Software\\Microsoft\\OneDrive\\UserFolder missing). You can still pick a folder manually." -ForegroundColor Yellow
 }
-$prompt = if ($defaultOd) {
-    "OneDrive sync target root [$defaultOd] (Enter = keep, 'pick' to browse, '-' to clear)"
-} elseif ($oneDriveRoot) {
-    "OneDrive sync target root (Enter or 'pick' = browse from $oneDriveRoot, '-' to skip)"
-} else {
-    "OneDrive sync target root (Enter or 'pick' = browse, '-' to skip)"
-}
-$ans = Read-Host $prompt
-$oneDrive = $defaultOd
-$ansTrim = $ans.Trim()
-if ($ansTrim -eq '-') {
-    $oneDrive = ''
-} elseif ([string]::IsNullOrWhiteSpace($ans) -and $defaultOd) {
-    # Enter with an existing value = keep it; do not pop the dialog.
-    $oneDrive = $defaultOd
-} elseif ([string]::IsNullOrWhiteSpace($ans) -or $ansTrim.ToLowerInvariant() -eq 'pick') {
-    # Browse. Use Windows Forms FolderBrowserDialog -- ships with
-    # every Windows install, no extra dependencies. Seed at the
-    # registered OneDrive root so the user can just navigate inside
-    # it; if no OneDrive is detected, seed at the existing value or
-    # %USERPROFILE%.
-    Add-Type -AssemblyName System.Windows.Forms | Out-Null
-    $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dlg.Description = 'Select the OneDrive subfolder where ripped albums should be mirrored to. Cancel to skip the OneDrive sync target.'
-    $dlg.UseDescriptionForTitle = $true
-    $dlg.ShowNewFolderButton = $true
-    $seed = if ($defaultOd -and (Test-Path -LiteralPath $defaultOd)) { $defaultOd }
-            elseif ($oneDriveRoot) { $oneDriveRoot }
-            else { [Environment]::GetFolderPath('UserProfile') }
-    $dlg.SelectedPath = $seed
-    if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-        $oneDrive = $dlg.SelectedPath
-        Write-Host "  OneDrive sync target -> $oneDrive" -ForegroundColor Green
-    } else {
-        Write-Host "  OneDrive sync target left as: $(if ($defaultOd) { $defaultOd } else { '(not set)' })" -ForegroundColor DarkGray
-    }
-} else {
-    $oneDrive = $ansTrim
-}
+$oneDrive = Read-RipperPathPrompt `
+    -Label 'OneDrive sync target root' `
+    -Current $defaultOd `
+    -Type Folder `
+    -SeedRoot $oneDriveRoot `
+    -AllowClear $true
 if ([string]::IsNullOrWhiteSpace($oneDrive)) { $oneDrive = $null }
 elseif (-not (Test-Path -LiteralPath $oneDrive)) {
     Write-Warning "OneDriveSyncTargetRoot '$oneDrive' does not exist on disk. The OneDrive sync target will report Failed until the folder exists."
@@ -286,6 +259,7 @@ elseif (-not (Test-Path -LiteralPath $oneDrive)) {
 # credential lives in credentials.clixml; we only re-prompt when the
 # user opts in, so re-running setup never silently asks for the NAS
 # password again.
+Write-RipperConfigSection 'Synology NAS sync target (optional)'
 $defaultSyn = if ($existing) { $existing.SynologyUnc } else { '' }
 $syn = Read-WithDefault -Prompt 'Synology NAS UNC path, e.g. \\nas\music (blank to skip)' -Default $defaultSyn
 if ([string]::IsNullOrWhiteSpace($syn)) { $syn = $null }
@@ -354,6 +328,8 @@ if ($syn) {
 #      + Grant-RipperVpnTunnelControl. This is the ONE UAC prompt.
 #   4. Save WireGuardTunnelName + WireGuardAutoToggle to cfg.
 
+if ($syn) { Write-RipperConfigSection 'WireGuard auto-toggle (optional)' }
+
 $wgTunnelName = $null
 if ($existing -and $existing.PSObject.Properties['WireGuardTunnelName']) {
     $wgTunnelName = $existing.WireGuardTunnelName
@@ -380,8 +356,13 @@ if ($syn) {
     }
 
     if ($wgWanted) {
-        $confPath = Read-Host 'Path to WireGuard .conf file (blank to skip)'
-        $confPath = $confPath.Trim().Trim('"').Trim("'")
+        $confPath = Read-RipperPathPrompt `
+            -Label 'Path to WireGuard .conf file' `
+            -Current '' `
+            -Type File `
+            -FileFilter 'WireGuard config (*.conf)|*.conf|All files (*.*)|*.*' `
+            -AllowClear $true `
+            -MustExist $true
         if ([string]::IsNullOrWhiteSpace($confPath)) {
             Write-RipperLog INFO 'New-RipperConfig' 'WireGuard setup skipped (no .conf path provided).'
         } elseif (-not (Test-Path -LiteralPath $confPath)) {
@@ -396,127 +377,17 @@ if ($syn) {
             } catch { $alreadyInstalled = $false }
 
             if (-not $alreadyInstalled) {
-                # Spawn an elevated child to run /installtunnelservice
-                # + sc.exe sdset in a single UAC prompt. We pass the
-                # current user's SID + repo root so the child knows
-                # who to grant control to and can dot-source our
-                # Wireguard module.
-                #
-                # Implementation detail: we write the helper to a temp
-                # .ps1 file and run it with `-File`, rather than passing
-                # a heredoc to `-Command`. Heredoc-via-Command is
-                # fragile -- escape rules for embedded $vars and quoted
-                # paths under -Verb RunAs are different from the parent
-                # shell, and parse failures crash the elevated child
-                # before our try/catch (or even Start-RipperLog) can
-                # run, leaving no log and a vanishing window. A real
-                # script file makes the helper trivially debuggable
-                # (rerun manually in any elevated pwsh) and removes a
-                # whole class of escape bugs. We always `pause` at the
-                # end so the window cannot disappear regardless of
-                # success/failure.
-                $repoRoot = Split-Path -Parent $PSScriptRoot
-                $userSid  = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-                $helperPath = Join-Path ([System.IO.Path]::GetTempPath()) "musicripper-wginstall-$([guid]::NewGuid().Guid.Substring(0,8)).ps1"
-                # Build the helper script. Single-quote string literals
-                # inside the script so backslashes and $-signs in the
-                # passed paths/SIDs don't get reinterpreted by the
-                # elevated child's parser.
-                $helperBody = @"
-Set-StrictMode -Version 3.0
-`$ErrorActionPreference = 'Stop'
-`$RepoRoot   = '$repoRoot'
-`$ConfPath   = '$confPath'
-`$TunnelStem = '$tunnelStem'
-`$UserSid    = '$userSid'
-`$LogPath    = `$null
-try {
-    Import-Module (Join-Path `$RepoRoot 'src\lib\Logging.psd1') -Force
-    `$LogPath = Start-RipperLog -Context 'WgInstall'
-    Import-Module (Join-Path `$RepoRoot 'src\lib\Wireguard.psd1') -Force
-    Write-Host ''
-    Write-Host "Installing WireGuard tunnel '`$TunnelStem' from '`$ConfPath' ..." -ForegroundColor Cyan
-    `$ok1 = Install-RipperVpnTunnel -ConfPath `$ConfPath
-    if (-not `$ok1) { throw "Install-RipperVpnTunnel returned false. See log: `$LogPath" }
-    Write-Host "Granting start/stop control to SID `$UserSid ..." -ForegroundColor Cyan
-    `$ok2 = Grant-RipperVpnTunnelControl -Name `$TunnelStem -UserSid `$UserSid
-    if (-not `$ok2) { throw "Grant-RipperVpnTunnelControl returned false. See log: `$LogPath" }
-    # `wireguard.exe /installtunnelservice` registers the service with
-    # StartType=Automatic, meaning Windows would bring the tunnel up
-    # at every boot/login. That is not what we want -- the whole
-    # point of the auto-toggle is for MusicRipper to be the one (and
-    # only) thing that starts the tunnel, on demand, and only for
-    # the duration of a NAS sync. Flip it to Manual now.
-    `$svcName = "WireGuardTunnel```$`$TunnelStem"
-    Write-Host "Setting service '`$svcName' StartType to Manual ..." -ForegroundColor Cyan
-    try {
-        Set-Service -Name `$svcName -StartupType Manual -ErrorAction Stop
-    } catch {
-        Write-Host "  Set-Service failed: `$(`$_.Exception.Message). Tunnel will still work but may auto-start on boot." -ForegroundColor Yellow
-    }
-    # `wireguard.exe /installtunnelservice` auto-starts the tunnel.
-    # Leave it stopped after setup so the next rip's auto-toggle is
-    # what brings it up (and so a parent who walks away mid-setup
-    # isn't left with an unexpectedly-active VPN). The fact that the
-    # service reached Running between Install and Grant already
-    # validated the .conf -- if WG had refused the conf, Get-Service
-    # in Grant-RipperVpnTunnelControl would have failed.
-    Write-Host 'Stopping tunnel (will be re-started automatically per rip) ...' -ForegroundColor Cyan
-    [void](Stop-RipperVpnTunnel -Name `$TunnelStem)
-    Write-Host ''
-    Write-Host 'WireGuard tunnel installed and start/stop control granted.' -ForegroundColor Green
-    Write-Host "Log: `$LogPath" -ForegroundColor DarkGray
-    `$exitCode = 0
-} catch {
-    Write-Host ''
-    Write-Host '======================================================================' -ForegroundColor Red
-    Write-Host 'WireGuard install FAILED:' -ForegroundColor Red
-    Write-Host `$_.Exception.Message -ForegroundColor Red
-    if (`$_.InvocationInfo) {
-        Write-Host ''
-        Write-Host "At: `$(`$_.InvocationInfo.ScriptName):`$(`$_.InvocationInfo.ScriptLineNumber)" -ForegroundColor DarkRed
-        Write-Host "    `$(`$_.InvocationInfo.Line.Trim())" -ForegroundColor DarkRed
-    }
-    if (`$_.ScriptStackTrace) {
-        Write-Host ''
-        Write-Host 'Stack trace:' -ForegroundColor DarkRed
-        Write-Host `$_.ScriptStackTrace -ForegroundColor DarkRed
-    }
-    if (`$LogPath) {
-        Write-Host ''
-        Write-Host "Full log: `$LogPath" -ForegroundColor Yellow
-    }
-    Write-Host '======================================================================' -ForegroundColor Red
-    `$exitCode = 2
-} finally {
-    try { Stop-RipperLog } catch { }
-    # Always pause so the window cannot vanish, regardless of how we
-    # got here. Read-Host needs a console; Start-Process -Verb RunAs
-    # gives one.
-    Write-Host ''
-    Read-Host 'Press Enter to close this window'
-}
-exit `$exitCode
-"@
-                Set-Content -LiteralPath $helperPath -Value $helperBody -Encoding UTF8
-                Write-Host 'Launching elevated helper to install the WireGuard tunnel (one UAC prompt)...' -ForegroundColor Cyan
-                Write-Host "  Helper script: $helperPath" -ForegroundColor DarkGray
+                # Phase 6.6.F: factored into a shared helper in
+                # src/lib/Wireguard.psm1 so the WPF config editor can
+                # call the same one-UAC-prompt elevated install path.
+                Import-Module (Join-Path (Split-Path -Parent $PSScriptRoot) 'src\lib\Wireguard.psd1') -Force
                 try {
-                    $proc = Start-Process -FilePath 'pwsh' `
-                        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $helperPath) `
-                        -Verb RunAs -Wait -PassThru
-                    if ($proc.ExitCode -ne 0) {
-                        Write-Warning "Elevated helper exited $($proc.ExitCode); WireGuard tunnel was NOT installed. Auto-toggle will be left disabled. Helper script kept at: $helperPath"
-                    } else {
-                        $wgTunnelName = $tunnelStem
-                        Write-RipperLog INFO 'New-RipperConfig' "WireGuard tunnel '$tunnelStem' installed via elevated helper."
-                        # Helper succeeded -- delete the temp script.
-                        # On failure we keep it around so the user can
-                        # rerun it manually for diagnosis.
-                        Remove-Item -LiteralPath $helperPath -Force -ErrorAction SilentlyContinue
-                    }
+                    $wgTunnelName = Invoke-RipperVpnTunnelElevatedInstall `
+                        -ConfPath $confPath `
+                        -RepoRoot (Split-Path -Parent $PSScriptRoot)
+                    Write-RipperLog INFO 'New-RipperConfig' "WireGuard tunnel '$wgTunnelName' installed via elevated helper."
                 } catch {
-                    Write-Warning "Failed to launch elevated helper: $($_.Exception.Message). WireGuard tunnel was NOT installed. Helper script kept at: $helperPath"
+                    Write-Warning $_.Exception.Message
                 }
             } else {
                 Write-Host "WireGuard service '$svcName' is already installed; reusing." -ForegroundColor Green
@@ -537,6 +408,7 @@ exit `$exitCode
 # Names that don't match a known provider are accepted but warned about
 # (the orchestrator skips unknowns at runtime with a WARN log line).
 # ($knownMd / $knownCov were computed at the top of the script.)
+Write-RipperConfigSection 'Metadata + cover-art providers'
 
 function Read-ProviderList {
     [CmdletBinding()]
@@ -568,6 +440,7 @@ $coverArtProviders = Read-ProviderList -Prompt 'Cover-art providers (priority or
 # wait for green check, eject, repeat). The confirm dialog still
 # surfaces a per-rip checkbox seeded from this value, so power users
 # can flip it per-disc without editing the config.
+Write-RipperConfigSection 'Per-rip behavior'
 $defaultEject = if ($existing -and $existing.PSObject.Properties['EjectAfterRip']) { [bool]$existing.EjectAfterRip } else { $true }
 $ejectStr = Read-WithDefault -Prompt 'Eject disc after rip? (Y/N)' -Default ($(if ($defaultEject) { 'Y' } else { 'N' }))
 $ejectAfterRip = ($ejectStr -match '^\s*[YyTt1]')
@@ -586,6 +459,7 @@ $continuousMode = ($contStr -match '^\s*[YyTt1]')
 # Library move. Built-in 'Stub' is for testing the orchestrator without
 # a real off-machine target. Real targets land in 6.2 (OneDrive) and
 # 6.3 (SynologyNAS). Empty = no sync (current behaviour).
+Write-RipperConfigSection 'Sync targets + retention'
 $knownSync   = @('Stub','OneDrive','SynologyNAS')
 # Wrap the whole `if` expression in @(), not just the truthy branch.
 # Under Strict Mode 3.0, `$x = if(...) { ... } else { @() }` produces

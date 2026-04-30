@@ -40,8 +40,9 @@ $ErrorActionPreference = 'Stop'
 # Pull in shared modules. Use absolute paths derived from this script's
 # location so the script works regardless of cwd.
 $repoRoot = Split-Path -Parent $PSScriptRoot
-Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1')  -Force
-Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
+Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1')             -Force
+Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1')            -Force
+Import-Module (Join-Path $repoRoot 'src\lib\DriveRegistration.psd1') -Force
 
 Start-RipperLog -Context 'register-drive' | Out-Null
 
@@ -65,7 +66,7 @@ if ($existingCfg -and $existingCfg.DriveLetter -and $null -ne $existingCfg.Drive
 
 Write-RipperLog INFO 'Register-Drive' 'Enumerating optical drives via Win32_CDROMDrive.'
 
-$drives = @(Get-CimInstance -ClassName Win32_CDROMDrive | Sort-Object Drive)
+$drives = @(Get-RipperOpticalDrives)
 if ($drives.Count -eq 0) {
     throw "No optical drives detected. Plug in a USB CD/DVD drive and re-run."
 }
@@ -96,58 +97,9 @@ if ($drives.Count -eq 1) {
 Write-RipperLog INFO 'Register-Drive' "Selected drive $($chosen.Drive) ($($chosen.Name))."
 
 # ---- AccurateRip offset lookup --------------------------------------------
-function Find-AccurateRipOffset {
-<#
-.SYNOPSIS
-    Return the AccurateRip read offset (in samples) for a drive name, or $null.
-.DESCRIPTION
-    Tries the live AccurateRip page first; on any failure, falls back to the
-    bundled cached list. Match is case-insensitive substring on the
-    Win32_CDROMDrive.Name field.
-.PARAMETER DriveName
-    The Win32_CDROMDrive.Name string (vendor + model).
-.PARAMETER CachedListPath
-    Path to data/driveoffsets.cached.json.
-.EXAMPLE
-    PS> Find-AccurateRipOffset -DriveName 'PIONEER BD-RW BDR-209M' -CachedListPath ...
-    6
-#>
-    [CmdletBinding()]
-    [OutputType([System.Nullable[int]])]
-    param(
-        [Parameter(Mandatory)] [string]$DriveName,
-        [Parameter(Mandatory)] [string]$CachedListPath
-    )
-
-    # --- Live attempt. Wrapped in try so a network blip falls through. ---
-    try {
-        Write-RipperLog INFO 'Register-Drive' 'Querying AccurateRip live driveoffsets page.'
-        $resp = Invoke-WebRequest -Uri 'http://www.accuraterip.com/driveoffsets.htm' `
-                                  -TimeoutSec 10 -UseBasicParsing
-        # The page is one giant table; rows are <tr><td>name</td><td>offset</td>...
-        $rows = [regex]::Matches($resp.Content,
-            '<tr[^>]*>\s*<td[^>]*>(?<name>[^<]+)</td>\s*<td[^>]*>(?<off>-?\d+)</td>',
-            'IgnoreCase')
-        foreach ($m in $rows) {
-            $name = $m.Groups['name'].Value.Trim()
-            if ($DriveName -like "*$name*") {
-                return [int]$m.Groups['off'].Value
-            }
-        }
-    } catch {
-        Write-RipperLog WARN 'Register-Drive' "Live AccurateRip lookup failed: $($_.Exception.Message). Falling back to cache."
-    }
-
-    # --- Cached fallback. Always available. ---
-    $cache = Get-Content -LiteralPath $CachedListPath -Raw | ConvertFrom-Json
-    foreach ($entry in $cache.drives) {
-        if ($DriveName -like "*$($entry.match)*") { return [int]$entry.offset }
-    }
-    $null
-}
-
 $cachedList = Join-Path $repoRoot 'data\driveoffsets.cached.json'
-$offset = Find-AccurateRipOffset -DriveName $chosen.Name -CachedListPath $cachedList
+Write-RipperLog INFO 'Register-Drive' 'Querying AccurateRip live driveoffsets page.'
+$offset = Find-RipperAccurateRipOffset -DriveName $chosen.Name -CachedListPath $cachedList
 
 if ($null -eq $offset) {
     Write-Warning "No AccurateRip offset found for drive '$($chosen.Name)'."

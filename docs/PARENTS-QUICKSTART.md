@@ -1,11 +1,21 @@
 # Parents' Quickstart
 
-> **Status:** Stub. The full screenshot-heavy version lands in **Phase 7**.
->
-> Until then, parents shouldn't be using this — there's no rip logic yet,
-> just a Phase-1 stub message box.
+> **Status:** First-run is wired up (Phase 6.6). The screenshot-heavy
+> walkthrough still lands in Phase 7.
 
-Planned contents (Phase 7):
+## First time you launch MusicRipper
+
+A **Settings** window opens automatically. Fill in:
+
+- **Library root** — where your ripped CDs will live.
+- **MusicBrainz contact email** — required by the metadata service.
+- Click **Register drive...** to calibrate your CD drive (one-time).
+- (Optional) **Sync** tab: pick OneDrive or the family NAS to mirror albums.
+- (Optional) **WireGuard** tab: pick a `.conf` and click **Install** to set up the VPN used by the NAS sync.
+
+Click **Save**. You're done.
+
+## Ripping a CD
 
 1. Insert a CD.
 2. Double-click **Rip a CD** on the Desktop.

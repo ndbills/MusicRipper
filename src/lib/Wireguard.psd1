@@ -18,7 +18,8 @@
         'Remove-RipperVpnTunnelRef',
         'Get-RipperVpnTunnelRefState',
         'Enable-RipperVpnTunnelSessionKeepAlive',
-        'Disable-RipperVpnTunnelSessionKeepAlive'
+        'Disable-RipperVpnTunnelSessionKeepAlive',
+        'Invoke-RipperVpnTunnelElevatedInstall'
     )
     CmdletsToExport   = @()
     AliasesToExport   = @()

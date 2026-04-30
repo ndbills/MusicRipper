@@ -92,6 +92,9 @@ Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 . (Join-Path $repoRoot 'src\ui\Show-BetweenDiscsDialog.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-DuplicateDiscDialog.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-TargetExistsDialog.ps1')
+. (Join-Path $repoRoot 'src\ui\Show-CredentialDialog.ps1')
+. (Join-Path $repoRoot 'src\ui\Show-RegisterDriveDialog.ps1')
+. (Join-Path $repoRoot 'src\ui\Show-RipperConfigDialog.ps1')
 
 $logPath = Start-RipperLog -Context 'start-ripper'
 Write-RipperLog INFO 'Start-Ripper' 'Phase 5 entry: config + disc-id + metadata + confirm + rip + quality/tag/move.'
@@ -209,12 +212,81 @@ namespace MusicRipper {
 # --- Config check ----------------------------------------------------------
 $configPath = Get-RipperConfigPath
 if (-not (Test-Path -LiteralPath $configPath)) {
-    Show-RipperInfo "Config not found at $configPath.`n`nRun setup\New-RipperConfig.ps1 first." `
-        'MusicRipper' 'Warning'
-    Stop-RipperLog
-    return
+    Write-RipperLog INFO 'Start-Ripper' "No config at '$configPath' -- launching first-run config editor."
+    $configDir = Split-Path -Parent $configPath
+    if (-not (Test-Path -LiteralPath $configDir)) {
+        New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+    }
+    $saved = Show-RipperConfigDialog -FirstRun -ConfigPath $configPath
+    if (-not $saved -or -not (Test-Path -LiteralPath $configPath)) {
+        Show-RipperInfo "Setup cancelled. MusicRipper needs a config to run.`n`nRe-launch when you're ready to finish setup, or run setup\New-RipperConfig.ps1 from a terminal." `
+            'MusicRipper' 'Warning'
+        Stop-RipperLog
+        return
+    }
+    Write-RipperLog INFO 'Start-Ripper' "First-run config saved to '$configPath'."
 }
 $cfg = Import-RipperConfig
+
+# --- Drive check ----------------------------------------------------------
+# Phase 6.6.E: if no drive is registered (fresh first-run config, or a
+# parent re-saved config without ever picking the drive), pop the config
+# editor instead of dumping the user into the rip queue with a "no
+# DriveLetter" error every cycle. Re-load $cfg if they save.
+#
+# Phase 6.6.F.2: don't make a missing drive fatal. A user with no
+# optical drive (e.g. a test laptop, a NAS-only retry session) still
+# needs to reach the pending-sync flow. If they decline registration
+# OR save without picking a drive, we fall through with $skipRipLoop=$true
+# -- the startup resync still runs, but the disc loop is skipped.
+$skipRipLoop = $false
+if (-not $cfg.DriveLetter -or $null -eq $cfg.DriveOffset) {
+    Add-Type -AssemblyName System.Windows.Forms | Out-Null
+    Write-RipperLog INFO 'Start-Ripper' 'No DriveLetter/DriveOffset in config -- prompting to register.'
+    $ans = [System.Windows.Forms.MessageBox]::Show(
+        "MusicRipper hasn't registered an optical drive yet.`n`n" +
+        "  Yes  - open Settings to register one now`n" +
+        "  No   - skip for now (you can still re-sync pending albums; ripping will be unavailable)`n" +
+        "  Cancel - quit MusicRipper",
+        'MusicRipper - drive not configured',
+        [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
+        [System.Windows.Forms.MessageBoxIcon]::Question)
+    switch ($ans) {
+        ([System.Windows.Forms.DialogResult]::Cancel) {
+            Write-RipperLog INFO 'Start-Ripper' 'User cancelled at drive prompt; exiting.'
+            Stop-RipperLog
+            return
+        }
+        ([System.Windows.Forms.DialogResult]::No) {
+            Write-RipperLog INFO 'Start-Ripper' 'User skipped drive registration; entering no-drive mode (pending-sync only).'
+            $skipRipLoop = $true
+        }
+        ([System.Windows.Forms.DialogResult]::Yes) {
+            $saved = $null
+            try {
+                $saved = Show-RipperConfigDialog -Config $cfg -ConfigPath $configPath
+            } catch {
+                Write-RipperLog ERROR 'Start-Ripper' "Show-RipperConfigDialog threw: $($_.Exception.GetType().FullName): $($_.Exception.Message)"
+                if ($_.ScriptStackTrace) { Write-RipperLog ERROR 'Start-Ripper' "Stack: $($_.ScriptStackTrace)" }
+                Show-RipperInfo "The settings editor failed to open:`n`n  $($_.Exception.Message)`n`nSee the log for details." `
+                    'MusicRipper' 'Error'
+                Stop-RipperLog
+                return
+            }
+            if ($saved) {
+                $cfg = Import-RipperConfig
+            }
+            if (-not $cfg.DriveLetter -or $null -eq $cfg.DriveOffset) {
+                Write-RipperLog INFO 'Start-Ripper' 'Still no drive after Settings; entering no-drive mode (pending-sync only).'
+                Show-RipperInfo "No drive was registered.`n`nMusicRipper will run in pending-sync mode only -- ripping will be unavailable until a drive is registered." `
+                    'MusicRipper' 'Information'
+                $skipRipLoop = $true
+            } else {
+                Write-RipperLog INFO 'Start-Ripper' "Drive registered: $($cfg.DriveLetter) (offset=$($cfg.DriveOffset))."
+            }
+        }
+    }
+}
 
 # --- Phase 6.4.1: WireGuard exit-time safety net --------------------------
 # Sync-ToSynologyNAS now refcounts the tunnel via Use-RipperVpnTunnel /
@@ -1060,6 +1132,10 @@ Write-RipperLog INFO 'Start-Ripper' "ContinuousMode = $continuousMode"
 # Cancel button that returns Action='Cancelled', in which case we
 # fall through to the normal rip flow without complaint.
 $retryOnStartup = if ($cfg.PSObject.Properties['RetryPendingSyncOnStartup']) { [bool]$cfg.RetryPendingSyncOnStartup } else { $true }
+# Phase 6.6.F.3: track whether the startup resync actually had work
+# to do, so that no-drive mode can show a friendly "nothing to do"
+# toast on exit instead of just vanishing.
+$resyncDidWork = $false
 if ($retryOnStartup) {
     try {
         . (Join-Path $repoRoot 'src\sync\Invoke-PendingSync.ps1')
@@ -1072,14 +1148,17 @@ if ($retryOnStartup) {
             switch ($resync.Action) {
                 'Done' {
                     if ($resync.Summary -and $resync.Summary.Total -gt 0) {
+                        $resyncDidWork = $true
                         Write-RipperLog INFO 'Start-Ripper' `
                             "Startup resync: synced=$($resync.Summary.Synced)/$($resync.Summary.Total), still failing=$($resync.Summary.StillFailing), skipped=$($resync.Summary.Skipped)."
                     }
                 }
                 'Cancelled' {
+                    $resyncDidWork = $true
                     Write-RipperLog INFO 'Start-Ripper' 'Startup resync cancelled by user; proceeding to disc loop.'
                 }
                 'Error' {
+                    $resyncDidWork = $true
                     $msg = if ($resync.Error) { $resync.Error.Exception.Message } else { 'unknown' }
                     Write-RipperLog WARN 'Start-Ripper' "Startup resync errored (non-fatal): $msg"
                 }
@@ -1092,7 +1171,25 @@ if ($retryOnStartup) {
     }
 }
 
+# Phase 6.6.F.3: in no-drive mode, the startup resync IS the whole
+# session. If there was nothing pending, the app would otherwise just
+# vanish silently after the user clicked No / Save -- show a quick
+# acknowledgement so they know it actually ran and decided there was
+# no work to do.
+if ($skipRipLoop -and -not $resyncDidWork) {
+    Show-RipperInfo "No pending albums to sync.`n`nMusicRipper has nothing to do without a registered drive -- closing." `
+        'MusicRipper' 'Information'
+}
+
 do {
+    # Phase 6.6.F.2: no-drive mode -- the user declined to register a
+    # drive (or saved without one). Pending-sync above already ran;
+    # there's nothing for the disc loop to do, so bail out cleanly.
+    if ($skipRipLoop) {
+        Write-RipperLog INFO 'Start-Ripper' 'No-drive mode: skipping disc loop.'
+        break
+    }
+
     # Rotate the log: stop the previous (setup or per-disc) log and open a
     # fresh per-disc file. The per-disc log captures everything from disc-id
     # read through eject for THIS disc only -- great for forensic review.

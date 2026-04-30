@@ -154,7 +154,7 @@ function New-RipperConfigObject {
         # Phase 5.2: ordered cover-art provider chain. First non-empty
         # bytes win. CAA needs an MB ReleaseMbid; iTunes/Deezer fall back
         # to artist+album text search. All three are free / no auth.
-        CoverArtProviders       = @('CoverArtArchive', 'iTunesSearch', 'Deezer')
+        CoverArtProviders       = @('iTunesSearch', 'CoverArtArchive', 'Deezer')
 
         # Phase 5.4: eject the optical drive after the rip / review /
         # cancel flow finishes. Default true preserves the existing
