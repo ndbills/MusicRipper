@@ -522,7 +522,7 @@ function Show-RipperConfigDialog {
               <TextBlock x:Name="WgStatusText" VerticalAlignment="Center"
                          TextWrapping="Wrap" Foreground="#666"/>
             </StackPanel>
-            <!-- Hidden -- the underlying schema field is still WireGuardTunnelName.
+            <!-- The underlying schema field is still WireGuardTunnelName.
                  We expose the .conf path in the UI but the bare tunnel stem is what
                  gets persisted. This textbox is kept (read-only-ish) so power users
                  can see what got resolved. -->

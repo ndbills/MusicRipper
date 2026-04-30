@@ -246,7 +246,17 @@ if (-not $cfg.DriveLetter -or $null -eq $cfg.DriveOffset) {
         Stop-RipperLog
         return
     }
-    $saved = Show-RipperConfigDialog -Config $cfg -ConfigPath $configPath
+    $saved = $null
+    try {
+        $saved = Show-RipperConfigDialog -Config $cfg -ConfigPath $configPath
+    } catch {
+        Write-RipperLog ERROR 'Start-Ripper' "Show-RipperConfigDialog threw: $($_.Exception.GetType().FullName): $($_.Exception.Message)"
+        if ($_.ScriptStackTrace) { Write-RipperLog ERROR 'Start-Ripper' "Stack: $($_.ScriptStackTrace)" }
+        Show-RipperInfo "The settings editor failed to open:`n`n  $($_.Exception.Message)`n`nSee the log for details." `
+            'MusicRipper' 'Error'
+        Stop-RipperLog
+        return
+    }
     if (-not $saved) {
         Show-RipperInfo "MusicRipper still has no drive configured.`n`nRe-launch when you're ready to finish setup." `
             'MusicRipper' 'Warning'
