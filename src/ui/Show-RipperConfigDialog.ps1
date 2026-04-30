@@ -56,6 +56,7 @@ $libRoot = Join-Path $PSScriptRoot '..\lib'
 Import-Module (Join-Path $libRoot 'ConfigPrompt.psd1')    -Force
 Import-Module (Join-Path $libRoot 'Config.psd1')          -Force
 Import-Module (Join-Path $libRoot 'ConfigDiscovery.psd1') -Force
+. (Join-Path $PSScriptRoot 'Show-CredentialDialog.ps1')
 
 
 function Test-RipperConfigEditorComplete {
@@ -627,7 +628,15 @@ function Show-RipperConfigDialog {
         "Drive: (not registered yet)"
     }
 
-    $credStatus.Text = if ([bool]$cfg.HasSynologyCredential) { "Credential: stored (DPAPI)" } else { "Credential: none stored" }
+    # Source of truth is the file on disk -- in first-run mode the
+    # cfg defaults to HasSynologyCredential=$false even if a
+    # credentials.clixml is left over from a previous install.
+    $credPath = Join-Path (Get-RipperConfigRoot) 'credentials.clixml'
+    $credOnDisk = Test-Path -LiteralPath $credPath
+    if ($credOnDisk -ne [bool]$cfg.HasSynologyCredential) {
+        $cfg.HasSynologyCredential = $credOnDisk
+    }
+    $credStatus.Text = if ($credOnDisk) { "Credential: stored (DPAPI)" } else { "Credential: none stored" }
 
     # ---- ordered checkbox-list rendering --------------------------
     # Reference wrappers so closures can reassign the array.
@@ -658,7 +667,10 @@ function Show-RipperConfigDialog {
     # ---- Credential buttons ---------------------------------------
     $credSet.Add_Click({
         try {
-            $c = Get-Credential -Message 'Enter the username + password used to mount the NAS share'
+            $c = Show-RipperCredentialDialog `
+                    -Title   'MusicRipper - NAS credential' `
+                    -Message 'Enter the username + password used to mount the NAS share.' `
+                    -Owner   $window
             if ($c) {
                 Save-RipperCredential -Credential $c
                 $cfg.HasSynologyCredential = $true
