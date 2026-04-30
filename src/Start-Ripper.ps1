@@ -1132,6 +1132,10 @@ Write-RipperLog INFO 'Start-Ripper' "ContinuousMode = $continuousMode"
 # Cancel button that returns Action='Cancelled', in which case we
 # fall through to the normal rip flow without complaint.
 $retryOnStartup = if ($cfg.PSObject.Properties['RetryPendingSyncOnStartup']) { [bool]$cfg.RetryPendingSyncOnStartup } else { $true }
+# Phase 6.6.F.3: track whether the startup resync actually had work
+# to do, so that no-drive mode can show a friendly "nothing to do"
+# toast on exit instead of just vanishing.
+$resyncDidWork = $false
 if ($retryOnStartup) {
     try {
         . (Join-Path $repoRoot 'src\sync\Invoke-PendingSync.ps1')
@@ -1144,14 +1148,17 @@ if ($retryOnStartup) {
             switch ($resync.Action) {
                 'Done' {
                     if ($resync.Summary -and $resync.Summary.Total -gt 0) {
+                        $resyncDidWork = $true
                         Write-RipperLog INFO 'Start-Ripper' `
                             "Startup resync: synced=$($resync.Summary.Synced)/$($resync.Summary.Total), still failing=$($resync.Summary.StillFailing), skipped=$($resync.Summary.Skipped)."
                     }
                 }
                 'Cancelled' {
+                    $resyncDidWork = $true
                     Write-RipperLog INFO 'Start-Ripper' 'Startup resync cancelled by user; proceeding to disc loop.'
                 }
                 'Error' {
+                    $resyncDidWork = $true
                     $msg = if ($resync.Error) { $resync.Error.Exception.Message } else { 'unknown' }
                     Write-RipperLog WARN 'Start-Ripper' "Startup resync errored (non-fatal): $msg"
                 }
@@ -1162,6 +1169,16 @@ if ($retryOnStartup) {
         # prevent the user from ripping discs.
         Write-RipperLog WARN 'Start-Ripper' "Startup resync threw (non-fatal): $($_.Exception.Message)"
     }
+}
+
+# Phase 6.6.F.3: in no-drive mode, the startup resync IS the whole
+# session. If there was nothing pending, the app would otherwise just
+# vanish silently after the user clicked No / Save -- show a quick
+# acknowledgement so they know it actually ran and decided there was
+# no work to do.
+if ($skipRipLoop -and -not $resyncDidWork) {
+    Show-RipperInfo "No pending albums to sync.`n`nMusicRipper has nothing to do without a registered drive -- closing." `
+        'MusicRipper' 'Information'
 }
 
 do {
