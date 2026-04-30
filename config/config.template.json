@@ -45,5 +45,14 @@
   "LocalRetention": "Keep",
 
   "//RetryPendingSyncOnStartup": "Phase 6.5: at startup -- BEFORE any disc-rip -- show a WPF dialog that retries albums whose previous sync didn't finish (e.g. NAS was offline). Default true. Set false if you'd rather run src/tools/Sync-PendingAlbums.ps1 manually. The dialog has its own Cancel button so a single launch can still skip the retry without flipping this flag.",
-  "RetryPendingSyncOnStartup": true
+  "RetryPendingSyncOnStartup": true,
+
+  "//WireGuardTunnelName":     "Phase 6.4: bare tunnel name (typically the .conf filename without extension) of a WireGuard tunnel installed via wireguard.exe /installtunnelservice. When set AND WireGuardAutoToggle=true, MusicRipper starts the tunnel before each NAS sync and stops it on application exit. The Windows service it manages is 'WireGuardTunnel$<Name>'. setup/New-RipperConfig.ps1 prompts for a .conf path and runs install + sc.exe sdset (one UAC prompt) so subsequent rips are silent. null = no VPN management; the share must already be reachable.",
+  "WireGuardTunnelName": null,
+
+  "//WireGuardAutoToggle":     "Phase 6.4: master switch for tunnel management. true (default) = MusicRipper brings WireGuardTunnelName up around each NAS sync and tears it down when the sync is done. false = leave the tunnel state entirely to the user (e.g. always-on VPN, or you manage it via the WireGuard tray app yourself).",
+  "WireGuardAutoToggle": true,
+
+  "//WireGuardKeepAliveBetweenDiscs": "Phase 6.4.1: false (default) = each NAS sync brings the tunnel up just for the duration of that sync (one robocopy invocation), so a 30-disc rip session bounces it 30 times. true = the first sync's start pins the tunnel up for the rest of the session and it's torn down at exit. Set to true if the ~2-3s WG re-handshake per disc adds up for your workflow; leave false if you want the tunnel open as briefly as possible.",
+  "WireGuardKeepAliveBetweenDiscs": false
 }

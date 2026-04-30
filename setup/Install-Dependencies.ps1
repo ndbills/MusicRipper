@@ -49,7 +49,14 @@ $packages = @(
     'Microsoft.PowerShell',
     'gchudov.CUETools',
     'Xiph.FLAC',
-    'MusicBrainz.Picard'
+    'MusicBrainz.Picard',
+    # Phase 6.4: WireGuard for Windows is needed only when the family
+    # NAS lives behind a VPN. We install it unconditionally because
+    # winget's repeat-install is idempotent (returns "already installed"
+    # exit code) and the binary is ~5 MB. setup/New-RipperConfig.ps1
+    # handles per-tunnel install (/installtunnelservice + sdset) on
+    # demand if the user opts in.
+    'WireGuard.WireGuard'
 )
 
 foreach ($id in $packages) {

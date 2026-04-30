@@ -216,6 +216,59 @@ if (-not (Test-Path -LiteralPath $configPath)) {
 }
 $cfg = Import-RipperConfig
 
+# --- Phase 6.4.1: WireGuard exit-time safety net --------------------------
+# Sync-ToSynologyNAS now refcounts the tunnel via Use-RipperVpnTunnel /
+# Add-/Remove-RipperVpnTunnelRef, so under normal flow the tunnel is up
+# only for the duration of each NAS sync and torn down by the per-sync
+# finally. Two things still need a session-exit hook:
+#   1. cfg.WireGuardKeepAliveBetweenDiscs=true: we held an extra session
+#      ref via Enable-RipperVpnTunnelSessionKeepAlive (env var
+#      $env:MUSICRIPPER_WG_SESSION_REF). Drop it on exit.
+#   2. Hard crash mid-sync (the per-sync finally never ran): the env
+#      var sentinel will still name the tunnel; we stop it defensively.
+# Both layers (PowerShell.Exiting engine event + bottom-of-script hook)
+# call the same idempotent Disable-RipperVpnTunnelSessionKeepAlive, so
+# double-firing is harmless. Window close / Ctrl+C / Quit / clean exit
+# all hit at least one of them.
+$wgConfName = $null
+if ($cfg.PSObject.Properties['WireGuardTunnelName'] -and $cfg.WireGuardTunnelName) {
+    $wgConfName = [string]$cfg.WireGuardTunnelName
+}
+$wgAutoToggle = $true
+if ($cfg.PSObject.Properties['WireGuardAutoToggle']) {
+    $wgAutoToggle = [bool]$cfg.WireGuardAutoToggle
+}
+if ($wgAutoToggle -and $wgConfName) {
+    # Clear any stale sentinel from a prior session so we only act on
+    # tunnels brought up THIS session.
+    $env:MUSICRIPPER_WG_SESSION_REF = $null
+    # Bake the module path into the engine-event action via string
+    # interpolation -- $using: is not supported in
+    # Register-EngineEvent -Action and the event runs in its own
+    # runspace where $script:repoRoot won't exist.
+    $wgModulePath = (Join-Path $repoRoot 'src\lib\Wireguard.psd1') -replace "'", "''"
+    $wgActionSrc  = @"
+try {
+    `$sentinel = `$env:MUSICRIPPER_WG_SESSION_REF
+    if (-not [string]::IsNullOrWhiteSpace(`$sentinel)) {
+        Import-Module '$wgModulePath' -Force -ErrorAction Stop
+        [void](Disable-RipperVpnTunnelSessionKeepAlive -Name `$sentinel)
+        # Defensive double-check in case keep-alive was on but no per-
+        # sync release ran (hard crash mid-sync) -- stop the service
+        # if it's still Running.
+        if (Test-RipperVpnTunnel -Name `$sentinel) {
+            [void](Stop-RipperVpnTunnel -Name `$sentinel)
+        }
+        `$env:MUSICRIPPER_WG_SESSION_REF = `$null
+    }
+} catch {
+    # Engine-event handlers can't write to the rip log (it's already
+    # torn down); best-effort and swallow.
+}
+"@
+    $null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action ([scriptblock]::Create($wgActionSrc))
+}
+
 # --- Dependency check -----------------------------------------------------
 # We do this BEFORE any disc work because a missing metaflac.exe would
 # only surface AFTER the rip (Phase 5 needs it for tagging + ReplayGain),
@@ -1086,4 +1139,37 @@ do {
 } while ($true)
 
 Write-RipperLog INFO 'Start-Ripper' "Session ending: $($script:RipperSession.DiscCount) disc(s) processed."
+
+# Phase 6.4.1: drop the keep-alive ref (if any) and defensively stop
+# the tunnel if it's still up after all per-sync releases. Under normal
+# flow with KeepAliveBetweenDiscs=false the tunnel is already down by
+# now (each sync's finally tore it down). With keep-alive on, the env-
+# var sentinel still names it. The PowerShell.Exiting engine event
+# above handles abrupt exits (Quit / X / Ctrl+C); this block handles
+# the clean flow-through. Best-effort; never fail the exit path.
+$wgSentinel = $env:MUSICRIPPER_WG_SESSION_REF
+$wgConfigured = $cfg.PSObject.Properties['WireGuardTunnelName'] -and `
+                -not [string]::IsNullOrWhiteSpace([string]$cfg.WireGuardTunnelName)
+if ($wgConfigured -or -not [string]::IsNullOrWhiteSpace($wgSentinel)) {
+    try {
+        $wgName = if (-not [string]::IsNullOrWhiteSpace($wgSentinel)) {
+            $wgSentinel
+        } else {
+            [string]$cfg.WireGuardTunnelName
+        }
+        Import-Module (Join-Path $PSScriptRoot 'lib\Wireguard.psd1') -Force -ErrorAction Stop
+        # Drop keep-alive ref (no-op if it was never enabled).
+        [void](Disable-RipperVpnTunnelSessionKeepAlive -Name $wgName)
+        # Defensive: if the service is still Running (hard crash mid-
+        # sync) take it down anyway.
+        if (Test-RipperVpnTunnel -Name $wgName) {
+            Write-RipperLog WARN 'Start-Ripper' "WireGuard tunnel '$wgName' still Running at exit; stopping defensively."
+            [void](Stop-RipperVpnTunnel -Name $wgName)
+        }
+        $env:MUSICRIPPER_WG_SESSION_REF = $null
+    } catch {
+        Write-RipperLog WARN 'Start-Ripper' "WireGuard exit-time cleanup skipped: $($_.Exception.Message)"
+    }
+}
+
 Stop-RipperLog

@@ -30,58 +30,96 @@ the middle. See [DECISIONS.md D-007](DECISIONS.md).
 The MusicRipper post-processor needs the VPN up *only* during the
 NAS sync. Goal: the user never has to remember to toggle anything.
 
-Phase 6.4 scope (to be implemented in `Sync-ToSynologyNAS.ps1` and a
-new `src/lib/Wireguard.psm1`):
+**Status: implemented in Phase 6.4 (D-026).** What follows is the
+operator's reference; design rationale lives in `DECISIONS.md`.
 
-1. **Install hook in `setup/Install-Dependencies.ps1`:** add
-   `WireGuard.WireGuard` to the winget list.
-2. **Config additions in `config.template.json`:**
-   - `WireGuardTunnelName` — the name of the WG tunnel config
-     (`.conf`) to bring up. `null` = no VPN management; assume share
-     is already reachable.
-   - `WireGuardAutoToggle` — bool. When `true`, the post-processor
-     brings the tunnel up before sync and tears it down after.
-   - `WireGuardIdleTimeoutMinutes` — int. If MusicRipper is going
-     to rip multiple discs in a row, leave the tunnel up for this
-     many minutes after the last sync rather than thrashing it on
-     every disc. Default 10.
-3. **`Wireguard.psm1` API:**
-   - `Start-RipperVpnTunnel -Name <tunnel>` — wraps
-     `wireguard.exe /installtunnelservice <path-to-conf>` (or
-     `Set-Service`/`Start-Service` if the tunnel is already
-     installed as a service).
-   - `Stop-RipperVpnTunnel -Name <tunnel>` — wraps
-     `wireguard.exe /uninstalltunnelservice <name>`.
-   - `Test-RipperVpnTunnel -Name <tunnel>` — returns whether the
-     tunnel service is running.
-   - All three idempotent so repeated calls during a batch rip are
-     no-ops.
-4. **Post-processor flow:**
-   ```
-   Sync-ToSynologyNAS:
-     if WireGuardAutoToggle and not Test-RipperVpnTunnel:
-         Start-RipperVpnTunnel; record start time in session state
-     robocopy ... \\<unc>\...
-     register a shutdown hook in Start-Ripper.ps1 that, on exit OR
-     after IdleTimeoutMinutes of inactivity, calls Stop-RipperVpnTunnel
-   ```
-5. **Split tunnel — investigate but probably skip.** Windows
-   WireGuard supports per-tunnel `AllowedIPs` (route only the NAS
-   subnet through the VPN), which is the cleanest "split tunnel"
-   for our use case. The user is expected to author the `.conf` with
-   `AllowedIPs = <nas-subnet>/24` so only NAS traffic uses the
-   tunnel — no routing tricks needed in MusicRipper itself. Doc
-   this in the Phase-6 walkthrough; do NOT try to rewrite the user's
-   `.conf` from PowerShell.
+#### Prerequisites
 
-### Open questions for Phase 6
+- A WireGuard `.conf` file describing one tunnel (peer = the
+  Synology, or the router in front of it). Author this on the
+  *server* side (DSM has a WireGuard package, or run `wg-quick` on
+  any Linux box on the same LAN as the NAS) and copy it to the
+  client laptop.
+- The `.conf`'s `AllowedIPs` should be the **NAS subnet only**
+  (e.g. `AllowedIPs = 192.168.1.0/24`). This gives you a split
+  tunnel automatically -- only NAS traffic goes through the VPN,
+  the parent's regular browsing stays direct. MusicRipper does NOT
+  rewrite `.conf` files; that's entirely your call.
 
-- Does `wireguard.exe /installtunnelservice` need elevation every
-  time, or only at first install? If every time, we may need to
-  pre-install the tunnel as a service during setup and then just
-  start/stop it (no UAC prompt) during rips.
-- How do we surface a clear error to parents when the tunnel won't
-  come up (e.g., they're on a guest network that blocks UDP)?
-  Probably: log it, route the rip to `_ReviewQueue/` is overkill —
-  better to just skip the NAS sync with a warning and let OneDrive
-  (if configured) carry the day.
+#### One-time install
+
+1. Run `./setup/Install-Dependencies.ps1`. Among the other
+   dependencies, this winget-installs `WireGuard.WireGuard`. The
+   first install pulls in the WinTun kernel driver (signed); you'll
+   see one UAC prompt for that.
+2. Run `./setup/New-RipperConfig.ps1`. After the Synology UNC
+   prompts, you'll be asked:
+   *"Set up WireGuard auto-toggle for the NAS share? (y/N)"*
+   Answer `y`, then paste the absolute path to your `.conf`.
+3. Setup spawns an elevated `pwsh` child that does both of:
+   - `wireguard.exe /installtunnelservice <path>` -- registers a
+     Windows service named `WireGuardTunnel$<filename-stem>`
+     running as LocalSystem.
+   - `sc.exe sdset` -- widens that one service's security
+     descriptor so your (non-admin) Windows user can `Start-Service`
+     and `Stop-Service` it without elevation.
+   This is the **only** UAC prompt you'll ever see for tunnel
+   management. Subsequent rips toggle the tunnel silently.
+4. Setup writes `WireGuardTunnelName` and `WireGuardAutoToggle = true`
+   to `config.json`.
+
+#### What happens at rip time
+
+Each NAS sync wraps its work in a refcounted tunnel
+acquire/release (Phase 6.4.1):
+
+1. `Sync-ToSynologyNAS.ps1` reads `cfg.WireGuardTunnelName` +
+   `cfg.WireGuardAutoToggle` + `cfg.WireGuardKeepAliveBetweenDiscs`.
+2. Credential decryption (no tunnel needed).
+3. **Acquire** the tunnel via `Add-RipperVpnTunnelRef`. On the
+   0->1 transition this calls `Start-Service WireGuardTunnel$<Name>`
+   and waits for Running (15s default timeout).
+4. UNC pre-flight + SMB mount + robocopy.
+5. **Release** in a `finally`: `Remove-RipperVpnTunnelRef`. On the
+   1->0 transition, if MusicRipper was the one that started the
+   tunnel, calls `Stop-Service`. If the tunnel was already up
+   before the acquire (some other consumer is using it), the
+   release is a polite no-op.
+
+By default the tunnel is up only for the duration of the SMB
+copy. Set `cfg.WireGuardKeepAliveBetweenDiscs = true` if you're
+ripping a stack and want to skip the per-disc handshake (~2-3s);
+the first sync's start pins the tunnel for the rest of the
+session, and it comes down at exit.
+
+When MusicRipper exits (last `Stop-RipperLog`), the bottom-of-
+script teardown drops any session-scoped keep-alive ref and then
+defensively `Stop-Service`'s the tunnel if it's still Running --
+the safety net for the "a hard crash bypassed our `finally`" case.
+
+#### When the tunnel won't come up
+
+Examples: parent is on a guest network that blocks UDP; the peer
+is offline; the WG service crashed. `Sync-ToSynologyNAS` returns
+`Status='Failed'` with a `Diagnostic` pointing at the WG service,
+the rip pipeline keeps going (per D-022), the album lands in
+`sync-state.json` as Failed. **The Phase-6.5 startup retry dialog
+catches it next time** the parent launches MusicRipper from a
+network where the tunnel works -- no manual intervention needed.
+
+#### Manual control
+
+- Status: `Get-Service WireGuardTunnel$<Name>`
+- Start/stop: `Start-Service WireGuardTunnel$<Name>` /
+  `Stop-Service WireGuardTunnel$<Name>` (no elevation needed if
+  setup ran successfully). MusicRipper's refcount layer respects
+  this -- if you started it manually, MusicRipper's release is a
+  no-op (it never stops a tunnel it didn't start).
+- Disable auto-toggle without uninstalling the tunnel: set
+  `cfg.WireGuardAutoToggle = false` in `config.json` (or re-run
+  `setup/New-RipperConfig.ps1`).
+- Keep the tunnel up across discs in a stack-rip session: set
+  `cfg.WireGuardKeepAliveBetweenDiscs = true`.
+- Remove entirely: delete `cfg.WireGuardTunnelName` and run
+  `wireguard.exe /uninstalltunnelservice <Name>` from an elevated
+  prompt (or use the WireGuard tray app's "Remove tunnel" UI).
