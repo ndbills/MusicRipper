@@ -121,7 +121,10 @@ function Invoke-SetupStep {
     .SYNOPSIS
         Run a setup script in-process, surface failures with a
         descriptive prefix, abort the installer on non-zero $LASTEXITCODE
-        OR a thrown exception.
+        OR a thrown exception. Honours $WhatIfPreference -- when
+        WhatIf is in effect, prints the planned invocation and skips
+        the actual call (so winget doesn't fire and Install-Shortcut
+        doesn't drop a real .lnk on the Desktop during a dry-run).
     #>
     param(
         [Parameter(Mandatory)] [string] $ScriptPath,
@@ -132,6 +135,11 @@ function Invoke-SetupStep {
         throw "Setup script not found: $ScriptPath"
     }
     Write-Step $Description
+    if ($WhatIfPreference) {
+        Write-Host "What if: would run '$ScriptPath'" -ForegroundColor DarkYellow
+        Write-Ok "$Description (skipped under -WhatIf)"
+        return
+    }
     try {
         & $ScriptPath @ScriptArgs
         if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
@@ -215,8 +223,13 @@ if ($InPlace) {
         }
         $repoRoot = $InstallRoot
     } else {
-        # WhatIf path -- pretend the copy happened and continue dry-run.
-        $repoRoot = $InstallRoot
+        # WhatIf path -- the copy didn't happen, so the setup chain's
+        # Test-Path check would fail against $InstallRoot. Fall back to
+        # $sourceRoot so the chain can validate against real files; the
+        # invocation itself is then suppressed by Invoke-SetupStep when
+        # $WhatIfPreference is set, and the user sees the planned chain
+        # without anything actually running.
+        $repoRoot = $sourceRoot
     }
 }
 
