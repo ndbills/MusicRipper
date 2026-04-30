@@ -228,6 +228,41 @@ if (-not (Test-Path -LiteralPath $configPath)) {
 }
 $cfg = Import-RipperConfig
 
+# --- Drive check ----------------------------------------------------------
+# Phase 6.6.E: if no drive is registered (fresh first-run config, or a
+# parent re-saved config without ever picking the drive), pop the config
+# editor instead of dumping the user into the rip queue with a "no
+# DriveLetter" error every cycle. Re-load $cfg if they save.
+if (-not $cfg.DriveLetter -or $null -eq $cfg.DriveOffset) {
+    Add-Type -AssemblyName System.Windows.Forms | Out-Null
+    Write-RipperLog INFO 'Start-Ripper' 'No DriveLetter/DriveOffset in config -- prompting to register.'
+    $ans = [System.Windows.Forms.MessageBox]::Show(
+        "MusicRipper hasn't registered an optical drive yet, so it can't read discs.`n`nOpen the settings editor now to register one?",
+        'MusicRipper - drive not configured',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Warning)
+    if ($ans -ne [System.Windows.Forms.DialogResult]::Yes) {
+        Write-RipperLog INFO 'Start-Ripper' 'User declined to register drive; exiting.'
+        Stop-RipperLog
+        return
+    }
+    $saved = Show-RipperConfigDialog -Config $cfg -ConfigPath $configPath
+    if (-not $saved) {
+        Show-RipperInfo "MusicRipper still has no drive configured.`n`nRe-launch when you're ready to finish setup." `
+            'MusicRipper' 'Warning'
+        Stop-RipperLog
+        return
+    }
+    $cfg = Import-RipperConfig
+    if (-not $cfg.DriveLetter -or $null -eq $cfg.DriveOffset) {
+        Show-RipperInfo "Settings saved, but no drive was registered.`n`nOpen Settings again and use the 'Register drive...' button on the General tab." `
+            'MusicRipper' 'Warning'
+        Stop-RipperLog
+        return
+    }
+    Write-RipperLog INFO 'Start-Ripper' "Drive registered: $($cfg.DriveLetter) (offset=$($cfg.DriveOffset))."
+}
+
 # --- Phase 6.4.1: WireGuard exit-time safety net --------------------------
 # Sync-ToSynologyNAS now refcounts the tunnel via Use-RipperVpnTunnel /
 # Add-/Remove-RipperVpnTunnelRef, so under normal flow the tunnel is up
