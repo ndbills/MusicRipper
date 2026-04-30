@@ -202,13 +202,29 @@ function Show-RipperFatalErrorDialog {
 
     $openBtn.Add_Click({
         try {
-            $folder = Split-Path -Parent $pathBox.Text
-            if ($folder -and (Test-Path -LiteralPath $folder)) {
-                Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$folder`"" | Out-Null
-                $statusTxt.Text = "Opened: $folder"
+            $logFile = $pathBox.Text
+            if ($logFile -and (Test-Path -LiteralPath $logFile -PathType Leaf)) {
+                # explorer.exe /select,"<file>" opens the parent folder
+                # with the file pre-selected (matches "Show in folder"
+                # behaviour). Note: NO space between /select, and the
+                # path -- explorer parses the comma as the separator
+                # and would treat a leading space as part of the path.
+                Start-Process -FilePath 'explorer.exe' `
+                    -ArgumentList "/select,`"$logFile`"" | Out-Null
+                $statusTxt.Text = "Opened folder with '$(Split-Path -Leaf $logFile)' selected."
             } else {
-                $statusTxt.Foreground = 'Red'
-                $statusTxt.Text = "Folder not found: $folder"
+                # File is gone (logging never started, or the user
+                # deleted it after the dialog opened). Best-effort
+                # fall back to opening the parent folder un-selected.
+                $folder = if ($logFile) { Split-Path -Parent $logFile } else { '' }
+                if ($folder -and (Test-Path -LiteralPath $folder)) {
+                    Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$folder`"" | Out-Null
+                    $statusTxt.Foreground = '#a60'
+                    $statusTxt.Text = "Log file is gone; opened the folder instead."
+                } else {
+                    $statusTxt.Foreground = 'Red'
+                    $statusTxt.Text = "Log file and folder both missing: $logFile"
+                }
             }
         } catch {
             $statusTxt.Foreground = 'Red'
