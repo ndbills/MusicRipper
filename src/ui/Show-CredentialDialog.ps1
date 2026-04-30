@@ -128,7 +128,10 @@ function Show-RipperCredentialDialog {
     $msgText.Text = $Message
     $userBox.Text = $UserName
 
-    $script:RipperCredResult = $null
+    # Captured hashtable, not $script:* -- WPF closure gotcha:
+    # $script:* writes from .GetNewClosure() handlers in dot-sourced
+    # functions don't round-trip back to the function-level read.
+    $resultBox = @{ Value = $null }
 
     $okBtn.Add_Click({
         $u = $userBox.Text
@@ -145,17 +148,17 @@ function Show-RipperCredentialDialog {
             $passBox.Focus() | Out-Null
             return
         }
-        $script:RipperCredResult = [pscredential]::new($u, $secure)
+        $resultBox.Value = [pscredential]::new($u, $secure)
         $window.DialogResult = $true
         $window.Close()
     }.GetNewClosure())
 
     $cancelBtn.Add_Click({
-        $script:RipperCredResult = $null
+        $resultBox.Value = $null
         $window.DialogResult = $false
         $window.Close()
     }.GetNewClosure())
 
     [void]$window.ShowDialog()
-    return $script:RipperCredResult
+    return $resultBox.Value
 }

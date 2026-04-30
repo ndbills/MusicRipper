@@ -780,7 +780,12 @@ function Show-RipperConfigDialog {
     & $refreshOk
 
     # ---- OK / Cancel ----------------------------------------------
-    $script:result = $null
+    # Use a captured hashtable rather than $script:* -- per the
+    # repeated WPF closure gotcha, $script:* writes from inside
+    # GetNewClosure() handlers in a dot-sourced function don't
+    # reliably round-trip back to the function-level read. Locals
+    # captured by the closure (like $resultBox here) do.
+    $resultBox = @{ Value = $null }
     $okBtn.Add_Click({
         & $applyToCfg
         if (-not (Test-RipperConfigEditorComplete -Config $cfg -FirstRun:$FirstRun)) {
@@ -792,7 +797,7 @@ function Show-RipperConfigDialog {
             } else {
                 Save-RipperConfig -Config $cfg
             }
-            $script:result = $cfg
+            $resultBox.Value = $cfg
             $window.DialogResult = $true
             $window.Close()
         } catch {
@@ -801,11 +806,11 @@ function Show-RipperConfigDialog {
     }.GetNewClosure())
 
     $cancelBtn.Add_Click({
-        $script:result = $null
+        $resultBox.Value = $null
         $window.DialogResult = $false
         $window.Close()
     }.GetNewClosure())
 
     [void]$window.ShowDialog()
-    return $script:result
+    return $resultBox.Value
 }
