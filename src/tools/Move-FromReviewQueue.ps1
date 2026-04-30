@@ -124,7 +124,17 @@ param(
 
     [switch] $Force,
     [switch] $AllowSideBySide,
-    [switch] $KeepReviewArtifacts
+    [switch] $KeepReviewArtifacts,
+
+    # Skip the post-promote sync + retention pass. By default, a
+    # promoted album follows the same sync chain a normal Library-
+    # routed rip would (Invoke-RipperSync against cfg.SyncTargets +
+    # Invoke-RipperLibraryRetention). Failures (NAS off, OneDrive
+    # offline) land in sync-state.json so the next launch's pending-
+    # sync flow picks them up -- exact same recovery path a normal
+    # rip uses. Pass -SkipSync to seed discids.json only and leave
+    # sync for later.
+    [switch] $SkipSync
 )
 
 Set-StrictMode -Version 3.0
@@ -136,6 +146,13 @@ Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
 Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1')  -Force
 . (Join-Path $repoRoot 'src\core\Move-ToLibrary.ps1')
 . (Join-Path $repoRoot 'src\core\Get-LibraryDiscIndex.ps1')
+# Sync chain -- only used when -SkipSync isn't set, but always dot-
+# sourced so the helpers are in scope (cheap; just function definitions).
+. (Join-Path $repoRoot 'src\sync\Get-LibrarySyncState.ps1')
+. (Join-Path $repoRoot 'src\sync\Invoke-RipperSync.ps1')
+. (Join-Path $repoRoot 'src\sync\Sync-ToOneDrive.ps1')
+. (Join-Path $repoRoot 'src\sync\Sync-ToSynologyNAS.ps1')
+. (Join-Path $repoRoot 'src\sync\Invoke-LibraryRetention.ps1')
 
 
 # --- helpers (exported for Pester) ----------------------------------------
@@ -402,10 +419,20 @@ if (-not (Test-Path -LiteralPath $AlbumFolder -PathType Container)) {
 }
 $AlbumFolder = (Resolve-Path -LiteralPath $AlbumFolder).ProviderPath
 
-# Resolve LibraryRoot from config if not supplied.
+# Always load config -- LibraryRoot may need defaulting AND -SkipSync
+# off needs cfg.SyncTargets / OneDriveSyncTargetRoot / SynologyUnc /
+# WireGuard*. Failure to load config is fatal only when LibraryRoot
+# wasn't supplied either.
+$cfg = $null
+try { $cfg = Import-RipperConfig } catch {
+    if (-not $LibraryRoot) {
+        throw "LibraryRoot not supplied and config could not be loaded: $($_.Exception.Message)"
+    }
+    Write-Warning "Config could not be loaded ('$($_.Exception.Message)'); -SkipSync will be forced on."
+    $SkipSync = $true
+}
 if (-not $LibraryRoot) {
-    try { $cfg = Import-RipperConfig } catch { throw "LibraryRoot not supplied and config could not be loaded: $($_.Exception.Message)" }
-    if (-not $cfg.PSObject.Properties['LibraryRoot'] -or -not $cfg.LibraryRoot) {
+    if (-not $cfg -or -not $cfg.PSObject.Properties['LibraryRoot'] -or -not $cfg.LibraryRoot) {
         throw 'LibraryRoot not supplied and not present in config.json.'
     }
     $LibraryRoot = [string]$cfg.LibraryRoot
@@ -581,6 +608,55 @@ try {
 
     Write-RipperLog INFO 'Move-FromReviewQueue' "Promoted to '$target' (moved=$moved, discarded=$($plan.Discard.Count), discid-seeded=$discIdSeeded)."
 
+    # --- Sync + retention (best-effort) ----------------------------------
+    # Mirror what Invoke-RipperPostProcess does for normal Library-routed
+    # rips: a promoted album IS library content, so it should go through
+    # the same sync chain and retention rule. Failures (NAS off, OneDrive
+    # offline) land in sync-state.json -- the next launch's pending-sync
+    # flow picks them up automatically. Wrapped so a sync glitch can't
+    # undo the promote we just did.
+    $sync       = $null
+    $retention  = $null
+    $syncSkippedReason = $null
+    if ($SkipSync) {
+        $syncSkippedReason = '-SkipSync was passed'
+    } elseif (-not $cfg) {
+        $syncSkippedReason = 'config not loaded'
+    } elseif (-not $cfg.PSObject.Properties['SyncTargets'] -or -not $cfg.SyncTargets -or @($cfg.SyncTargets).Count -eq 0) {
+        $syncSkippedReason = 'cfg.SyncTargets is empty'
+    }
+
+    if ($syncSkippedReason) {
+        Write-RipperLog INFO 'Move-FromReviewQueue' "Skipping sync chain ($syncSkippedReason)."
+    } else {
+        try {
+            $sync = Invoke-RipperSync `
+                -AlbumPath   $target `
+                -LibraryRoot $LibraryRoot `
+                -DiscId      $(if ($discId) { $discId } else { 'unknown' }) `
+                -Config      $cfg
+        } catch {
+            Write-RipperLog WARN 'Move-FromReviewQueue' "Sync orchestrator threw (non-fatal): $($_.Exception.Message)"
+            $sync = @{ AlbumPath=$target; Targets=@(); AllOk=$false; Skipped=$false }
+        }
+        try {
+            $retention = Invoke-RipperLibraryRetention `
+                -AlbumPath   $target `
+                -LibraryRoot $LibraryRoot `
+                -Config      $cfg `
+                -SyncResult  $sync `
+                -DiscId      $(if ($discId) { $discId } else { '' })
+        } catch {
+            Write-RipperLog WARN 'Move-FromReviewQueue' "Retention threw (non-fatal): $($_.Exception.Message)"
+            $retention = @{ Action='None'; Reason="threw: $($_.Exception.Message)"; NewPath=$null }
+        }
+        # If retention moved/recycled the folder, surface the new path.
+        if ($retention.NewPath) {
+            Write-RipperLog INFO 'Move-FromReviewQueue' "Retention applied: $($retention.Action) -> $($retention.NewPath)"
+            $target = $retention.NewPath
+        }
+    }
+
     [pscustomobject]@{
         Source        = $AlbumFolder
         Target        = $target
@@ -593,6 +669,9 @@ try {
         Year          = $md.Year
         IsCompilation = $md.IsCompilation
         DiscId        = $discId
+        Sync          = $sync
+        Retention     = $retention
+        SyncSkippedReason = $syncSkippedReason
         WhatIf        = $false
     }
 }

@@ -240,7 +240,7 @@ Describe 'Move-FromReviewQueue end-to-end' {
         }
 
         $result = & (Join-Path $repoRoot 'src\tools\Move-FromReviewQueue.ps1') `
-                      -AlbumFolder $script:src -LibraryRoot $script:libRoot
+                      -AlbumFolder $script:src -LibraryRoot $script:libRoot -SkipSync
 
         $expected = Join-Path $script:libRoot 'Pink Floyd\The Wall (1979)'
         $result.Target        | Should -Be $expected
@@ -288,7 +288,7 @@ Describe 'Move-FromReviewQueue end-to-end' {
         New-Item -ItemType File -Path (Join-Path $existing '01 - existing.flac') | Out-Null
 
         $result = & (Join-Path $repoRoot 'src\tools\Move-FromReviewQueue.ps1') `
-                      -AlbumFolder $script:src -LibraryRoot $script:libRoot -AllowSideBySide
+                      -AlbumFolder $script:src -LibraryRoot $script:libRoot -AllowSideBySide -SkipSync
 
         $result.IsSideBySide | Should -Be $true
         $result.Target       | Should -Be (Join-Path $script:libRoot 'Pink Floyd\The Wall (1979) [rip 2]')
@@ -303,7 +303,7 @@ Describe 'Move-FromReviewQueue end-to-end' {
         $empty = Join-Path $TestDrive 'empty-rq'
         New-Item -ItemType Directory -Path $empty -Force | Out-Null
         { & (Join-Path $repoRoot 'src\tools\Move-FromReviewQueue.ps1') `
-              -AlbumFolder $empty -LibraryRoot $script:libRoot } |
+              -AlbumFolder $empty -LibraryRoot $script:libRoot -SkipSync } |
             Should -Throw '*No *.flac files*'
     }
 
@@ -320,7 +320,7 @@ Describe 'Move-FromReviewQueue end-to-end' {
         }
 
         $result = & (Join-Path $repoRoot 'src\tools\Move-FromReviewQueue.ps1') `
-                      -AlbumFolder $script:src -LibraryRoot $script:libRoot -WhatIf
+                      -AlbumFolder $script:src -LibraryRoot $script:libRoot -WhatIf -SkipSync
 
         $result.WhatIf      | Should -Be $true
         # Source folder + every original file still present.
@@ -328,5 +328,100 @@ Describe 'Move-FromReviewQueue end-to-end' {
         Test-Path -LiteralPath (Join-Path $script:src 'REVIEW.txt') | Should -Be $true
         Test-Path -LiteralPath $result.Target                       | Should -Be $false
         Should -Invoke Add-RipperLibraryDiscIndexEntry -Times 0 -Exactly
+    }
+
+    It 'invokes the sync chain by default and surfaces results on the return object' {
+        Mock -CommandName Get-MetaflacPath -MockWith { 'C:\fake\metaflac.exe' } -ModuleName Common
+        Mock -CommandName Read-RipperFlacTagValue -MockWith {
+            (@{ ALBUMARTIST='Pink Floyd'; ALBUM='The Wall';
+               DATE='1979-11-30'; COMPILATION='0';
+               MUSICBRAINZ_DISCID='abc123' })[$Name]
+        }
+        Mock -CommandName Add-RipperLibraryDiscIndexEntry -MockWith {}
+        Mock -CommandName Test-Path -MockWith { $true } -ParameterFilter {
+            $LiteralPath -eq 'C:\fake\metaflac.exe'
+        }
+
+        # Stub Import-RipperConfig to return a minimal config with one
+        # sync target, so we don't depend on the user's real config.json.
+        # NOTE: $script:* variables aren't reliably visible inside Mock
+        # bodies (per /memories/powershell.md). LibraryRoot value here
+        # doesn't matter -- the test passes -LibraryRoot explicitly --
+        # so a literal placeholder is fine.
+        Mock -CommandName Import-RipperConfig -MockWith {
+            [pscustomobject]@{
+                LibraryRoot      = 'C:\does-not-matter'
+                SyncTargets      = @('Stub')
+                LocalRetention   = 'Keep'
+            }
+        }
+        # Stub the orchestrator -- we're testing the wiring, not the
+        # sync itself (which has its own tests).
+        Mock -CommandName Invoke-RipperSync -MockWith {
+            @{ AlbumPath=$AlbumPath; Targets=@(@{Target='Stub';Status='OK';BytesCopied=42;Diagnostic=$null}); AllOk=$true; Skipped=$false }
+        }
+        Mock -CommandName Invoke-RipperLibraryRetention -MockWith {
+            @{ Action='Keep'; Reason='LocalRetention=Keep'; NewPath=$null }
+        }
+
+        $result = & (Join-Path $repoRoot 'src\tools\Move-FromReviewQueue.ps1') `
+                      -AlbumFolder $script:src -LibraryRoot $script:libRoot
+
+        $result.SyncSkippedReason | Should -BeNullOrEmpty
+        $result.Sync              | Should -Not -BeNullOrEmpty
+        $result.Sync.AllOk        | Should -Be $true
+        $result.Retention.Action  | Should -Be 'Keep'
+        Should -Invoke Invoke-RipperSync             -Times 1 -Exactly
+        Should -Invoke Invoke-RipperLibraryRetention -Times 1 -Exactly
+    }
+
+    It 'reports SyncSkippedReason when cfg.SyncTargets is empty' {
+        Mock -CommandName Get-MetaflacPath -MockWith { 'C:\fake\metaflac.exe' } -ModuleName Common
+        Mock -CommandName Read-RipperFlacTagValue -MockWith {
+            (@{ ALBUMARTIST='Pink Floyd'; ALBUM='The Wall';
+               DATE='1979-11-30'; COMPILATION='0';
+               MUSICBRAINZ_DISCID='abc123' })[$Name]
+        }
+        Mock -CommandName Add-RipperLibraryDiscIndexEntry -MockWith {}
+        Mock -CommandName Test-Path -MockWith { $true } -ParameterFilter {
+            $LiteralPath -eq 'C:\fake\metaflac.exe'
+        }
+        Mock -CommandName Import-RipperConfig -MockWith {
+            [pscustomobject]@{ LibraryRoot = 'C:\does-not-matter'; SyncTargets = @() }
+        }
+        Mock -CommandName Invoke-RipperSync             -MockWith {}
+        Mock -CommandName Invoke-RipperLibraryRetention -MockWith {}
+
+        $result = & (Join-Path $repoRoot 'src\tools\Move-FromReviewQueue.ps1') `
+                      -AlbumFolder $script:src -LibraryRoot $script:libRoot
+
+        $result.SyncSkippedReason | Should -Be 'cfg.SyncTargets is empty'
+        Should -Invoke Invoke-RipperSync             -Times 0 -Exactly
+        Should -Invoke Invoke-RipperLibraryRetention -Times 0 -Exactly
+    }
+
+    It '-SkipSync wins over a populated cfg.SyncTargets' {
+        Mock -CommandName Get-MetaflacPath -MockWith { 'C:\fake\metaflac.exe' } -ModuleName Common
+        Mock -CommandName Read-RipperFlacTagValue -MockWith {
+            (@{ ALBUMARTIST='Pink Floyd'; ALBUM='The Wall';
+               DATE='1979-11-30'; COMPILATION='0';
+               MUSICBRAINZ_DISCID='abc123' })[$Name]
+        }
+        Mock -CommandName Add-RipperLibraryDiscIndexEntry -MockWith {}
+        Mock -CommandName Test-Path -MockWith { $true } -ParameterFilter {
+            $LiteralPath -eq 'C:\fake\metaflac.exe'
+        }
+        Mock -CommandName Import-RipperConfig -MockWith {
+            [pscustomobject]@{ LibraryRoot = 'C:\does-not-matter'; SyncTargets = @('Stub') }
+        }
+        Mock -CommandName Invoke-RipperSync             -MockWith {}
+        Mock -CommandName Invoke-RipperLibraryRetention -MockWith {}
+
+        $result = & (Join-Path $repoRoot 'src\tools\Move-FromReviewQueue.ps1') `
+                      -AlbumFolder $script:src -LibraryRoot $script:libRoot -SkipSync
+
+        $result.SyncSkippedReason | Should -Be '-SkipSync was passed'
+        Should -Invoke Invoke-RipperSync             -Times 0 -Exactly
+        Should -Invoke Invoke-RipperLibraryRetention -Times 0 -Exactly
     }
 }

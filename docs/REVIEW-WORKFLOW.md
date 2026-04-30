@@ -127,6 +127,13 @@ Useful flags:
   than what you want on disk.
 - `-KeepReviewArtifacts` -- move REVIEW.txt and `_image\` into the
   destination too instead of discarding them. Default is to discard.
+- `-SkipSync` -- by default, a promoted album follows the same sync
+  chain a normal Library-routed rip would (every `cfg.SyncTargets`
+  entry, then `cfg.LocalRetention`). Pass this to seed
+  `discids.json` only and leave sync for later (e.g. when you're
+  ripping offline and will sync back at home). Sync failures land
+  in `sync-state.json` and the next launch's pending-sync flow
+  picks them up automatically -- same recovery as a normal rip.
 
 If you'd rather move things by hand (or your particular case needs
 tweaks the script doesn't support), the same target layout applies:
