@@ -56,6 +56,7 @@ $libRoot = Join-Path $PSScriptRoot '..\lib'
 Import-Module (Join-Path $libRoot 'ConfigPrompt.psd1')    -Force
 Import-Module (Join-Path $libRoot 'Config.psd1')          -Force
 Import-Module (Join-Path $libRoot 'ConfigDiscovery.psd1') -Force
+Import-Module (Join-Path $libRoot 'Wireguard.psd1')       -Force
 . (Join-Path $PSScriptRoot 'Show-CredentialDialog.ps1')
 . (Join-Path $PSScriptRoot 'Show-RegisterDriveDialog.ps1')
 
@@ -498,13 +499,36 @@ function Show-RipperConfigDialog {
         <ScrollViewer VerticalScrollBarVisibility="Auto">
           <StackPanel Margin="14">
 
-            <TextBlock Text="Tunnel name" FontWeight="Bold"/>
-            <TextBlock Text="Bare tunnel name (typically the .conf filename without extension) of a WireGuard tunnel installed via wireguard.exe /installtunnelservice. Leave blank for no VPN management."
-                       Foreground="#666" TextWrapping="Wrap" Margin="0,2,0,4"/>
-            <TextBox x:Name="WgTunnelText" Padding="4" Margin="0,0,0,4"
-                     ToolTip="Bare tunnel name, e.g. 'home-vpn' (no .conf suffix)."/>
-            <TextBlock Text="(Use setup\New-RipperConfig.ps1 to install a new .conf and grant the SDDL needed for unattended start/stop.)"
-                       Foreground="#888" FontStyle="Italic" TextWrapping="Wrap" Margin="0,0,0,12"/>
+            <TextBlock Text="Tunnel" FontWeight="Bold"/>
+            <TextBlock TextWrapping="Wrap" Foreground="#666" Margin="0,2,0,4">
+              Pick a WireGuard <Bold>.conf</Bold> file. Install registers it as a Windows service
+              and grants this user start/stop control (one UAC prompt). Once installed, MusicRipper
+              brings the tunnel up only for the duration of each NAS sync.
+            </TextBlock>
+            <Grid Margin="0,0,0,6">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+              </Grid.ColumnDefinitions>
+              <TextBox  x:Name="WgConfText"   Grid.Column="0" Padding="4"
+                        ToolTip="Absolute path to a WireGuard .conf file."/>
+              <Button   x:Name="WgConfBrowse" Grid.Column="1"
+                        Content="Browse..." Padding="10,4" Margin="6,0,0,0"/>
+            </Grid>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+              <Button x:Name="WgInstallBtn" Content="Install / register tunnel..."
+                      Padding="10,4" Margin="0,0,8,0"
+                      ToolTip="Spawn an elevated helper to register the .conf as a service and grant control. One UAC prompt."/>
+              <TextBlock x:Name="WgStatusText" VerticalAlignment="Center"
+                         TextWrapping="Wrap" Foreground="#666"/>
+            </StackPanel>
+            <!-- Hidden -- the underlying schema field is still WireGuardTunnelName.
+                 We expose the .conf path in the UI but the bare tunnel stem is what
+                 gets persisted. This textbox is kept (read-only-ish) so power users
+                 can see what got resolved. -->
+            <TextBlock Text="Resolved tunnel name (saved to config)" FontWeight="Bold" Margin="0,4,0,0"/>
+            <TextBox x:Name="WgTunnelText" Padding="4" Margin="0,2,0,12"
+                     ToolTip="Bare tunnel name (.conf filename without extension). Auto-filled when you pick a .conf; you can also type it directly if the tunnel was installed elsewhere."/>
 
             <CheckBox x:Name="WgAutoCheck" Content="Auto-toggle tunnel around NAS syncs"
                       Margin="0,0,0,8"
@@ -595,6 +619,10 @@ function Show-RipperConfigDialog {
     $retentionCb   = $window.FindName('RetentionCombo')
 
     $wgTunnelText  = $window.FindName('WgTunnelText')
+    $wgConfText    = $window.FindName('WgConfText')
+    $wgConfBrowse  = $window.FindName('WgConfBrowse')
+    $wgInstallBtn  = $window.FindName('WgInstallBtn')
+    $wgStatusText  = $window.FindName('WgStatusText')
     $wgAutoCheck   = $window.FindName('WgAutoCheck')
     $wgKeepCheck   = $window.FindName('WgKeepAliveCheck')
 
@@ -685,6 +713,95 @@ function Show-RipperConfigDialog {
             $driveInfo.Text  = "Drive: $($picked.Drive)   |   AccurateRip offset: $($picked.Offset)   (saved on Save)"
         }
     }.GetNewClosure())
+
+    # ---- WireGuard tunnel section ---------------------------------
+    # Refresh the WgStatusText line based on the bare tunnel name
+    # currently in $wgTunnelText. Calls into the Wireguard module
+    # which returns 'NotInstalled' / 'Stopped' / 'Running' / etc.
+    $refreshWgStatus = {
+        $name = $wgTunnelText.Text.Trim()
+        if (-not $name) {
+            $wgStatusText.Text       = 'No tunnel configured.'
+            $wgStatusText.Foreground = '#888'
+            return
+        }
+        try {
+            $state = Test-RipperVpnTunnel -Name $name -Detailed
+            switch ($state) {
+                'NotInstalled' {
+                    $wgStatusText.Text       = "Tunnel '$name': NOT installed -- click Install to register it."
+                    $wgStatusText.Foreground = '#a60'
+                }
+                default {
+                    $wgStatusText.Text       = "Tunnel '$name': $state."
+                    $wgStatusText.Foreground = '#070'
+                }
+            }
+        } catch {
+            $wgStatusText.Text       = "Tunnel '$name': status check failed -- $($_.Exception.Message)"
+            $wgStatusText.Foreground = '#a00'
+        }
+    }.GetNewClosure()
+
+    $wgConfBrowse.Add_Click({
+        $picked = Show-RipperFilePicker `
+                    -Description 'Pick a WireGuard .conf file' `
+                    -SeedPath    $wgConfText.Text `
+                    -FileFilter  'WireGuard config (*.conf)|*.conf|All files (*.*)|*.*'
+        if ($picked) {
+            $wgConfText.Text   = $picked
+            $wgTunnelText.Text = [System.IO.Path]::GetFileNameWithoutExtension($picked)
+            & $refreshWgStatus
+        }
+    }.GetNewClosure())
+
+    # Re-check status whenever the tunnel name field loses focus
+    # (covers manual edits + the Browse-derived auto-fill).
+    $wgTunnelText.Add_LostFocus({ & $refreshWgStatus }.GetNewClosure())
+
+    $wgInstallBtn.Add_Click({
+        $confPath = $wgConfText.Text.Trim()
+        if (-not $confPath) {
+            [System.Windows.MessageBox]::Show(
+                "Pick a .conf file first using the Browse... button.",
+                'MusicRipper', 'OK', 'Information') | Out-Null
+            return
+        }
+        if (-not (Test-Path -LiteralPath $confPath)) {
+            [System.Windows.MessageBox]::Show(
+                "The .conf file does not exist:`n`n  $confPath",
+                'MusicRipper', 'OK', 'Warning') | Out-Null
+            return
+        }
+        $wgInstallBtn.IsEnabled  = $false
+        $wgConfBrowse.IsEnabled  = $false
+        $wgStatusText.Text       = 'Launching elevated helper (one UAC prompt)...'
+        $wgStatusText.Foreground = '#666'
+        try {
+            # Synchronous -- the helper script blocks on Read-Host
+            # at the end, so the user sees success/failure before
+            # this returns.
+            $stem = Invoke-RipperVpnTunnelElevatedInstall `
+                        -ConfPath $confPath `
+                        -RepoRoot $regRepoRoot
+            $wgTunnelText.Text       = $stem
+            $wgStatusText.Text       = "Tunnel '$stem' installed."
+            $wgStatusText.Foreground = '#070'
+            & $refreshWgStatus
+        } catch {
+            [System.Windows.MessageBox]::Show(
+                "WireGuard install failed:`n`n  $($_.Exception.Message)",
+                'MusicRipper', 'OK', 'Error') | Out-Null
+            $wgStatusText.Text       = "Install failed -- see message box."
+            $wgStatusText.Foreground = '#a00'
+        } finally {
+            $wgInstallBtn.IsEnabled = $true
+            $wgConfBrowse.IsEnabled = $true
+        }
+    }.GetNewClosure())
+
+    # Initial status line.
+    & $refreshWgStatus
 
     # ---- Credential buttons ---------------------------------------
     $credSet.Add_Click({

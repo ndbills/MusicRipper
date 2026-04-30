@@ -377,127 +377,17 @@ if ($syn) {
             } catch { $alreadyInstalled = $false }
 
             if (-not $alreadyInstalled) {
-                # Spawn an elevated child to run /installtunnelservice
-                # + sc.exe sdset in a single UAC prompt. We pass the
-                # current user's SID + repo root so the child knows
-                # who to grant control to and can dot-source our
-                # Wireguard module.
-                #
-                # Implementation detail: we write the helper to a temp
-                # .ps1 file and run it with `-File`, rather than passing
-                # a heredoc to `-Command`. Heredoc-via-Command is
-                # fragile -- escape rules for embedded $vars and quoted
-                # paths under -Verb RunAs are different from the parent
-                # shell, and parse failures crash the elevated child
-                # before our try/catch (or even Start-RipperLog) can
-                # run, leaving no log and a vanishing window. A real
-                # script file makes the helper trivially debuggable
-                # (rerun manually in any elevated pwsh) and removes a
-                # whole class of escape bugs. We always `pause` at the
-                # end so the window cannot disappear regardless of
-                # success/failure.
-                $repoRoot = Split-Path -Parent $PSScriptRoot
-                $userSid  = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-                $helperPath = Join-Path ([System.IO.Path]::GetTempPath()) "musicripper-wginstall-$([guid]::NewGuid().Guid.Substring(0,8)).ps1"
-                # Build the helper script. Single-quote string literals
-                # inside the script so backslashes and $-signs in the
-                # passed paths/SIDs don't get reinterpreted by the
-                # elevated child's parser.
-                $helperBody = @"
-Set-StrictMode -Version 3.0
-`$ErrorActionPreference = 'Stop'
-`$RepoRoot   = '$repoRoot'
-`$ConfPath   = '$confPath'
-`$TunnelStem = '$tunnelStem'
-`$UserSid    = '$userSid'
-`$LogPath    = `$null
-try {
-    Import-Module (Join-Path `$RepoRoot 'src\lib\Logging.psd1') -Force
-    `$LogPath = Start-RipperLog -Context 'WgInstall'
-    Import-Module (Join-Path `$RepoRoot 'src\lib\Wireguard.psd1') -Force
-    Write-Host ''
-    Write-Host "Installing WireGuard tunnel '`$TunnelStem' from '`$ConfPath' ..." -ForegroundColor Cyan
-    `$ok1 = Install-RipperVpnTunnel -ConfPath `$ConfPath
-    if (-not `$ok1) { throw "Install-RipperVpnTunnel returned false. See log: `$LogPath" }
-    Write-Host "Granting start/stop control to SID `$UserSid ..." -ForegroundColor Cyan
-    `$ok2 = Grant-RipperVpnTunnelControl -Name `$TunnelStem -UserSid `$UserSid
-    if (-not `$ok2) { throw "Grant-RipperVpnTunnelControl returned false. See log: `$LogPath" }
-    # `wireguard.exe /installtunnelservice` registers the service with
-    # StartType=Automatic, meaning Windows would bring the tunnel up
-    # at every boot/login. That is not what we want -- the whole
-    # point of the auto-toggle is for MusicRipper to be the one (and
-    # only) thing that starts the tunnel, on demand, and only for
-    # the duration of a NAS sync. Flip it to Manual now.
-    `$svcName = "WireGuardTunnel```$`$TunnelStem"
-    Write-Host "Setting service '`$svcName' StartType to Manual ..." -ForegroundColor Cyan
-    try {
-        Set-Service -Name `$svcName -StartupType Manual -ErrorAction Stop
-    } catch {
-        Write-Host "  Set-Service failed: `$(`$_.Exception.Message). Tunnel will still work but may auto-start on boot." -ForegroundColor Yellow
-    }
-    # `wireguard.exe /installtunnelservice` auto-starts the tunnel.
-    # Leave it stopped after setup so the next rip's auto-toggle is
-    # what brings it up (and so a parent who walks away mid-setup
-    # isn't left with an unexpectedly-active VPN). The fact that the
-    # service reached Running between Install and Grant already
-    # validated the .conf -- if WG had refused the conf, Get-Service
-    # in Grant-RipperVpnTunnelControl would have failed.
-    Write-Host 'Stopping tunnel (will be re-started automatically per rip) ...' -ForegroundColor Cyan
-    [void](Stop-RipperVpnTunnel -Name `$TunnelStem)
-    Write-Host ''
-    Write-Host 'WireGuard tunnel installed and start/stop control granted.' -ForegroundColor Green
-    Write-Host "Log: `$LogPath" -ForegroundColor DarkGray
-    `$exitCode = 0
-} catch {
-    Write-Host ''
-    Write-Host '======================================================================' -ForegroundColor Red
-    Write-Host 'WireGuard install FAILED:' -ForegroundColor Red
-    Write-Host `$_.Exception.Message -ForegroundColor Red
-    if (`$_.InvocationInfo) {
-        Write-Host ''
-        Write-Host "At: `$(`$_.InvocationInfo.ScriptName):`$(`$_.InvocationInfo.ScriptLineNumber)" -ForegroundColor DarkRed
-        Write-Host "    `$(`$_.InvocationInfo.Line.Trim())" -ForegroundColor DarkRed
-    }
-    if (`$_.ScriptStackTrace) {
-        Write-Host ''
-        Write-Host 'Stack trace:' -ForegroundColor DarkRed
-        Write-Host `$_.ScriptStackTrace -ForegroundColor DarkRed
-    }
-    if (`$LogPath) {
-        Write-Host ''
-        Write-Host "Full log: `$LogPath" -ForegroundColor Yellow
-    }
-    Write-Host '======================================================================' -ForegroundColor Red
-    `$exitCode = 2
-} finally {
-    try { Stop-RipperLog } catch { }
-    # Always pause so the window cannot vanish, regardless of how we
-    # got here. Read-Host needs a console; Start-Process -Verb RunAs
-    # gives one.
-    Write-Host ''
-    Read-Host 'Press Enter to close this window'
-}
-exit `$exitCode
-"@
-                Set-Content -LiteralPath $helperPath -Value $helperBody -Encoding UTF8
-                Write-Host 'Launching elevated helper to install the WireGuard tunnel (one UAC prompt)...' -ForegroundColor Cyan
-                Write-Host "  Helper script: $helperPath" -ForegroundColor DarkGray
+                # Phase 6.6.F: factored into a shared helper in
+                # src/lib/Wireguard.psm1 so the WPF config editor can
+                # call the same one-UAC-prompt elevated install path.
+                Import-Module (Join-Path (Split-Path -Parent $PSScriptRoot) 'src\lib\Wireguard.psd1') -Force
                 try {
-                    $proc = Start-Process -FilePath 'pwsh' `
-                        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $helperPath) `
-                        -Verb RunAs -Wait -PassThru
-                    if ($proc.ExitCode -ne 0) {
-                        Write-Warning "Elevated helper exited $($proc.ExitCode); WireGuard tunnel was NOT installed. Auto-toggle will be left disabled. Helper script kept at: $helperPath"
-                    } else {
-                        $wgTunnelName = $tunnelStem
-                        Write-RipperLog INFO 'New-RipperConfig' "WireGuard tunnel '$tunnelStem' installed via elevated helper."
-                        # Helper succeeded -- delete the temp script.
-                        # On failure we keep it around so the user can
-                        # rerun it manually for diagnosis.
-                        Remove-Item -LiteralPath $helperPath -Force -ErrorAction SilentlyContinue
-                    }
+                    $wgTunnelName = Invoke-RipperVpnTunnelElevatedInstall `
+                        -ConfPath $confPath `
+                        -RepoRoot (Split-Path -Parent $PSScriptRoot)
+                    Write-RipperLog INFO 'New-RipperConfig' "WireGuard tunnel '$wgTunnelName' installed via elevated helper."
                 } catch {
-                    Write-Warning "Failed to launch elevated helper: $($_.Exception.Message). WireGuard tunnel was NOT installed. Helper script kept at: $helperPath"
+                    Write-Warning $_.Exception.Message
                 }
             } else {
                 Write-Host "WireGuard service '$svcName' is already installed; reusing." -ForegroundColor Green

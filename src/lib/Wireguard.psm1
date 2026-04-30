@@ -621,3 +621,123 @@ function Disable-RipperVpnTunnelSessionKeepAlive {
     Write-RipperLog INFO 'Wireguard' "Session keep-alive disabled for tunnel '$Name'."
     return $true
 }
+
+function Invoke-RipperVpnTunnelElevatedInstall {
+<#
+.SYNOPSIS
+    Phase 6.6.F: shared elevated-install workflow for a WireGuard
+    .conf, used by both setup/New-RipperConfig.ps1 (CLI) and the
+    Show-RipperConfigDialog WireGuard tab (WPF).
+
+.DESCRIPTION
+    Writes a temp .ps1 helper that runs Install-RipperVpnTunnel +
+    Grant-RipperVpnTunnelControl + Set-Service Manual + Stop, then
+    launches it via Start-Process -Verb RunAs -Wait. ONE UAC prompt
+    per call. The helper always pauses with Read-Host on the way out
+    so the elevated console can never vanish silently (the inherited
+    "elevated child via -Command heredoc is a black hole" lesson --
+    we use -File and a real script body instead).
+
+    Returns the bare tunnel stem (filename without extension) on
+    success, throws on failure. The temp helper script is deleted
+    on success and KEPT on failure for diagnosis (path included in
+    the thrown message).
+
+.PARAMETER ConfPath
+    Absolute path to the .conf file.
+
+.PARAMETER RepoRoot
+    Path to the MusicRipper repo root, so the elevated helper can
+    Import-Module the lib/Logging and lib/Wireguard modules.
+
+.PARAMETER UserSid
+    SID to grant start/stop control to. Defaults to the current user.
+#>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [string]$ConfPath,
+        [Parameter(Mandatory)] [string]$RepoRoot,
+        [string]$UserSid = ([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
+    )
+    if (-not (Test-Path -LiteralPath $ConfPath)) {
+        throw "WireGuard .conf not found: $ConfPath"
+    }
+    $tunnelStem = [System.IO.Path]::GetFileNameWithoutExtension($ConfPath)
+    $helperPath = Join-Path ([System.IO.Path]::GetTempPath()) "musicripper-wginstall-$([guid]::NewGuid().Guid.Substring(0,8)).ps1"
+    # Single-quote string literals inside the helper body so backslashes
+    # and $-signs in passed paths/SIDs don't get reinterpreted by the
+    # elevated child's parser. Escape `$` everywhere we DO want runtime
+    # interpolation.
+    $helperBody = @"
+Set-StrictMode -Version 3.0
+`$ErrorActionPreference = 'Stop'
+`$RepoRoot   = '$RepoRoot'
+`$ConfPath   = '$ConfPath'
+`$TunnelStem = '$tunnelStem'
+`$UserSid    = '$UserSid'
+`$LogPath    = `$null
+try {
+    Import-Module (Join-Path `$RepoRoot 'src\lib\Logging.psd1') -Force
+    `$LogPath = Start-RipperLog -Context 'WgInstall'
+    Import-Module (Join-Path `$RepoRoot 'src\lib\Wireguard.psd1') -Force
+    Write-Host ''
+    Write-Host "Installing WireGuard tunnel '`$TunnelStem' from '`$ConfPath' ..." -ForegroundColor Cyan
+    `$ok1 = Install-RipperVpnTunnel -ConfPath `$ConfPath
+    if (-not `$ok1) { throw "Install-RipperVpnTunnel returned false. See log: `$LogPath" }
+    Write-Host "Granting start/stop control to SID `$UserSid ..." -ForegroundColor Cyan
+    `$ok2 = Grant-RipperVpnTunnelControl -Name `$TunnelStem -UserSid `$UserSid
+    if (-not `$ok2) { throw "Grant-RipperVpnTunnelControl returned false. See log: `$LogPath" }
+    `$svcName = "WireGuardTunnel```$`$TunnelStem"
+    Write-Host "Setting service '`$svcName' StartType to Manual ..." -ForegroundColor Cyan
+    try {
+        Set-Service -Name `$svcName -StartupType Manual -ErrorAction Stop
+    } catch {
+        Write-Host "  Set-Service failed: `$(`$_.Exception.Message). Tunnel will still work but may auto-start on boot." -ForegroundColor Yellow
+    }
+    Write-Host 'Stopping tunnel (will be re-started automatically per rip) ...' -ForegroundColor Cyan
+    [void](Stop-RipperVpnTunnel -Name `$TunnelStem)
+    Write-Host ''
+    Write-Host 'WireGuard tunnel installed and start/stop control granted.' -ForegroundColor Green
+    Write-Host "Log: `$LogPath" -ForegroundColor DarkGray
+    `$exitCode = 0
+} catch {
+    Write-Host ''
+    Write-Host '======================================================================' -ForegroundColor Red
+    Write-Host 'WireGuard install FAILED:' -ForegroundColor Red
+    Write-Host `$_.Exception.Message -ForegroundColor Red
+    if (`$_.InvocationInfo) {
+        Write-Host ''
+        Write-Host "At: `$(`$_.InvocationInfo.ScriptName):`$(`$_.InvocationInfo.ScriptLineNumber)" -ForegroundColor DarkRed
+        Write-Host "    `$(`$_.InvocationInfo.Line.Trim())" -ForegroundColor DarkRed
+    }
+    if (`$_.ScriptStackTrace) {
+        Write-Host ''
+        Write-Host 'Stack trace:' -ForegroundColor DarkRed
+        Write-Host `$_.ScriptStackTrace -ForegroundColor DarkRed
+    }
+    if (`$LogPath) {
+        Write-Host ''
+        Write-Host "Full log: `$LogPath" -ForegroundColor Yellow
+    }
+    Write-Host '======================================================================' -ForegroundColor Red
+    `$exitCode = 2
+} finally {
+    try { Stop-RipperLog } catch { }
+    Write-Host ''
+    Read-Host 'Press Enter to close this window'
+}
+exit `$exitCode
+"@
+    Set-Content -LiteralPath $helperPath -Value $helperBody -Encoding UTF8
+    Write-RipperLog INFO 'Wireguard' "Launching elevated WG install helper at '$helperPath'."
+    $proc = Start-Process -FilePath 'pwsh' `
+        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $helperPath) `
+        -Verb RunAs -Wait -PassThru
+    if ($proc.ExitCode -ne 0) {
+        throw "Elevated WireGuard install helper exited $($proc.ExitCode); tunnel was NOT installed. Helper script kept at: $helperPath"
+    }
+    Remove-Item -LiteralPath $helperPath -Force -ErrorAction SilentlyContinue
+    Write-RipperLog INFO 'Wireguard' "Elevated WG install OK; tunnel='$tunnelStem'."
+    return $tunnelStem
+}
