@@ -850,6 +850,16 @@ function Invoke-RipperOneDiscCycle {
                 ForceReviewQueue = [bool]$forceReviewQueue
                 Config           = $cfg
                 RepoRoot         = $repoRoot
+                # Phase 7 fix: re-adopt the parent runspace's active log
+                # file inside the post-process action. The dot-source
+                # chain below imports Logging.psd1 -Force a dozen times,
+                # and each Import-Module -Force re-runs the .psm1 which
+                # resets $script:LogPath = $null. Without this, every
+                # PostProcess / Sync / Move-ToLibrary log line goes to
+                # the host stream only, and Copy-RipperLog at end of
+                # post-process returns $null with a warning -- producing
+                # an album folder with no ripper-session.log copy.
+                LogPath          = (Get-RipperLogPath)
             }
             $ppAction = {
                 param($state, $rip, $ctx)
@@ -870,6 +880,13 @@ function Invoke-RipperOneDiscCycle {
                 . (Join-Path $ctx.RepoRoot 'src\core\New-ReviewQueueArtifacts.ps1')
                 . (Join-Path $ctx.RepoRoot 'src\core\Invoke-PostProcess.ps1')
                 . (Join-Path $ctx.RepoRoot 'src\core\Resume.ps1')
+                # Phase 7 fix: every Import-Module Logging.psd1 -Force
+                # in the dot-source chain above resets $script:LogPath
+                # to $null in this runspace. Re-adopt the parent's log
+                # so Write-RipperLog and Copy-RipperLog work.
+                if ($ctx.LogPath -and (Get-Command -Name Set-RipperLogPath -ErrorAction SilentlyContinue)) {
+                    Set-RipperLogPath -Path $ctx.LogPath -Context 'postprocess-worker'
+                }
                 # Drop the resume sidecar BEFORE running post-process so
                 # a crash mid-tag leaves the next launch enough
                 # breadcrumbs to finish the job. Best-effort.
