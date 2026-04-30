@@ -31,43 +31,38 @@ This `winget install`s:
 
 Idempotent — re-running is a no-op for already-installed packages.
 
-## 3. Create the config
+## 3. First launch — config + drive registration in one window
 
 ```powershell
-./setup/New-RipperConfig.ps1
+./src/Start-Ripper.ps1
 ```
 
-Prompts you for:
+On first launch (no `%LOCALAPPDATA%\MusicRipper\config.json` yet) MusicRipper
+opens the **WPF settings editor** in first-run mode. Everything you need to
+get working is in tabs:
 
-| Field                     | Notes                                                              |
-| ------------------------- | ------------------------------------------------------------------ |
-| Library root              | Where ripped albums land. Created if missing.                      |
-| MusicBrainz contact email | **Required by their ToS** — they'll contact you if MusicRipper misbehaves. |
-| OneDrive mirror path      | Optional. Blank to skip.                                           |
-| Synology UNC + credential | Optional. Credential is DPAPI-encrypted via `Export-Clixml`.       |
+| Tab            | What you set                                                                                                  |
+| -------------- | ------------------------------------------------------------------------------------------------------------- |
+| **General**    | Library root (Browse...), MusicBrainz contact email, **Register drive...** button (with progress bar).        |
+| **Metadata**   | Order of metadata providers (MusicBrainz / CTDB / GnuDB).                                                     |
+| **Cover Art**  | Order of cover-art providers (CoverArtArchive / etc.).                                                        |
+| **Sync**       | Sync targets (OneDrive / SynologyNAS), OneDrive folder (Browse...), NAS UNC + DPAPI credential **Set...**, retention rule. |
+| **WireGuard**  | `.conf` file picker + **Install / register tunnel...** button (one UAC prompt). Auto-toggle + keep-alive.     |
 
-Output: `%LOCALAPPDATA%\MusicRipper\config.json` (and
-`credentials.clixml` if you supplied a NAS credential).
+**Click Save** to write `%LOCALAPPDATA%\MusicRipper\config.json` and
+continue. **Cancel** exits cleanly.
 
-## 4. Calibrate the optical drive
+Cross-field validation prevents silly mistakes (Save is disabled if e.g.
+OneDrive is in SyncTargets but no folder is picked).
 
-```powershell
-./setup/Register-Drive.ps1
-```
+> The legacy console wizard `setup/New-RipperConfig.ps1` still works for
+> headless / scripted setups, but the WPF editor is the supported path.
 
-Detects optical drives, prompts you to pick if more than one, and looks
-up the drive's **AccurateRip read offset** (a per-drive sample-count
-correction needed for AccurateRip / CTDB verification).
+> **Driveless test machines:** if you click No on the "no drive registered"
+> prompt, MusicRipper enters **no-drive mode** — the startup pending-sync
+> UI still runs (so you can flush a NAS backlog), then the app exits.
 
-Lookup order:
-
-1. Live scrape of <http://www.accuraterip.com/driveoffsets.htm>.
-2. Bundled fallback list at `data/driveoffsets.cached.json`.
-3. Manual entry if neither matched.
-
-Re-run anytime — e.g. if you swap drives.
-
-## 5. Install the Desktop shortcut
+## 4. Install the Desktop shortcut
 
 ```powershell
 ./setup/Install-Shortcut.ps1
@@ -76,18 +71,17 @@ Re-run anytime — e.g. if you swap drives.
 Creates **"Rip a CD.lnk"** on your Desktop pointing at
 `pwsh -NoProfile -ExecutionPolicy Bypass -File <repo>\src\Start-Ripper.ps1`.
 
-In Phase 1 the shortcut just shows a stub message box confirming the
-config loads. Real rip logic lands in Phase 4.
+After Phase 6.6 the shortcut is the user-facing entry point: it launches
+the full ripper, and on first run pops the WPF settings editor described
+in step 3.
 
-## 6. Verify
+## 5. Verify
 
 ```powershell
 Invoke-Pester ./tests
 ```
 
-All tests should pass. Then double-click the Desktop shortcut — you
-should see the "MusicRipper — Phase 1 stub" message box reporting the
-config status and log path.
+All tests should pass.
 
 ## State locations cheat-sheet
 
@@ -101,5 +95,5 @@ config status and log path.
 
 ## Resetting
 
-To start over: delete `%LOCALAPPDATA%\MusicRipper\` and re-run the four
-setup scripts.
+To start over: delete `%LOCALAPPDATA%\MusicRipper\` and re-launch the
+Desktop shortcut — the WPF first-run editor will reappear.
