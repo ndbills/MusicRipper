@@ -71,7 +71,8 @@ function Show-RipperBetweenDiscsDialog {
     Add-Type -AssemblyName PresentationCore      | Out-Null
 
     $title = if ($DiscCount -gt 0) {
-        "MusicRipper - $DiscCount disc(s) ripped this session"
+        $word = if ($DiscCount -eq 1) { 'CD' } else { 'CDs' }
+        "MusicRipper - $DiscCount $word ripped so far"
     } else {
         'MusicRipper - Insert Next Disc'
     }
@@ -80,7 +81,7 @@ function Show-RipperBetweenDiscsDialog {
     $summary = if ($LastRipSummary) { $LastRipSummary } else { '' }
     $summaryEsc = [System.Security.SecurityElement]::Escape($summary)
     $watchMsg = if ($DriveLetter) {
-        "Watching $DriveLetter for a new disc..."
+        "Pop the next CD into $DriveLetter -- the rip will start automatically."
     } else {
         '(Drive watcher unavailable.)'
     }
@@ -90,7 +91,7 @@ function Show-RipperBetweenDiscsDialog {
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="$titleEsc"
-        Width="520" Height="280"
+        Width="540" Height="320"
         WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize"
         SizeToContent="Manual">
@@ -100,11 +101,12 @@ function Show-RipperBetweenDiscsDialog {
       <RowDefinition Height="*"/>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
 
     <TextBlock Grid.Row="0"
-               Text="Insert the next disc, or click Quit to finish."
-               FontSize="15" FontWeight="Bold" Margin="0,0,0,12"/>
+               Text="Ready for the next CD!"
+               FontSize="16" FontWeight="Bold" Margin="0,0,0,12"/>
 
     <Border Grid.Row="1" BorderBrush="#ccc" BorderThickness="1" Padding="10"
             Background="#fafafa">
@@ -119,11 +121,16 @@ function Show-RipperBetweenDiscsDialog {
                x:Name="WatchText"
                Text="$watchEsc"
                Foreground="#666" FontStyle="Italic"
-               Margin="0,10,0,10"/>
+               Margin="0,10,0,4"/>
 
-    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
-      <Button x:Name="QuitButton"     Content="Quit"
-              Width="120" Height="34" Margin="0,0,10,0"
+    <TextBlock Grid.Row="3"
+               Text="Tip: a stack of CDs is fine -- MusicRipper waits between each one."
+               Foreground="#888" FontSize="11"
+               Margin="0,0,0,10"/>
+
+    <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
+      <Button x:Name="QuitButton"     Content="I'm done -- Quit"
+              Width="140" Height="34" Margin="0,0,10,0"
               ToolTip="Stop ripping and close MusicRipper."/>
       <Button x:Name="RipNextButton"  Content="Rip Next Disc"
               Width="160" Height="34" IsDefault="True"
