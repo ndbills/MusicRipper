@@ -93,6 +93,7 @@ Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 . (Join-Path $repoRoot 'src\ui\Show-DuplicateDiscDialog.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-TargetExistsDialog.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-CredentialDialog.ps1')
+. (Join-Path $repoRoot 'src\ui\Show-RegisterDriveDialog.ps1')
 . (Join-Path $repoRoot 'src\ui\Show-RipperConfigDialog.ps1')
 
 $logPath = Start-RipperLog -Context 'start-ripper'

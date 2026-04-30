@@ -57,6 +57,7 @@ Import-Module (Join-Path $libRoot 'ConfigPrompt.psd1')    -Force
 Import-Module (Join-Path $libRoot 'Config.psd1')          -Force
 Import-Module (Join-Path $libRoot 'ConfigDiscovery.psd1') -Force
 . (Join-Path $PSScriptRoot 'Show-CredentialDialog.ps1')
+. (Join-Path $PSScriptRoot 'Show-RegisterDriveDialog.ps1')
 
 
 function Test-RipperConfigEditorComplete {
@@ -383,9 +384,10 @@ function Show-RipperConfigDialog {
 
             <TextBlock Text="Optical drive" FontWeight="Bold"/>
             <TextBlock x:Name="DriveInfoText"
-                       Foreground="#666" TextWrapping="Wrap" Margin="0,2,0,2"/>
-            <TextBlock Text="(Re-run setup\Register-Drive.ps1 to change drive selection or re-probe the AccurateRip offset.)"
-                       Foreground="#888" FontStyle="Italic" TextWrapping="Wrap"/>
+                       Foreground="#666" TextWrapping="Wrap" Margin="0,2,0,6"/>
+            <Button x:Name="RegisterDriveButton" Content="Register drive..."
+                    Padding="10,4" HorizontalAlignment="Left"
+                    ToolTip="Detect optical drives and look up the AccurateRip read offset."/>
           </StackPanel>
         </ScrollViewer>
       </TabItem>
@@ -577,6 +579,7 @@ function Show-RipperConfigDialog {
     $contCheck    = $window.FindName('ContinuousCheck')
     $retryCheck   = $window.FindName('RetryPendingCheck')
     $driveInfo    = $window.FindName('DriveInfoText')
+    $regDriveBtn  = $window.FindName('RegisterDriveButton')
 
     $metaList     = $window.FindName('MetaList')
     $artList      = $window.FindName('ArtList')
@@ -662,6 +665,25 @@ function Show-RipperConfigDialog {
         }
         $picked = Show-RipperFolderPicker -Description 'Pick a folder inside OneDrive to mirror albums into' -SeedPath $seed
         if ($picked) { $oneDriveText.Text = $picked }
+    }.GetNewClosure())
+
+    # ---- Register-drive button ------------------------------------
+    # Resolve repo root the same way Start-Ripper does (this file
+    # lives in src/ui, so two parents up).
+    $regRepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $regDriveBtn.Add_Click({
+        $curDrive  = if ($cfg.PSObject.Properties['DriveLetter'])  { $cfg.DriveLetter } else { $null }
+        $curOffset = if ($cfg.PSObject.Properties['DriveOffset'])  { $cfg.DriveOffset } else { $null }
+        $picked = Show-RipperRegisterDriveDialog `
+                    -CurrentDrive  $curDrive `
+                    -CurrentOffset $curOffset `
+                    -RepoRoot      $regRepoRoot `
+                    -Owner         $window
+        if ($picked) {
+            $cfg.DriveLetter = $picked.Drive
+            $cfg.DriveOffset = $picked.Offset
+            $driveInfo.Text  = "Drive: $($picked.Drive)   |   AccurateRip offset: $($picked.Offset)   (saved on Save)"
+        }
     }.GetNewClosure())
 
     # ---- Credential buttons ---------------------------------------
