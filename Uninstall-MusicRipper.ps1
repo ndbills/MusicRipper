@@ -118,14 +118,7 @@ param(
     [switch] $KeepDependencies,
     [switch] $KeepUserData,
     [switch] $KeepShortcut,
-    [switch] $Force,
-
-    # Internal: set by the self-elevation hand-off so the elevated
-    # child (which opens in its own console window that would close
-    # the moment the script returns) pauses on the final summary so
-    # the user can read it. Not documented for human callers.
-    [Parameter(DontShow)]
-    [switch] $LaunchedFromElevation
+    [switch] $Force
 )
 
 Set-StrictMode -Version 3.0
@@ -145,22 +138,16 @@ function Test-IsAdministrator {
     $p.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function Exit-WithPause {
-    # Convenience wrapper for clarity at exit sites. The actual pause-
-    # before-window-closes happens in the script-scope `finally` block
-    # at the bottom (so it covers `exit N`, throws, parser errors,
-    # everything). Keeping this helper as a thin pass-through so the
-    # exit sites still read clearly.
-    param([Parameter(Mandatory)] [int] $Code)
-    exit $Code
-}
-
 
 # --- Self-elevate if not admin -------------------------------------------
-# Skip if this IS the elevated child (defensive: the child should always
-# be admin, but if Start-Process -Verb RunAs landed us in a weird state,
-# don't loop trying to re-elevate forever).
-if (-not (Test-IsAdministrator) -and -not $LaunchedFromElevation) {
+# Relaunch under UAC if the user ran us from a non-elevated pwsh. Uses
+# `-NoExit` on the elevated child so the new console window stays at a
+# pwsh prompt after the script ends -- the alternative (Read-Host pause
+# from inside the script) is unreliable across the UAC boundary because
+# stdin handling for `Start-Process -Verb RunAs` children can let
+# Read-Host return immediately with empty input. -NoExit is the simple
+# bulletproof answer: pwsh itself keeps the window alive.
+if (-not (Test-IsAdministrator)) {
     Write-Host ''
     Write-Host 'MusicRipper uninstaller needs admin -- relaunching elevated...' -ForegroundColor Yellow
     Write-Host '(A UAC prompt will appear. Approve it to continue.)' -ForegroundColor DarkGray
@@ -178,48 +165,38 @@ if (-not (Test-IsAdministrator) -and -not $LaunchedFromElevation) {
         } elseif ($val -is [bool]) {
             $forwarded += @("-$name", $(if ($val) { '$true' } else { '$false' }))
         } else {
-            # String values containing spaces need to survive the
-            # ArgumentList round-trip. Wrap in single quotes (PowerShell
-            # parser keeps them literal) and double-up any embedded
-            # single quotes per PS quoting rules.
+            # Wrap string values in single quotes (PowerShell parser
+            # keeps them literal) and double-up any embedded single
+            # quotes per PS quoting rules.
             $escaped = ([string]$val) -replace "'", "''"
             $forwarded += @("-$name", "'$escaped'")
         }
     }
-    # Honour -WhatIf even though it's not in $PSBoundParameters when set
-    # via $WhatIfPreference (which would happen if the user did
-    # 'Set-PSDebug -WhatIf' or imported it). For our use case this is
-    # belt-and-suspenders -- the parent's $WhatIfPreference doesn't
-    # cross the process boundary.
     if ($WhatIfPreference -and -not $PSBoundParameters.ContainsKey('WhatIf')) {
         $forwarded += '-WhatIf'
     }
 
-    # Quote the script path in case the install dir has spaces.
     $scriptArg = "'$($PSCommandPath -replace "'", "''")'"
-    # Tack on -LaunchedFromElevation so the child knows to pause for
-    # Read-Host at the end (otherwise the new console window vanishes
-    # before the user can read the summary).
-    $startArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptArg) + $forwarded + @('-LaunchedFromElevation')
+    # -NoExit: keep the elevated console window open at a pwsh prompt
+    # after the script finishes, so the user can read the summary.
+    # They close the window when done.
+    $startArgs = @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit',
+        '-File', $scriptArg
+    ) + $forwarded
 
     try {
-        # Use pwsh.exe (PS7) explicitly; the script's pipeline expects PS7.
         $pwshExe = (Get-Command pwsh -ErrorAction Stop).Source
-        $proc = Start-Process -FilePath $pwshExe `
-                              -ArgumentList $startArgs `
-                              -Verb RunAs `
-                              -PassThru `
-                              -Wait `
-                              -ErrorAction Stop
-        # Propagate the elevated child's exit code back to the original
-        # caller so scripts wrapping us see the right $LASTEXITCODE.
-        # ExitCode can be unreadable for elevated children (the parent
-        # doesn't always have rights to query it). Guard via PSObject.
-        $rc = 0
-        if ($proc -and $proc.PSObject.Properties['ExitCode'] -and $null -ne $proc.ExitCode) {
-            $rc = [int]$proc.ExitCode
-        }
-        exit $rc
+        # No -Wait / -PassThru: kick off the elevated child and return
+        # immediately. The user interacts with the new window; the
+        # original (non-elevated) shell's prompt comes right back so
+        # they can do other things while reading the elevated output.
+        Start-Process -FilePath $pwshExe `
+                      -ArgumentList $startArgs `
+                      -Verb RunAs `
+                      -ErrorAction Stop | Out-Null
+        Write-Host 'Elevated uninstaller launched. Watch the new window for progress + the close-when-done banner.' -ForegroundColor Green
+        exit 0
     } catch [System.ComponentModel.Win32Exception] {
         # Win32 error 1223 = "The operation was canceled by the user"
         # (UAC prompt declined). Tell the user clearly what happened.
@@ -242,13 +219,6 @@ if (-not (Test-IsAdministrator) -and -not $LaunchedFromElevation) {
 
 
 # --- 0. Resolve repo root + lay out paths --------------------------------
-# Wrap the entire script body in try/finally so the elevated child
-# always pauses before its (auto-launched) console window closes,
-# regardless of how it exits -- clean exit, Exit-WithPause, throw,
-# uncaught error in winget call, etc. No-op when the script is run
-# from an already-elevated shell (the user's terminal stays open
-# anyway).
-try {
 $repoRoot       = $PSScriptRoot
 $ripperDataRoot = Join-Path $env:LOCALAPPDATA 'MusicRipper'
 $configPath     = Join-Path $ripperDataRoot 'config.json'
@@ -287,7 +257,7 @@ if (-not $KeepUserData)                        { $plan += "delete $ripperDataRoo
 if ($plan.Count -eq 0) {
     Write-Host ''
     Write-Warn 'Every step disabled by switches; nothing to do.'
-    Exit-WithPause -Code 0
+    exit 0
 }
 
 Write-Host ''
@@ -301,7 +271,7 @@ if (-not $Force -and -not $WhatIfPreference) {
     if ($answer -ne 'yes') {
         Write-Host ''
         Write-Skip 'Aborted at confirmation prompt.'
-        Exit-WithPause -Code 0
+        exit 0
     }
 }
 
@@ -469,24 +439,9 @@ Write-Host '  - Your music library (cfg.LibraryRoot).'
 Write-Host '  - <LibraryRoot>\.musicripper\discids.json + sync-state.json.'
 Write-Host '  - PowerShell 7.'
 Write-Host ''
+Write-Host '----------------------------------------------------------------' -ForegroundColor DarkGray
+Write-Host ' You can close this window when you''re done reading.' -ForegroundColor DarkGray
+Write-Host '----------------------------------------------------------------' -ForegroundColor DarkGray
+Write-Host ''
 
-if ($failures -gt 0) { Exit-WithPause -Code 1 } else { Exit-WithPause -Code 0 }
-}
-finally {
-    # Pause-before-window-closes for self-elevated runs. Runs after
-    # `exit N` (PowerShell honors finally blocks on exit), after
-    # uncaught throws, even after parser errors that happen mid-body.
-    # The user always gets to read the success/failure summary.
-    if ($LaunchedFromElevation) {
-        Write-Host ''
-        Write-Host '----------------------------------------------------------------' -ForegroundColor DarkGray
-        try {
-            Read-Host 'Press Enter to close this window'
-        } catch {
-            # If Read-Host itself throws (rare -- e.g. host doesn't
-            # support it) fall back to a sleep so the user still gets
-            # a few seconds to read the summary.
-            Start-Sleep -Seconds 10
-        }
-    }
-}
+if ($failures -gt 0) { exit 1 } else { exit 0 }
