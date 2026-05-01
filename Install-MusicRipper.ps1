@@ -142,7 +142,11 @@ function Invoke-SetupStep {
     }
     try {
         & $ScriptPath @ScriptArgs
-        if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
+        # winget exit codes that mean "success / nothing to do" -- we
+        # don't want the chain to abort just because some packages were
+        # already installed (-1978335189 = 0x8A150049 ALREADY_INSTALLED).
+        $wingetSuccessCodes = @(0, -1978335189)
+        if ($LASTEXITCODE -and ($wingetSuccessCodes -notcontains $LASTEXITCODE)) {
             throw "Setup script '$ScriptPath' exited with code $LASTEXITCODE."
         }
         Write-Ok $Description
