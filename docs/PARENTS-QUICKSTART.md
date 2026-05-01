@@ -7,6 +7,8 @@ One page. One CD at a time. No PowerShell.
 A **Rip a CD** shortcut on the Desktop. Double-click it whenever you
 want to digitize a CD. That's the whole thing.
 
+![Desktop with the "Rip a CD" shortcut](images/01-desktop-shortcut.png)
+
 ---
 
 ## Step 1 — First launch (one time only)
