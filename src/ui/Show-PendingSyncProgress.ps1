@@ -249,6 +249,7 @@ function Show-RipperPendingSyncProgress {
     $reader = [System.Xml.XmlNodeReader]::new([xml]$xaml)
     $window = [System.Windows.Markup.XamlReader]::Load($reader)
     if ($Owner) { try { $window.Owner = $Owner } catch { } }
+    Set-RipperWindowIcon $window
 
     # Steal foreground from whatever was last in focus -- the host pwsh
     # window is usually minimized to the tray at startup, so without this

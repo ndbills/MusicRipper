@@ -90,6 +90,7 @@ function Show-RipperCredentialDialog {
     if ($Owner) {
         try { $window.Owner = $Owner } catch {}
     }
+    Set-RipperWindowIcon $window
 
     # Dispatcher unhandled-exception sink (Phase-4 lesson).
     $sidecar = Join-Path $env:LOCALAPPDATA 'MusicRipper\logs\credential-dialog-dispatcher.log'

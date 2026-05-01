@@ -151,6 +151,7 @@ function Show-RipperFatalErrorDialog {
 
     $reader = [System.Xml.XmlNodeReader]::new(([xml]$xaml))
     $window = [Windows.Markup.XamlReader]::Load($reader)
+    Set-RipperWindowIcon $window
 
     # Dispatcher unhandled-exception sink (Phase-4 lesson). If a binding
     # error fires here we write it to a sidecar so the *outer* fatal

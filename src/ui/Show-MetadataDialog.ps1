@@ -464,6 +464,7 @@ namespace MusicRipper {
     $reader = [System.Xml.XmlNodeReader]::new(([xml]$xaml))
     $window = [Windows.Markup.XamlReader]::Load($reader)
     if ($Owner) { $window.Owner = $Owner }
+    Set-RipperWindowIcon $window
 
     # Phase 5.11: see Show-DuplicateDiscDialog -- steal foreground from
     # whatever was last in focus, since the host pwsh window is minimized.
@@ -806,6 +807,7 @@ namespace MusicRipper {
     $reader = [System.Xml.XmlNodeReader]::new(([xml]$xaml))
     $window = [Windows.Markup.XamlReader]::Load($reader)
     if ($Owner) { $window.Owner = $Owner }
+    Set-RipperWindowIcon $window
 
     # Phase 5.11: see Show-DuplicateDiscDialog -- steal foreground from
     # whatever was last in focus, since the host pwsh window is minimized.
@@ -1213,6 +1215,7 @@ function Show-RipperMetadataDialog {
 
     $reader = [System.Xml.XmlNodeReader]::new(([xml]$xaml))
     $window = [Windows.Markup.XamlReader]::Load($reader)
+    Set-RipperWindowIcon $window
 
     # Phase 5.11: see Show-DuplicateDiscDialog -- steal foreground from
     # whatever was last in focus, since the host pwsh window is minimized.

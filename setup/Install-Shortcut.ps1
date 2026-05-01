@@ -54,8 +54,9 @@ $lnk.Arguments        = "-NoProfile -ExecutionPolicy Bypass -File `"$target`""
 $lnk.WorkingDirectory = Split-Path -Parent $target
 $lnk.Description      = 'MusicRipper — rip an Audio CD to FLAC'
 
-# Optional icon. If the project ships an .ico later we'll point here. For now
-# fall back to pwsh's icon so the shortcut isn't blank.
+# Project icon -- shipped at <repo>\assets\musicripper.ico (multi-resolution
+# .ico generated from assets\musicripper.png by setup\Build-Icon.ps1).
+# Fall back to pwsh's icon only if the asset is somehow missing.
 $icon = Join-Path $repoRoot 'assets\musicripper.ico'
 $lnk.IconLocation = if (Test-Path -LiteralPath $icon) { $icon } else { "$pwsh,0" }
 

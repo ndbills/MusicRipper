@@ -299,4 +299,116 @@ function Test-RipperDependencies {
     }
 }
 
-Export-ModuleMember -Function ConvertTo-SafeWindowsPathSegment, Get-RipperRepoRoot, Get-CueToolsPath, Get-MetaflacPath, Test-RipperDependencies
+function Get-RipperAssetPath {
+<#
+.SYNOPSIS
+    Resolve a path under <repo>\assets\.
+
+.DESCRIPTION
+    Convenience over `Join-Path (Get-RipperRepoRoot) 'assets\<name>'`
+    that also returns $null when the asset is missing instead of
+    throwing -- callers (esp. WPF dialogs setting an icon) can then
+    no-op gracefully when the assets folder hasn't been deployed yet.
+
+.PARAMETER Name
+    File name (or relative path) under <repo>\assets\, e.g.
+    'musicripper.ico' or 'musicripper.png'.
+
+.EXAMPLE
+    PS> Get-RipperAssetPath musicripper.ico
+    C:\bin\MusicRipper\assets\musicripper.ico
+#>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [string] $Name
+    )
+    $path = Join-Path (Get-RipperRepoRoot) (Join-Path 'assets' $Name)
+    if (Test-Path -LiteralPath $path) { return $path }
+    return $null
+}
+
+function Set-RipperWindowIcon {
+<#
+.SYNOPSIS
+    Apply the MusicRipper app icon to a WPF Window.
+
+.DESCRIPTION
+    Loads a per-size PNG (assets\musicripper-{Size}.png) into a frozen
+    BitmapImage and assigns it to `$Window.Icon`. The per-size PNG is
+    rendered tightly cropped by setup\Build-Icon.ps1 so the disc fills
+    the frame at the requested pixel dimensions -- this looks better
+    in the WPF title bar / taskbar than letting WPF pick a frame from
+    the multi-resolution .ico (which carries the same bitmap data but
+    is sized for shortcut / Explorer use).
+
+    If the requested per-size PNG is missing, falls back to the
+    multi-resolution musicripper.ico (Set-RipperWindowIcon -Size 0
+    forces the .ico path).
+
+    Designed to be called immediately after `XamlReader.Load` in every
+    Show-* dialog. Failures are swallowed (logged at WARN if Logging
+    is loaded) so a missing/corrupt asset can never prevent a dialog
+    from opening -- the user just sees the default WPF window icon.
+
+    Called from the parent runspace where Common is already imported
+    by Start-Ripper. Worker runspaces (RipProgress, PendingSync,
+    RegisterDrive) re-Import Common inside their AddScript blocks so
+    this function is available there too.
+
+.PARAMETER Window
+    The WPF [System.Windows.Window] instance to decorate.
+
+.PARAMETER Size
+    Pixel size of the per-size PNG to load. Default 24 (looks well in
+    the WPF title bar without being upscaled by the Alt-Tab overlay).
+    Pass 0 to force the multi-resolution .ico path.
+
+.EXAMPLE
+    PS> $window = [Windows.Markup.XamlReader]::Load($reader)
+    PS> Set-RipperWindowIcon $window
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $Window,
+        [int] $Size = 24
+    )
+    try {
+        # Prefer per-size PNG; fall back to multi-res .ico.
+        if ($Size -gt 0) {
+            $pngPath = Get-RipperAssetPath ('musicripper-{0}.png' -f $Size)
+            if ($pngPath) {
+                $img = [System.Windows.Media.Imaging.BitmapImage]::new()
+                $img.BeginInit()
+                $img.UriSource   = [Uri]::new($pngPath)
+                $img.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
+                $img.EndInit()
+                if ($img.CanFreeze) { $img.Freeze() }
+                $Window.Icon = $img
+                return
+            }
+        }
+
+        $iconPath = Get-RipperAssetPath 'musicripper.ico'
+        if (-not $iconPath) { return }
+
+        # BitmapFrame.Create with the file URI lets WPF pick the best
+        # embedded frame per surface (chrome vs Alt-Tab vs taskbar).
+        # Freeze so the same instance is safe to share across dialogs
+        # and across UI-thread/worker-thread boundaries.
+        $uri = [Uri]::new($iconPath)
+        $img = [System.Windows.Media.Imaging.BitmapFrame]::Create(
+            $uri,
+            [System.Windows.Media.Imaging.BitmapCreateOptions]::None,
+            [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad)
+        if ($img.CanFreeze) { $img.Freeze() }
+        $Window.Icon = $img
+    } catch {
+        # Never let icon problems sink a dialog. Log if Logging is up.
+        if (Get-Command Write-RipperLog -ErrorAction SilentlyContinue) {
+            Write-RipperLog -Level WARN -Message "Set-RipperWindowIcon failed: $($_.Exception.Message)"
+        }
+    }
+}
+
+Export-ModuleMember -Function ConvertTo-SafeWindowsPathSegment, Get-RipperRepoRoot, Get-CueToolsPath, Get-MetaflacPath, Test-RipperDependencies, Get-RipperAssetPath, Set-RipperWindowIcon
