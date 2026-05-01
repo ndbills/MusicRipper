@@ -252,6 +252,11 @@ try {
         # path -- regenerate at install time.
         Invoke-SetupStep -ScriptPath (Join-Path $repoRoot 'setup\Install-UninstallShortcut.ps1') `
                          -Description "Creating in-repo 'Uninstall MusicRipper' shortcut"
+        # And the per-user Start Menu folder with both shortcuts so
+        # the user can launch from Start / Search instead of having
+        # to find the desktop icon.
+        Invoke-SetupStep -ScriptPath (Join-Path $repoRoot 'setup\Install-StartMenuShortcuts.ps1') `
+                         -Description "Creating Start Menu folder 'MusicRipper' (Rip a CD + Uninstall)"
     } else {
         Write-Step 'Skipping desktop shortcut (-SkipShortcut).'
     }

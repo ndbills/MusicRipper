@@ -180,6 +180,7 @@ if (-not $ImAlreadyAdmin -and -not (Test-IsAdministrator)) {
     if (-not $KeepDependencies) { $plan += 'uninstall CUETools, Xiph.FLAC, MusicBrainz.Picard, WireGuard.WireGuard via winget' }
     if ($wgTunnelName)          { $plan += "uninstall WireGuard tunnel service '$wgTunnelName'" }
     if (-not $KeepShortcut)     { $plan += "remove Desktop shortcut '$ShortcutName.lnk'" }
+    if (-not $KeepShortcut)     { $plan += 'remove Start Menu folder "MusicRipper" (Rip a CD + Uninstall)' }
     if (-not $KeepUserData)     { $plan += "delete $ripperDataRoot (config + credentials + logs)" }
 
     if ($plan.Count -eq 0) {
@@ -425,6 +426,30 @@ if ($KeepShortcut) {
         Write-Ok "Removed: $shortcutPath"
     } catch {
         Write-Fail "Couldn't remove shortcut: $($_.Exception.Message)"
+        $failures++
+    }
+}
+
+
+# --- Step 2b: Start Menu folder -----------------------------------------
+# Per-user folder created by setup\Install-StartMenuShortcuts.ps1 at
+# install time; remove the whole "MusicRipper" subdir + its two .lnks
+# in one shot. Honours -KeepShortcut alongside the Desktop step (same
+# parent intent: "leave my launchers alone").
+$startMenuFolder = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\MusicRipper'
+if ($KeepShortcut) {
+    Write-Step 'Start Menu folder'
+    Write-Skip '-KeepShortcut set; leaving in place.'
+} elseif (-not (Test-Path -LiteralPath $startMenuFolder -PathType Container)) {
+    Write-Step 'Start Menu folder'
+    Write-Skip "Not found: $startMenuFolder  (already gone, or never installed)."
+} elseif ($PSCmdlet.ShouldProcess($startMenuFolder, 'Remove Start Menu folder')) {
+    Write-Step 'Removing Start Menu folder'
+    try {
+        Remove-Item -LiteralPath $startMenuFolder -Recurse -Force
+        Write-Ok "Removed: $startMenuFolder"
+    } catch {
+        Write-Fail "Couldn't remove Start Menu folder: $($_.Exception.Message)"
         $failures++
     }
 }
