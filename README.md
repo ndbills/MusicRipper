@@ -43,6 +43,12 @@ git clone <this-repo> C:\bin\MusicRipper ; cd C:\bin\MusicRipper
 ./Install-MusicRipper.ps1 -InPlace   # chains setup steps; or omit -InPlace to copy into %LOCALAPPDATA%\MusicRipper
 ```
 
+To uninstall later: `./Uninstall-MusicRipper.ps1` removes the desktop
+shortcut, dependency winget packages (CUETools, Xiph.FLAC, Picard,
+WireGuard), the WireGuard tunnel service, and `%LOCALAPPDATA%\MusicRipper\`
+(config + credentials + logs). Your music library is never touched, and
+PowerShell 7 stays installed. Run with `-WhatIf` first to preview.
+
 Double-click the Desktop shortcut. On first launch the WPF settings
 editor opens (library root, MusicBrainz email, drive registration with
 progress bar, OneDrive / Synology NAS sync targets, WireGuard `.conf`
