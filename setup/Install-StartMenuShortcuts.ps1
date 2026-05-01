@@ -49,12 +49,17 @@ $iconPath = Join-Path $repoRoot 'assets\musicripper.ico'
 
 $shell = New-Object -ComObject WScript.Shell
 
-# --- 1. "Rip a CD" -------------------------------------------------------
+# --- 1. "MusicRipper - Rip a CD" ---------------------------------------
 $ripScript = Join-Path $repoRoot 'src\Start-Ripper.ps1'
 if (-not (Test-Path -LiteralPath $ripScript -PathType Leaf)) {
     throw "Start-Ripper.ps1 not found at '$ripScript'."
 }
-$ripLnk = Join-Path $startMenuRoot 'Rip a CD.lnk'
+# 'MusicRipper - ...' prefix so the two shortcuts sort + group together
+# in Win11's flat 'All apps' list (Win11 doesn't render Start Menu
+# subfolders the way Win10 did; the on-disk MusicRipper\ folder is
+# invisible in the UI). Search by 'musicripper' or 'rip a cd' or
+# 'uninstall' all still work.
+$ripLnk = Join-Path $startMenuRoot 'MusicRipper - Rip a CD.lnk'
 $lnk = $shell.CreateShortcut($ripLnk)
 $lnk.TargetPath       = $pwsh
 $lnk.Arguments        = "-NoProfile -ExecutionPolicy Bypass -File `"$ripScript`""
@@ -75,12 +80,12 @@ $bytes[21] = $bytes[21] -bor 0x20
 [System.IO.File]::WriteAllBytes($ripLnk, $bytes)
 Write-Host "Created shortcut: $ripLnk  (will request elevation on launch)" -ForegroundColor Green
 
-# --- 2. "Uninstall MusicRipper" -----------------------------------------
+# --- 2. "MusicRipper - Uninstall" ---------------------------------------
 $uninstallScript = Join-Path $repoRoot 'Uninstall-MusicRipper.ps1'
 if (-not (Test-Path -LiteralPath $uninstallScript -PathType Leaf)) {
     throw "Uninstall-MusicRipper.ps1 not found at '$uninstallScript'."
 }
-$uninstallLnk = Join-Path $startMenuRoot 'Uninstall MusicRipper.lnk'
+$uninstallLnk = Join-Path $startMenuRoot 'MusicRipper - Uninstall.lnk'
 $lnk = $shell.CreateShortcut($uninstallLnk)
 $lnk.TargetPath       = $pwsh
 $lnk.Arguments        = "-NoProfile -ExecutionPolicy Bypass -File `"$uninstallScript`""

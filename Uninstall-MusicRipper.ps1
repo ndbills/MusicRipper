@@ -476,37 +476,54 @@ if ($KeepDependencies) {
             $desc = "winget uninstall --exact --id $id"
             Write-Step $desc
             if (-not $PSCmdlet.ShouldProcess($id, 'winget uninstall')) { continue }
-            try {
-                # winget uninstall exit codes:
-                #   0           : uninstalled
-                #   -1978335212 : 0x8A150014 NO_APPLICABLE_INSTALLER (not installed)
-                #   -1978335189 : 0x8A150049 already in target state
-                # All three are "success for our purposes."
-                $wingetArgs = @(
-                    'uninstall', '--exact', '--id', $id,
-                    '--accept-source-agreements', '--silent', '--disable-interactivity'
-                )
-                # MusicBrainz.Picard ships an Inno Setup uninstaller; its
-                # silent flag is /VERYSILENT /SUPPRESSMSGBOXES /NORESTART.
-                # Without --override the uninstall wizard pops a GUI even
-                # under --silent --disable-interactivity.
-                if ($id -eq 'MusicBrainz.Picard') {
-                    $wingetArgs += @('--override', '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART')
-                }
-                & winget @wingetArgs 2>&1 | Out-Null
-                $rc = $LASTEXITCODE
-                switch ($rc) {
-                    0           { Write-Ok "$id uninstalled." }
-                    -1978335212 { Write-Skip "$id was not installed." }
-                    -1978335189 { Write-Skip "$id was already in target state." }
-                    default     {
-                        Write-Warn "winget exited with code $rc for $id (continuing)."
-                        $failures++
+
+            # Picard is typically installed at user scope (Inno Setup
+            # default). Try user scope first, then fall back to
+            # machine scope. Other packages skip the dance and let
+            # winget pick the right scope automatically.
+            $scopesToTry = if ($id -eq 'MusicBrainz.Picard') { @('user', 'machine', $null) } else { @($null) }
+
+            $finalRc = $null
+            foreach ($scope in $scopesToTry) {
+                try {
+                    $wingetArgs = @(
+                        'uninstall', '--exact', '--id', $id,
+                        '--accept-source-agreements', '--silent', '--disable-interactivity'
+                    )
+                    if ($scope) { $wingetArgs += @('--scope', $scope) }
+                    & winget @wingetArgs 2>&1 | Out-Null
+                    $finalRc = $LASTEXITCODE
+                    # Treat 0 / not-installed / already-target-state as
+                    # success-or-better; anything else, try next scope.
+                    if ($finalRc -eq 0 -or
+                        $finalRc -eq -1978335212 -or       # 0x8A150014 NO_APPLICABLE_INSTALLER
+                        $finalRc -eq -1978335189) {        # 0x8A150049 already in target state
+                        break
                     }
+                } catch {
+                    Write-Warn "winget threw for ${id} (scope=$scope): $($_.Exception.Message)"
+                    $finalRc = -1
                 }
-            } catch {
-                Write-Fail "winget threw for ${id}: $($_.Exception.Message)"
-                $failures++
+            }
+
+            switch ($finalRc) {
+                0           { Write-Ok "$id uninstalled." }
+                -1978335212 { Write-Skip "$id was not installed." }
+                -1978335189 { Write-Skip "$id was already in target state." }
+                -1978335230 {
+                    # 0x8A150042 INSTALLER_PROHIBITS_ELEVATION -- the
+                    # per-user installer refuses to run under our
+                    # elevated context. Tell the user how to finish.
+                    Write-Warn "$id refused to uninstall under elevation (winget rc $finalRc)."
+                    Write-Warn "  Open Settings -> Apps -> Installed apps and remove '$id' by hand,"
+                    Write-Warn '  or run from a non-elevated pwsh: ' -NoNewline
+                    Write-Host  "winget uninstall --exact --id $id --silent" -ForegroundColor White
+                    $failures++
+                }
+                default {
+                    Write-Warn "winget exited with code $finalRc for $id (continuing)."
+                    $failures++
+                }
             }
         }
     }
