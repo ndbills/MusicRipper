@@ -1,5 +1,7 @@
 # MusicRipper
 
+![MusicRipper — Secure CD ripping for a bit-perfect FLAC library](assets/musicripper-hero.png)
+
 A Windows + PowerShell 7 tool that rips Audio CDs to FLAC for a family
 music-digitization project. Click "Rip a CD," confirm the auto-detected
 metadata, walk away, and end up with a clean, AccurateRip-verified FLAC
