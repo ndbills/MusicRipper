@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Prompt A app icon variant 01</title>
+  <desc id="desc">Minimal compact disc at a slight angle with tidy extracted file rows; transparent canvas corners.</desc>
+  <metadata><![CDATA[{"prompt":"A","variant":"01","format":"icon","width":1024,"height":1024,"transparentCorners":true,"text":"none","palette":{"deepTeal":"#1F6F7A","slate":"#263947","warmAmber":"#F2B441","discWhite":"#F7FAFC","discLine":"#BFD4DA"}}]]></metadata>
+  <defs>
+    <linearGradient id="bgGradient" x1="150" y1="116" x2="876" y2="930" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1F6F7A"/>
+      <stop offset="1" stop-color="#263947"/>
+    </linearGradient>
+    <radialGradient id="discGradient" cx="44%" cy="34%" r="68%">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.52" stop-color="#E9F1F3"/>
+      <stop offset="1" stop-color="#BFD4DA"/>
+    </radialGradient>
+    <filter id="softShadow" x="-18%" y="-18%" width="136%" height="142%" color-interpolation-filters="sRGB">
+      <feOffset in="SourceAlpha" dx="0" dy="26" result="offset"/>
+      <feGaussianBlur in="offset" stdDeviation="24" result="blur"/>
+      <feFlood flood-color="#0B1820" flood-opacity="0.30" result="color"/>
+      <feComposite in="color" in2="blur" operator="in" result="shadow"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="lineShadow" x="-12%" y="-40%" width="124%" height="180%" color-interpolation-filters="sRGB">
+      <feOffset in="SourceAlpha" dx="0" dy="10" result="offset"/>
+      <feGaussianBlur in="offset" stdDeviation="8" result="blur"/>
+      <feFlood flood-color="#101820" flood-opacity="0.20" result="color"/>
+      <feComposite in="color" in2="blur" operator="in" result="shadow"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect x="96" y="96" width="832" height="832" rx="188" fill="url(#bgGradient)"/>
+  <g filter="url(#softShadow)">
+    <g transform="translate(512 424) rotate(-12) scale(1 0.68) translate(-512 -424)">
+      <circle cx="512" cy="424" r="256" fill="url(#discGradient)"/>
+      <circle cx="512" cy="424" r="196" fill="none" stroke="#D7E5E8" stroke-width="20"/>
+      <circle cx="512" cy="424" r="118" fill="none" stroke="#BFD4DA" stroke-width="16" opacity="0.78"/>
+      <circle cx="512" cy="424" r="58" fill="#233B45" opacity="0.92"/>
+      <circle cx="512" cy="424" r="34" fill="#F2B441"/>
+      <path d="M338 300 C416 242 572 232 675 286" fill="none" stroke="#FFFFFF" stroke-width="34" stroke-linecap="round" opacity="0.70"/>
+      <path d="M660 486 C612 570 444 598 338 540" fill="none" stroke="#8BAEB6" stroke-width="18" stroke-linecap="round" opacity="0.42"/>
+    </g>
+  </g>
+  <g filter="url(#lineShadow)" stroke-linecap="round">
+    <path d="M332 661 H728" stroke="#F7FAFC" stroke-width="46"/>
+    <path d="M384 743 H698" stroke="#F2B441" stroke-width="46"/>
+    <path d="M438 825 H642" stroke="#F7FAFC" stroke-width="46" opacity="0.96"/>
+  </g>
+</svg>

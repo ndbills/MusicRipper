@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="600" viewBox="0 0 2400 600" role="img" aria-labelledby="title desc">
+  <title id="title">MusicRipper README hero concept 07</title>
+  <desc id="desc">Workflow-flavored README banner with the exact MusicRipper disc mark, three restrained cream workflow chips, wordmark, and parent-friendly tagline.</desc>
+  <metadata><![CDATA[{"set":"readme-hero-logo-concepts","concept":"07","name":"parent-workflow-chips","width":2400,"height":600,"transparentBackground":true,"discSource":"prompt-d-variant-01 exact geometry/colors","text":"MusicRipper","tagline":"Rip, verify, tag, and sync without exposing PowerShell","chips":["Rip","Verify","File"],"fontStack":"Segoe UI, Inter, Manrope, Arial, sans-serif","palette":{"wordmark":"#22272E","tagline":"#596571","cream":"#F4E8D0","creamLine":"#CDBF9F","deepRed":"#8E1F26","cyan":"#66D9E8","violet":"#8F6AE8","amber":"#E9B44C"}}]]></metadata>
+  <defs>
+    <radialGradient id="disc" cx="45%" cy="36%" r="66%"><stop offset="0" stop-color="#33383C"/><stop offset="0.58" stop-color="#202326"/><stop offset="1" stop-color="#111417"/></radialGradient>
+    <linearGradient id="rainbow" x1="168" y1="268" x2="842" y2="764" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#66D9E8"/><stop offset="0.45" stop-color="#8F6AE8"/><stop offset="1" stop-color="#E9B44C"/></linearGradient>
+    <filter id="softShadow" x="-14%" y="-14%" width="128%" height="132%" color-interpolation-filters="sRGB"><feOffset in="SourceAlpha" dx="0" dy="26" result="offset"/><feGaussianBlur in="offset" stdDeviation="24" result="blur"/><feFlood flood-color="#050607" flood-opacity="0.26" result="color"/><feComposite in="color" in2="blur" operator="in" result="shadow"/><feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <g transform="translate(118.64 78.64) scale(0.43)">
+    <g filter="url(#softShadow)">
+      <circle cx="512" cy="512" r="382" fill="url(#rainbow)"/>
+      <path d="M802 263 A382 382 0 0 1 878 598" fill="none" stroke="url(#rainbow)" stroke-width="42" stroke-linecap="round"/>
+      <circle cx="512" cy="512" r="356" fill="url(#disc)"/>
+      <circle cx="512" cy="512" r="292" fill="none" stroke="#474B50" stroke-width="10" opacity="0.38"/>
+      <circle cx="512" cy="512" r="236" fill="none" stroke="#0A0C0E" stroke-width="12" opacity="0.40"/>
+      <circle cx="512" cy="512" r="184" fill="none" stroke="#45494D" stroke-width="8" opacity="0.34"/>
+      <circle cx="512" cy="512" r="150" fill="#F4E8D0"/>
+      <circle cx="512" cy="512" r="108" fill="none" stroke="#CDBF9F" stroke-width="8" opacity="0.88"/>
+      <circle cx="512" cy="512" r="74" fill="none" stroke="#CDBF9F" stroke-width="6" opacity="0.82"/>
+      <circle cx="512" cy="512" r="44" fill="none" stroke="#CDBF9F" stroke-width="5" opacity="0.78"/>
+      <circle cx="512" cy="512" r="22" fill="#8E1F26"/>
+    </g>
+  </g>
+  <g font-family="Segoe UI, Inter, Manrope, Arial, sans-serif" letter-spacing="0">
+    <text x="618" y="244" fill="#22272E" font-size="136" font-weight="500">MusicRipper</text>
+    <text x="624" y="316" fill="#596571" font-size="42" font-weight="400">Rip, verify, tag, and sync without exposing PowerShell</text>
+  </g>
+  <g font-family="Segoe UI, Inter, Manrope, Arial, sans-serif" font-size="34" font-weight="500" fill="#22272E" text-anchor="middle">
+    <rect x="624" y="372" width="138" height="58" rx="16" fill="#F4E8D0" stroke="#CDBF9F" stroke-width="4"/>
+    <rect x="792" y="372" width="184" height="58" rx="16" fill="#F4E8D0" stroke="#CDBF9F" stroke-width="4"/>
+    <rect x="1006" y="372" width="138" height="58" rx="16" fill="#F4E8D0" stroke="#CDBF9F" stroke-width="4"/>
+    <text x="693" y="413">Rip</text>
+    <text x="884" y="413">Verify</text>
+    <text x="1075" y="413">File</text>
+  </g>
+</svg>

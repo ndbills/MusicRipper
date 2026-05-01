@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="600" viewBox="0 0 2400 600" role="img" aria-labelledby="title desc">
+  <title id="title">MusicRipper README hero concept 03</title>
+  <desc id="desc">Parent-friendly MusicRipper banner with exact app-logo disc, a simple cream shortcut tile, and a strong wordmark/tagline stack.</desc>
+  <metadata><![CDATA[{"set":"readme-hero-logo-concepts","concept":"03","name":"parent-friendly-shortcut-banner","width":2400,"height":600,"transparentBackground":true,"discSource":"prompt-d-variant-01 exact geometry/colors","text":"MusicRipper","tagline":"Insert a CD. Click Rip. Get a clean FLAC album.","fontStack":"Segoe UI, Inter, Manrope, Arial, sans-serif","palette":{"wordmark":"#22272E","tagline":"#596571","cream":"#F4E8D0","creamLine":"#CDBF9F","deepRed":"#8E1F26","cyan":"#66D9E8","violet":"#8F6AE8","amber":"#E9B44C"}}]]></metadata>
+  <defs>
+    <radialGradient id="disc" cx="45%" cy="36%" r="66%">
+      <stop offset="0" stop-color="#33383C"/>
+      <stop offset="0.58" stop-color="#202326"/>
+      <stop offset="1" stop-color="#111417"/>
+    </radialGradient>
+    <linearGradient id="rainbow" x1="168" y1="268" x2="842" y2="764" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#66D9E8"/>
+      <stop offset="0.45" stop-color="#8F6AE8"/>
+      <stop offset="1" stop-color="#E9B44C"/>
+    </linearGradient>
+    <filter id="softShadow" x="-14%" y="-14%" width="128%" height="132%" color-interpolation-filters="sRGB">
+      <feOffset in="SourceAlpha" dx="0" dy="26" result="offset"/>
+      <feGaussianBlur in="offset" stdDeviation="24" result="blur"/>
+      <feFlood flood-color="#050607" flood-opacity="0.26" result="color"/>
+      <feComposite in="color" in2="blur" operator="in" result="shadow"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="tileShadow" x="-12%" y="-20%" width="124%" height="150%" color-interpolation-filters="sRGB">
+      <feOffset in="SourceAlpha" dx="0" dy="14" result="offset"/>
+      <feGaussianBlur in="offset" stdDeviation="15" result="blur"/>
+      <feFlood flood-color="#050607" flood-opacity="0.14" result="color"/>
+      <feComposite in="color" in2="blur" operator="in" result="shadow"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <g transform="translate(114.12 74.12) scale(0.44)">
+    <g filter="url(#softShadow)">
+      <circle cx="512" cy="512" r="382" fill="url(#rainbow)"/>
+      <path d="M802 263 A382 382 0 0 1 878 598" fill="none" stroke="url(#rainbow)" stroke-width="42" stroke-linecap="round"/>
+      <circle cx="512" cy="512" r="356" fill="url(#disc)"/>
+      <circle cx="512" cy="512" r="292" fill="none" stroke="#474B50" stroke-width="10" opacity="0.38"/>
+      <circle cx="512" cy="512" r="236" fill="none" stroke="#0A0C0E" stroke-width="12" opacity="0.40"/>
+      <circle cx="512" cy="512" r="184" fill="none" stroke="#45494D" stroke-width="8" opacity="0.34"/>
+      <circle cx="512" cy="512" r="150" fill="#F4E8D0"/>
+      <circle cx="512" cy="512" r="108" fill="none" stroke="#CDBF9F" stroke-width="8" opacity="0.88"/>
+      <circle cx="512" cy="512" r="74" fill="none" stroke="#CDBF9F" stroke-width="6" opacity="0.82"/>
+      <circle cx="512" cy="512" r="44" fill="none" stroke="#CDBF9F" stroke-width="5" opacity="0.78"/>
+      <circle cx="512" cy="512" r="22" fill="#8E1F26"/>
+    </g>
+  </g>
+  <g filter="url(#tileShadow)">
+    <rect x="555" y="196" width="326" height="208" rx="28" fill="#F4E8D0" stroke="#CDBF9F" stroke-width="5"/>
+    <path d="M618 270 H818" stroke="#CDBF9F" stroke-width="12" stroke-linecap="round" opacity="0.88"/>
+    <path d="M618 324 H770" stroke="#CDBF9F" stroke-width="12" stroke-linecap="round" opacity="0.76"/>
+  </g>
+  <path d="M496 300 H548" fill="none" stroke="#CDBF9F" stroke-width="10" stroke-linecap="round" opacity="0.74"/>
+  <path d="M906 300 H982" fill="none" stroke="#CDBF9F" stroke-width="10" stroke-linecap="round" opacity="0.74"/>
+  <g font-family="Segoe UI, Inter, Manrope, Arial, sans-serif" letter-spacing="0">
+    <text x="1038" y="282" fill="#22272E" font-size="148" font-weight="500">MusicRipper</text>
+    <text x="1044" y="360" fill="#596571" font-size="46" font-weight="400">Insert a CD. Click Rip. Get a clean FLAC album.</text>
+  </g>
+</svg>

@@ -1757,3 +1757,28 @@ Originally agreed to add a small WPF info dialog when the tunnel can't come up m
 - *Drop -InPlace*: makes engineer dev loops painful (would have to run the copy on every test).
 - *Do the screenshot capture in code*: requires a fresh PC; the [screenshot: ...] markers + suggested filenames let the engineer fill these in incrementally without blocking the rest of Phase 7 from merging.
 
+---
+
+## D-028 -- Visual identity assets: app logo and README hero (Phase 7 polish)
+
+**Status:** Accepted.
+
+**Context.** After Phase 7 packaging/polish, the project needed a real visual identity: an app icon for shortcuts/WPF chrome and a README hero suitable for the eventual GitHub repository. The concepts live in `assets/logo-concepts/` so they can be referenced later without mixing generated design work into docs prose.
+
+**Canonical app mark.** `assets/logo-concepts/prompt-d-audiophile-disc-badge/prompt-d-variant-01.svg` is the source of truth for the MusicRipper mark. It is a flat-vector audiophile disc: charcoal puck, subtle radial highlight, three dark groove rings, cream center label with tan rings, crimson center dot, full cyan/violet/amber edge treatment, and a soft shadow. Later concepts embed this mark's primitives directly and only transform/place them; they do not redraw the disc.
+
+**Current README hero favorite.** `assets/logo-concepts/readme-hero-logo-concepts/readme-hero-concept-14.svg` is the preferred README hero candidate. It combines concept 12's centered spacing and horizontal tan rules with concept 11's wording: `Secure CD ripping for a bit-perfect FLAC library`. Among the final 13-16 iteration set, concept 14 gives the logo the strongest presence while keeping the text clear of the disc.
+
+**Iteration trail.**
+
+- Prompts A-C explored generic icon directions and were superseded.
+- Prompt D established the final disc mark; variant 01 became canonical.
+- Prompts E-J2 explored wordmarks, horizontal lockups, stacked README heroes, disc-as-tittle treatments, and narrative banners. Useful reference, not selected.
+- README hero concepts 01-16 explored GitHub-ready mastheads using the canonical disc mark.
+- Concepts 08, 11, and 12 were the convergence point: centered masthead, tan horizontal rules, restrained geometric sans wordmark.
+- Concepts 13-16 combined concept 12's spacing/rules with concept 11's tagline; concept 14 is the current favorite.
+
+**Exported app assets.** The shipped app icon assets live under `assets/` (`musicripper.svg`, `musicripper.png`, `musicripper.ico`, per-size `musicripper-{N}.png`, and `musicripper-hero.*`). `setup/Build-Icon.ps1` generates the per-size PNGs and `.ico` from the source mark.
+
+**Future rule.** New design explorations should land under `assets/logo-concepts/`. Promote only selected production assets to top-level `assets/`.
+

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Prompt C friendly folder disc icon variant 03</title>
+  <desc id="desc">A compact disc resting on a folder with a subtle smile-arc reflection and gentle depth; no text.</desc>
+  <metadata><![CDATA[{"prompt":"C","variant":"03","format":"icon","width":1024,"height":1024,"transparentOutsideRoundedSquare":true,"text":"none","palette":{"cream":"#F6E6CC","cream2":"#EED8B7","dustyTeal":"#5A9EA2","deepTeal":"#27666B","mustard":"#DCA842","folderShadow":"#A7752A","smile":"#FFF3D7"}}]]></metadata>
+  <defs>
+    <linearGradient id="bg" x1="128" y1="92" x2="896" y2="928" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F6E6CC"/>
+      <stop offset="1" stop-color="#EED8B7"/>
+    </linearGradient>
+    <linearGradient id="folder" x1="188" y1="514" x2="842" y2="830" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E9BB5E"/>
+      <stop offset="1" stop-color="#C99231"/>
+    </linearGradient>
+    <radialGradient id="disc" cx="44%" cy="28%" r="72%">
+      <stop offset="0" stop-color="#94CBC9"/>
+      <stop offset="0.56" stop-color="#5A9EA2"/>
+      <stop offset="1" stop-color="#27666B"/>
+    </radialGradient>
+    <filter id="softShadow" x="-16%" y="-16%" width="132%" height="138%" color-interpolation-filters="sRGB">
+      <feOffset in="SourceAlpha" dx="0" dy="24" result="offset"/>
+      <feGaussianBlur in="offset" stdDeviation="20" result="blur"/>
+      <feFlood flood-color="#6C512D" flood-opacity="0.24" result="color"/>
+      <feComposite in="color" in2="blur" operator="in" result="shadow"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="190" fill="url(#bg)"/>
+  <g filter="url(#softShadow)">
+    <path d="M220 482 H372 C406 482 424 522 462 522 H806 C848 522 882 556 882 598 V746 C882 794 844 832 796 832 H228 C180 832 142 794 142 746 V560 C142 516 176 482 220 482 Z" fill="#A7752A" opacity="0.24" transform="translate(0 18)"/>
+    <path d="M220 458 H372 C406 458 424 498 462 498 H806 C848 498 882 532 882 574 V746 C882 794 844 832 796 832 H228 C180 832 142 794 142 746 V536 C142 492 176 458 220 458 Z" fill="url(#folder)"/>
+    <path d="M142 582 H882 V746 C882 794 844 832 796 832 H228 C180 832 142 794 142 746 Z" fill="#DCA842"/>
+    <path d="M226 458 H372 C406 458 424 498 462 498 H806 C846 498 878 528 882 568 H142 C148 500 180 458 226 458 Z" fill="#F0C977" opacity="0.68"/>
+    <g transform="translate(514 414) rotate(-4) scale(1 0.90) translate(-514 -414)">
+      <circle cx="514" cy="414" r="226" fill="url(#disc)"/>
+      <circle cx="514" cy="414" r="154" fill="none" stroke="#AAD7D3" stroke-width="24" opacity="0.42"/>
+      <circle cx="514" cy="414" r="66" fill="#F6E6CC" opacity="0.95"/>
+      <circle cx="514" cy="414" r="36" fill="#27666B" opacity="0.92"/>
+      <path d="M396 318 C454 274 574 274 636 318" fill="none" stroke="#EAF7F3" stroke-width="31" stroke-linecap="round" opacity="0.48"/>
+      <path d="M410 492 C472 538 558 538 620 492" fill="none" stroke="#FFF3D7" stroke-width="26" stroke-linecap="round" opacity="0.88"/>
+    </g>
+  </g>
+</svg>

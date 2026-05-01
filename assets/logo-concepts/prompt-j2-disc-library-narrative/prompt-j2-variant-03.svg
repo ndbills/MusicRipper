@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="600" viewBox="0 0 2400 600" role="img" aria-labelledby="title desc">
+  <title id="title">MusicRipper disc to library narrative banner J2 variant 03</title>
+  <desc id="desc">Large-disc MusicRipper narrative banner using the exact Prompt D audiophile disc mark, flowing tan lines, cream file rows, wordmark, and tagline.</desc>
+  <metadata><![CDATA[{"prompt":"J2","variant":"03","format":"disc-library-narrative-banner","width":2400,"height":600,"transparentBackground":true,"discSource":"prompt-d-variant-01 exact geometry/colors","text":"MusicRipper","tagline":"Audio CD to FLAC, the careful way","fontStack":"Segoe UI, Inter, Manrope, Arial, sans-serif","palette":{"wordmark":"#22272E","tagline":"#596571","charcoal":"#202326","charcoal2":"#111417","cream":"#F4E8D0","creamLine":"#CDBF9F","deepRed":"#8E1F26","cyan":"#66D9E8","violet":"#8F6AE8","amber":"#E9B44C"}}]]></metadata>
+  <defs>
+    <radialGradient id="disc" cx="45%" cy="36%" r="66%">
+      <stop offset="0" stop-color="#33383C"/>
+      <stop offset="0.58" stop-color="#202326"/>
+      <stop offset="1" stop-color="#111417"/>
+    </radialGradient>
+    <linearGradient id="rainbow" x1="168" y1="268" x2="842" y2="764" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#66D9E8"/>
+      <stop offset="0.45" stop-color="#8F6AE8"/>
+      <stop offset="1" stop-color="#E9B44C"/>
+    </linearGradient>
+    <filter id="softShadow" x="-14%" y="-14%" width="128%" height="132%" color-interpolation-filters="sRGB">
+      <feOffset in="SourceAlpha" dx="0" dy="26" result="offset"/>
+      <feGaussianBlur in="offset" stdDeviation="24" result="blur"/>
+      <feFlood flood-color="#050607" flood-opacity="0.26" result="color"/>
+      <feComposite in="color" in2="blur" operator="in" result="shadow"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <g transform="translate(96.96 48.96) scale(0.49)">
+    <g filter="url(#softShadow)">
+      <circle cx="512" cy="512" r="382" fill="url(#rainbow)"/>
+      <path d="M802 263 A382 382 0 0 1 878 598" fill="none" stroke="url(#rainbow)" stroke-width="42" stroke-linecap="round"/>
+      <circle cx="512" cy="512" r="356" fill="url(#disc)"/>
+      <circle cx="512" cy="512" r="292" fill="none" stroke="#474B50" stroke-width="10" opacity="0.38"/>
+      <circle cx="512" cy="512" r="236" fill="none" stroke="#0A0C0E" stroke-width="12" opacity="0.40"/>
+      <circle cx="512" cy="512" r="184" fill="none" stroke="#45494D" stroke-width="8" opacity="0.34"/>
+      <circle cx="512" cy="512" r="150" fill="#F4E8D0"/>
+      <circle cx="512" cy="512" r="108" fill="none" stroke="#CDBF9F" stroke-width="8" opacity="0.88"/>
+      <circle cx="512" cy="512" r="74" fill="none" stroke="#CDBF9F" stroke-width="6" opacity="0.82"/>
+      <circle cx="512" cy="512" r="44" fill="none" stroke="#CDBF9F" stroke-width="5" opacity="0.78"/>
+      <circle cx="512" cy="512" r="22" fill="#8E1F26"/>
+    </g>
+  </g>
+  <g fill="none" stroke="#CDBF9F" stroke-linecap="round">
+    <path d="M562 248 C682 248 744 228 858 228" stroke-width="10" opacity="0.68"/>
+    <path d="M576 300 C694 300 758 300 858 300" stroke-width="10" opacity="0.84"/>
+    <path d="M562 352 C682 352 744 372 858 372" stroke-width="10" opacity="0.68"/>
+  </g>
+  <g stroke="#CDBF9F" stroke-width="5">
+    <rect x="864" y="205" width="310" height="46" rx="13" fill="#F4E8D0"/>
+    <rect x="864" y="277" width="354" height="46" rx="13" fill="#F4E8D0"/>
+    <rect x="864" y="349" width="300" height="46" rx="13" fill="#F4E8D0"/>
+  </g>
+  <g font-family="Segoe UI, Inter, Manrope, Arial, sans-serif" letter-spacing="0">
+    <text x="1292" y="283" fill="#22272E" font-size="148" font-weight="500">MusicRipper</text>
+    <text x="1298" y="362" fill="#596571" font-size="45" font-weight="400">Audio CD to FLAC, the careful way</text>
+  </g>
+</svg>
