@@ -25,6 +25,13 @@ desktop.ini
 .vscode/
 *.user
 
+# Generated shortcut at the repo root. .lnk files store absolute paths
+# baked in at creation time, so a committed shortcut would be stale on
+# any machine cloning to a different path. setup/Install-UninstallShortcut.ps1
+# regenerates it (and Install-MusicRipper.ps1 chains that as part of the
+# install flow).
+Uninstall MusicRipper.lnk
+
 # Temp / build
 tmp/
 temp/

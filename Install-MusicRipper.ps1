@@ -245,6 +245,13 @@ try {
     if (-not $SkipShortcut) {
         Invoke-SetupStep -ScriptPath (Join-Path $repoRoot 'setup\Install-Shortcut.ps1') `
                          -Description "Creating Desktop shortcut 'Rip a CD'"
+        # Also (re)generate the in-repo "Uninstall MusicRipper.lnk" so
+        # it points at the install location's actual absolute path.
+        # .lnk files store absolute paths, so a committed shortcut
+        # would be stale on any machine that cloned to a different
+        # path -- regenerate at install time.
+        Invoke-SetupStep -ScriptPath (Join-Path $repoRoot 'setup\Install-UninstallShortcut.ps1') `
+                         -Description "Creating in-repo 'Uninstall MusicRipper' shortcut"
     } else {
         Write-Step 'Skipping desktop shortcut (-SkipShortcut).'
     }
