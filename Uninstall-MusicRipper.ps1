@@ -164,10 +164,13 @@ function Find-RipperWindowsUninstaller {
       HKCU\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\
 
     Returns a hashtable @{ DisplayName; UninstallString;
-    QuietUninstallString } for the first match, or $null if none.
-    Caller picks QuietUninstallString if present (Inno Setup populates
-    this with the silent flags built in), else parses UninstallString
-    and appends silent flags.
+    QuietUninstallString; InstallLocation } for the first match, or
+    $null if none. Caller picks QuietUninstallString if present (Inno
+    Setup populates this with the silent flags built in), else parses
+    UninstallString and appends silent flags. InstallLocation (when
+    present) is the canonical install dir for verifying the uninstall
+    actually nuked the files -- much more reliable than parsing it out
+    of UninstallString.
 #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -183,7 +186,7 @@ function Find-RipperWindowsUninstaller {
     foreach ($root in $roots) {
         if (-not (Test-Path -LiteralPath $root)) { continue }
         try {
-            $matches = Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue |
+            $found = Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue |
                        ForEach-Object {
                            try {
                                $p = Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction SilentlyContinue
@@ -191,16 +194,65 @@ function Find-RipperWindowsUninstaller {
                            } catch { }
                        } |
                        Select-Object -First 1
-            if ($matches) {
+            if ($found) {
                 return @{
-                    DisplayName          = [string]$matches.DisplayName
-                    UninstallString      = [string]$matches.UninstallString
-                    QuietUninstallString = if ($matches.PSObject.Properties['QuietUninstallString']) { [string]$matches.QuietUninstallString } else { $null }
+                    DisplayName          = [string]$found.DisplayName
+                    UninstallString      = [string]$found.UninstallString
+                    QuietUninstallString = if ($found.PSObject.Properties['QuietUninstallString']) { [string]$found.QuietUninstallString } else { $null }
+                    InstallLocation      = if ($found.PSObject.Properties['InstallLocation'])      { [string]$found.InstallLocation }      else { $null }
                 }
             }
         } catch { }
     }
     return $null
+}
+
+function Get-RipperUninstallerExePath {
+<#
+.SYNOPSIS
+    Extract the bare executable path from a Programs registry
+    UninstallString value, handling the three common formats:
+      1. Quoted exe with optional args:        "C:\Path With Spaces\foo.exe" /S
+      2. Bare exe with no args:                C:\Path With Spaces\foo.exe
+      3. Bare exe followed by args (no quotes around the exe):
+                                               C:\Foo\bar.exe /S
+         -- this is the nasty case when the exe path itself contains
+         spaces; we walk left-to-right looking for the first .exe
+         token boundary that exists on disk.
+#>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)] [string]$UninstallString)
+
+    $s = $UninstallString.Trim()
+
+    # Case 1: quoted.
+    if ($s.StartsWith('"')) {
+        $closeQuote = $s.IndexOf('"', 1)
+        if ($closeQuote -gt 1) { return $s.Substring(1, $closeQuote - 1) }
+    }
+
+    # Case 2: the whole thing is a path that exists.
+    if (Test-Path -LiteralPath $s -PathType Leaf) { return $s }
+
+    # Case 3: walk substrings ending at each .exe occurrence and
+    # check Test-Path. First match wins. Handles 'C:\Program Files\
+    # MusicBrainz Picard\uninst.exe /S' correctly.
+    $idx = 0
+    while ($idx -lt $s.Length) {
+        $hit = $s.IndexOf('.exe', $idx, [StringComparison]::OrdinalIgnoreCase)
+        if ($hit -lt 0) { break }
+        $candidate = $s.Substring(0, $hit + 4)
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+        $idx = $hit + 4
+    }
+
+    # Last resort: take everything up to the first space (matches the
+    # old behaviour). Almost certainly wrong for paths with spaces,
+    # but at least returns SOMETHING the caller can probe.
+    $sp = $s.IndexOf(' ')
+    if ($sp -gt 0) { return $s.Substring(0, $sp) }
+    return $s
 }
 
 
@@ -621,20 +673,17 @@ if ($KeepDependencies) {
                     # code while the real uninstall happens in a
                     # forked elevated child. Don't trust the exit
                     # code. Determine "was the install dir nuked?"
-                    # by checking the InstallLocation parent of the
-                    # UninstallString.
-                    $rawCmd = $regHit.UninstallString
-                    # Strip surrounding quotes / args to get the bare exe path.
-                    $exePath = $rawCmd
-                    if ($exePath.StartsWith('"')) {
-                        $closeQuote = $exePath.IndexOf('"', 1)
-                        if ($closeQuote -gt 1) { $exePath = $exePath.Substring(1, $closeQuote - 1) }
+                    # by polling the InstallLocation (or, fallback,
+                    # the parent dir of the parsed exe path).
+                    $exePath    = Get-RipperUninstallerExePath -UninstallString $regHit.UninstallString
+                    $installDir = if ($regHit.InstallLocation) {
+                        # Trim trailing backslash so Test-Path checks are stable.
+                        $regHit.InstallLocation.TrimEnd('\')
                     } else {
-                        # Take everything up to the first space (best-effort).
-                        $sp = $exePath.IndexOf(' ')
-                        if ($sp -gt 0) { $exePath = $exePath.Substring(0, $sp) }
+                        Split-Path -Parent $exePath
                     }
-                    $installDir = Split-Path -Parent $exePath
+                    Write-Host "  Parsed exe path : $exePath" -ForegroundColor DarkGray
+                    Write-Host "  Install dir     : $installDir" -ForegroundColor DarkGray
 
                     # Try silent-flag combos in order: NSIS (/S),
                     # then Inno Setup (/VERYSILENT /SUPPRESSMSGBOXES
