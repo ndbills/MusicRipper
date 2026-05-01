@@ -618,7 +618,16 @@ if ($KeepDependencies) {
             # default). Try user scope first, then fall back to
             # machine scope. Other packages skip the dance and let
             # winget pick the right scope automatically.
-            $scopesToTry = if ($id -eq 'MusicBrainz.Picard') { @('user', 'machine', $null) } else { @($null) }
+            #
+            # NOTE: wrap the whole if-expression in @(...) per the
+            # /memories/powershell.md gotcha -- StrictMode 3.0 + an
+            # `if` expression with `else { @($null) }` collapses to
+            # an empty array, so the foreach below would silently
+            # never run and $finalRc would stay $null forever
+            # (yielding "winget exited with code  for X" with no rc).
+            $scopesToTry = @(
+                if ($id -eq 'MusicBrainz.Picard') { 'user', 'machine', $null } else { $null }
+            )
 
             $finalRc = $null
             foreach ($scope in $scopesToTry) {
