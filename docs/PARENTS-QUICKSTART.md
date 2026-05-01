@@ -2,19 +2,10 @@
 
 One page. One CD at a time. No PowerShell.
 
-> **Note for the engineer:** the `[screenshot: ...]` markers below are
-> placeholders. Capture the matching screenshots from a fresh-install
-> walk-through and drop them in `docs/images/`, then replace each
-> marker with `![alt](images/<file>.png)`. Suggested filenames are
-> noted with each marker.
-
 ## What you got
 
 A **Rip a CD** shortcut on the Desktop. Double-click it whenever you
 want to digitize a CD. That's the whole thing.
-
-> [screenshot: the desktop with the "Rip a CD" shortcut highlighted —
-> `images/01-desktop-shortcut.png`]
 
 ---
 
@@ -31,12 +22,9 @@ window opens. Fill in:
 - Click **Register drive...** — a small window calibrates your CD
   drive. Takes about 30 seconds. Just wait for it.
 
-> [screenshot: the Settings window with Library root + email filled in
-> and the Register-drive button highlighted —
-> `images/02-settings-firstrun.png`]
+![Settings window with library root and email filled in](images/02-settings-firstrun.png)
 
-> [screenshot: the drive-registration progress window —
-> `images/03-register-drive.png`]
+![Drive-registration progress window](images/03-register-drive.png)
 
 Click **Save**. The Settings window closes and you're ready to rip.
 
@@ -53,13 +41,15 @@ window. They should already be filled in for you — leave them alone.
 3. A small dialog pops up showing the album, artist, year, and cover
    art for the disc you just inserted. Look it over.
 
-   > [screenshot: the metadata-confirm dialog for a well-known album —
-   > `images/04-confirm-metadata.png`]
+   ![Metadata-confirm dialog with album info and cover art](images/04a-confirm-metadata.png)
 
    - If everything looks right (it almost always does for popular
      albums): click **Rip**.
    - If something looks wrong: pick a different match from the list,
      or click **Search** to type the artist/album by hand.
+
+     ![Text-search modal for finding an album by name](images/04b-confirm-metadata-text-search.png)
+
    - If you're not sure: click **Send to Review** — the rip will
      happen but land in a special folder so you (or the engineer)
      can fix the metadata later.
@@ -68,14 +58,12 @@ window. They should already be filled in for you — leave them alone.
    depending on the disc; tagging + sync takes another minute or two.
    Walk away — you don't need to babysit it.
 
-   > [screenshot: the live rip-progress window with both bars in
-   > flight — `images/05-rip-progress.png`]
+   ![Live rip-progress window with both progress bars in flight](images/05b-rip-progress.png)
 
 5. When it finishes, the tray pops open and a **"Rip Complete"**
    message appears with the album name. Take the disc out.
 
-   > [screenshot: the success message box —
-   > `images/06-rip-complete.png`]
+   ![Rip Complete success message box](images/06-rip-complete.png)
 
 ---
 
@@ -87,8 +75,7 @@ CD!** window with the result of the last rip and two buttons:
 - **Rip Next Disc** (or just put the next CD in — it auto-detects).
 - **I'm done — Quit**.
 
-> [screenshot: the between-discs dialog with one rip in the summary
-> box and a stack of CDs visible — `images/07-between-discs.png`]
+![Between-discs dialog showing last rip's summary and Rip Next / Quit buttons](images/07-between-discs.png)
 
 So a typical session is: insert a CD, click the shortcut, click
 **Rip**, walk away, come back, eject, insert the next one. Repeat
@@ -125,8 +112,7 @@ Something unexpected went wrong. The CD in the drive is fine — nothing
 was damaged. Click **Copy log path**, paste it into a message to the
 engineer, and close the window.
 
-> [screenshot: the fatal-error dialog highlighting the
-> Copy-log-path button — `images/08-fatal-error.png`]
+![Fatal-error dialog with Copy-log-path and Open-log-folder buttons](images/08-fatal-error.png)
 
 ---
 
@@ -169,8 +155,7 @@ Nothing is ever lost.
 
 ## TL;DR
 
-> [screenshot: side-by-side: shortcut on left, success message on
-> right — `images/09-tldr.png`]
+![Desktop shortcut and a successful rip side-by-side](images/09-tldr.png)
 
 1. Insert CD.
 2. Double-click **Rip a CD**.
