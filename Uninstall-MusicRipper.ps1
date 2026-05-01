@@ -140,22 +140,79 @@ function Test-IsAdministrator {
 
 
 # --- Self-elevate if not admin -------------------------------------------
-# Relaunch under UAC if the user ran us from a non-elevated pwsh. Uses
-# `-NoExit` on the elevated child so the new console window stays at a
-# pwsh prompt after the script ends -- the alternative (Read-Host pause
-# from inside the script) is unreliable across the UAC boundary because
-# stdin handling for `Start-Process -Verb RunAs` children can let
-# Read-Host return immediately with empty input. -NoExit is the simple
-# bulletproof answer: pwsh itself keeps the window alive.
+# Relaunch under UAC if the user ran us from a non-elevated pwsh. Two
+# subtle requirements drive the shape of this block:
+#
+#   (a) -NoExit on the elevated pwsh keeps its console open AT END OF
+#       SCRIPT, but does NOT override an explicit `exit N` mid-script.
+#       So the script body uses `return` everywhere instead of `exit N`
+#       (with a manual `$global:LASTEXITCODE = N` for cosmetic accuracy).
+#
+#   (b) Read-Host inside the elevated child is unreliable -- stdin
+#       handling across the UAC boundary can hand Read-Host an EOF
+#       immediately, so the confirmation prompt would auto-abort.
+#       Fix: do the confirmation prompt HERE (in the non-elevated
+#       parent, where Read-Host works fine), then auto-add -Force to
+#       the forwarded args so the elevated child skips its own prompt.
 if (-not (Test-IsAdministrator)) {
+    # ---- Show the plan + confirm in the parent shell --------------------
+    # Need the same data the elevated child would compute. Mirror just
+    # enough config-reading to build the planned-actions list.
+    $ripperDataRoot = Join-Path $env:LOCALAPPDATA 'MusicRipper'
+    $configPath     = Join-Path $ripperDataRoot 'config.json'
+    $desktopPath    = [Environment]::GetFolderPath('Desktop')
+    $shortcutPath   = Join-Path $desktopPath "$ShortcutName.lnk"
+
+    $wgTunnelName = $null
+    if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+        try {
+            $cfgPre = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+            if ($cfgPre.PSObject.Properties['WireGuardTunnelName'] -and $cfgPre.WireGuardTunnelName) {
+                $wgTunnelName = [string]$cfgPre.WireGuardTunnelName
+            }
+        } catch { }
+    }
+
+    Write-Host ''
+    Write-Host '================================================================' -ForegroundColor DarkCyan
+    Write-Host ' MusicRipper uninstaller' -ForegroundColor DarkCyan
+    Write-Host '================================================================' -ForegroundColor DarkCyan
+
+    $plan = @()
+    if (-not $KeepDependencies) { $plan += 'uninstall CUETools, Xiph.FLAC, MusicBrainz.Picard, WireGuard.WireGuard via winget' }
+    if ($wgTunnelName)          { $plan += "uninstall WireGuard tunnel service '$wgTunnelName'" }
+    if (-not $KeepShortcut)     { $plan += "remove Desktop shortcut '$ShortcutName.lnk'" }
+    if (-not $KeepUserData)     { $plan += "delete $ripperDataRoot (config + credentials + logs)" }
+
+    if ($plan.Count -eq 0) {
+        Write-Host ''
+        Write-Warn 'Every step disabled by switches; nothing to do.'
+        exit 0
+    }
+
+    Write-Host ''
+    Write-Host 'Planned actions:' -ForegroundColor Yellow
+    foreach ($p in $plan) { Write-Host "  - $p" -ForegroundColor Yellow }
+    Write-Host ''
+    Write-Host "Will NOT touch: your library root (cfg.LibraryRoot), <LibraryRoot>\.musicripper\, or PowerShell 7." -ForegroundColor Green
+
+    if (-not $Force -and -not $WhatIfPreference) {
+        Write-Host ''
+        $answer = Read-Host 'Proceed? Type "yes" to continue, anything else to abort'
+        if ($answer -ne 'yes') {
+            Write-Host ''
+            Write-Skip 'Aborted at confirmation prompt.'
+            exit 0
+        }
+    }
+
     Write-Host ''
     Write-Host 'MusicRipper uninstaller needs admin -- relaunching elevated...' -ForegroundColor Yellow
     Write-Host '(A UAC prompt will appear. Approve it to continue.)' -ForegroundColor DarkGray
 
-    # Rebuild the original command line so the elevated child runs the
-    # same invocation the user typed. $PSBoundParameters captures every
-    # explicitly-supplied parameter (defaults are NOT in the dict, so
-    # we don't accidentally re-pass them).
+    # ---- Build forwarded args -------------------------------------------
+    # $PSBoundParameters captures every explicitly-supplied parameter
+    # (defaults are NOT in the dict, so we don't accidentally re-pass them).
     $forwarded = @()
     foreach ($kv in $PSBoundParameters.GetEnumerator()) {
         $name = $kv.Key
@@ -175,11 +232,18 @@ if (-not (Test-IsAdministrator)) {
     if ($WhatIfPreference -and -not $PSBoundParameters.ContainsKey('WhatIf')) {
         $forwarded += '-WhatIf'
     }
+    # Auto-add -Force to the elevated invocation: we already prompted in
+    # the parent shell, AND Read-Host in the elevated child can return
+    # EOF immediately and silently auto-abort.
+    if (-not $PSBoundParameters.ContainsKey('Force') -and -not $WhatIfPreference) {
+        $forwarded += '-Force'
+    }
 
     $scriptArg = "'$($PSCommandPath -replace "'", "''")'"
-    # -NoExit: keep the elevated console window open at a pwsh prompt
-    # after the script finishes, so the user can read the summary.
-    # They close the window when done.
+    # -NoExit: keep the elevated console at a pwsh prompt after the
+    # script ends. The script body uses `return` (not `exit`) so this
+    # actually works -- exit N inside the script would terminate pwsh
+    # regardless of -NoExit.
     $startArgs = @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit',
         '-File', $scriptArg
@@ -195,7 +259,7 @@ if (-not (Test-IsAdministrator)) {
                       -ArgumentList $startArgs `
                       -Verb RunAs `
                       -ErrorAction Stop | Out-Null
-        Write-Host 'Elevated uninstaller launched. Watch the new window for progress + the close-when-done banner.' -ForegroundColor Green
+        Write-Host 'Elevated uninstaller launched. The new window will stay open after it finishes -- close it when you''re done reading.' -ForegroundColor Green
         exit 0
     } catch [System.ComponentModel.Win32Exception] {
         # Win32 error 1223 = "The operation was canceled by the user"
@@ -257,7 +321,8 @@ if (-not $KeepUserData)                        { $plan += "delete $ripperDataRoo
 if ($plan.Count -eq 0) {
     Write-Host ''
     Write-Warn 'Every step disabled by switches; nothing to do.'
-    exit 0
+    $global:LASTEXITCODE = 0
+    return
 }
 
 Write-Host ''
@@ -271,7 +336,8 @@ if (-not $Force -and -not $WhatIfPreference) {
     if ($answer -ne 'yes') {
         Write-Host ''
         Write-Skip 'Aborted at confirmation prompt.'
-        exit 0
+        $global:LASTEXITCODE = 0
+        return
     }
 }
 
@@ -444,4 +510,4 @@ Write-Host ' You can close this window when you''re done reading.' -ForegroundCo
 Write-Host '----------------------------------------------------------------' -ForegroundColor DarkGray
 Write-Host ''
 
-if ($failures -gt 0) { exit 1 } else { exit 0 }
+if ($failures -gt 0) { $global:LASTEXITCODE = 1 } else { $global:LASTEXITCODE = 0 }
