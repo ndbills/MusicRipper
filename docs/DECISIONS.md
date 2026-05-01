@@ -1782,3 +1782,95 @@ Originally agreed to add a small WPF info dialog when the tunnel can't come up m
 
 **Future rule.** New design explorations should land under `assets/logo-concepts/`. Promote only selected production assets to top-level `assets/`.
 
+
+## D-027 follow-on -- Phase 7 manual-verification fixes (Phase 7)
+
+**Status:** Accepted (most of the 33 commits on phase-7-polish are
+these follow-ons; this entry is the consolidated rationale).
+
+**Context.** End-to-end manual verification of the Phase 7 install +
+uninstall flow surfaced a long string of small bugs and parent-UX
+gaps that didn't make the original D-027 plan. Captured here so the
+follow-on rationale isn't buried in commit messages.
+
+**Cross-runspace logging.** Show-RipProgress and Show-PendingSyncProgress
+run their work in [runspacefactory] worker runspaces; PowerShell
+module state (incl. Logging's $script:LogPath) is per-runspace.
+Worse, every Import-Module Logging.psd1 -Force re-runs the .psm1
+and resets $script:LogPath = $null. Symptom: a real review-queue
+rip produced an album folder with no ripper-session.log AND a per-
+disc log that contained zero entries between 'Starting rip:' and
+'Rip finished:'. Fix: new Set-RipperLogPath adopt helper +
+parent passes Get-RipperLogPath through SessionStateProxy.SetVariable
++ worker re-adopts after dot-source chain. Same fix in pending-sync
+worker. Memory note added: "Module $script: state is per-runspace
+AND Import-Module -Force resets it."
+
+**Move-FromReviewQueue sync wiring.** Promoting an album from
+_ReviewQueue/ updated discids.json but never called the sync chain,
+so promoted albums skipped OneDrive/NAS. Fix: after the move +
+index seed, mirror what Invoke-RipperPostProcess does for normal
+Library-routed rips (Invoke-RipperSync against cfg.SyncTargets, then
+Invoke-RipperLibraryRetention). New -SkipSync switch for power
+users who want discids.json-only behaviour.
+
+**Uninstaller (Uninstall-MusicRipper.ps1).** Added per user request,
+modelled on Wireguard.psm1's Invoke-RipperVpnTunnelElevatedInstall
+(the working temp-helper elevation pattern in this codebase). Long
+list of bugs found and fixed during verification:
+  - Self-elevation via #Requires -RunAsAdministrator just bails;
+    don't use it. Self-elevation via Start-Process -Verb RunAs of
+    the same script with -NoExit doesn't work because explicit
+    `exit N` mid-script terminates pwsh regardless of -NoExit.
+  - Read-Host inside the elevated child returns EOF immediately
+    (stdin not wired across UAC). Move confirmation to parent shell
+    where Read-Host works; auto-pass -Force to the child.
+  - Final shape: parent shell prompts, writes a temp .ps1 helper
+    that calls back into THIS script with -ImAlreadyAdmin, launches
+    via Start-Process -Verb RunAs -Wait. Helper's finally block does
+    the Read-Host pause. Helper kept on failure for diagnosis.
+  - Picard's Inno-Setup-style /VERYSILENT was the WRONG silent flag;
+    Picard ships an NSIS installer (silent flag is /S). Fix: try
+    QuietUninstallString first, then NSIS /S, then Inno
+    /VERYSILENT /SUPPRESSMSGBOXES /NORESTART, then MSI /quiet
+    /norestart. Verify success by polling InstallLocation
+    disappearance, NOT by trusting the exit code (NSIS / Inno / MSI
+    all self-elevate via UAC and return immediately with rc=1 while
+    the real uninstall completes asynchronously in a forked child).
+  - UninstallString parser was naive (took everything up to the
+    first space). Picard's value 'C:\Program Files\MusicBrainz
+    Picard\uninst.exe' parsed to 'C:\Program', $installDir became
+    'C:\' (always exists), 'still present' check trivially passed.
+    Fix: walk left-to-right looking for the first .exe substring
+    whose path actually exists on disk. Plus use the registry's
+    InstallLocation when present (much more reliable).
+  - $scopesToTry = if (Picard) { @('user','machine',$null) } else
+    { @($null) } collapsed to empty array under StrictMode 3.0
+    (the powershell.md gotcha that bit Phase 6.1 too). Three
+    packages got bogusly counted as failures every run. Fix:
+    $scopesToTry = @(if ... { 'user','machine',$null } else
+    { $null }).
+  - Install-Dependencies.ps1 was leaking a non-zero $LASTEXITCODE
+    from the last winget call (-1978335189 = ALREADY_INSTALLED) up
+    to Install-MusicRipper.ps1's chain runner, which aborted the
+    install. Fix: explicit $global:LASTEXITCODE = 0 at the end of
+    the dependencies script + Invoke-SetupStep treats -1978335189
+    as success too.
+
+**Three shortcut surfaces.** Per parent-UX request: Desktop
+'Rip a CD.lnk', repo-root 'Uninstall MusicRipper.lnk' (gitignored,
+regenerated per-install since .lnks bake absolute paths), and Start
+Menu 'MusicRipper - Rip a CD.lnk' / 'MusicRipper - Uninstall.lnk'
+flat under Programs\ (Win11 doesn't render Start Menu subfolders).
+Uninstaller cleans up all three.
+
+**Hero banner.** assets/musicripper-hero.png referenced from README
+H1. Logo session contributed 3 commits (icon assets + WPF icon
+wiring); concept-exploration archive lives in assets/logo-concepts/.
+
+**Quickstart screenshots.** 12 PNGs in docs/images/ wired into
+PARENTS-QUICKSTART.md. Captured during a real fresh-install walk-
+through.
+
+**Pester:** 522/0/1 unchanged through all the follow-on fixes
+(everything live-tested on real hardware; no test regressions).
