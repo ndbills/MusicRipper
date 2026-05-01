@@ -146,21 +146,21 @@ function Test-IsAdministrator {
 }
 
 function Exit-WithPause {
-    # If the script was launched by self-elevation it's running in a
-    # fresh console window that will close the moment the script
-    # returns -- read-host on the way out so the user can read the
-    # summary. No-op when the user already had an elevated shell.
+    # Convenience wrapper for clarity at exit sites. The actual pause-
+    # before-window-closes happens in the script-scope `finally` block
+    # at the bottom (so it covers `exit N`, throws, parser errors,
+    # everything). Keeping this helper as a thin pass-through so the
+    # exit sites still read clearly.
     param([Parameter(Mandatory)] [int] $Code)
-    if ($LaunchedFromElevation) {
-        Write-Host ''
-        Read-Host 'Press Enter to close this window' | Out-Null
-    }
     exit $Code
 }
 
 
 # --- Self-elevate if not admin -------------------------------------------
-if (-not (Test-IsAdministrator)) {
+# Skip if this IS the elevated child (defensive: the child should always
+# be admin, but if Start-Process -Verb RunAs landed us in a weird state,
+# don't loop trying to re-elevate forever).
+if (-not (Test-IsAdministrator) -and -not $LaunchedFromElevation) {
     Write-Host ''
     Write-Host 'MusicRipper uninstaller needs admin -- relaunching elevated...' -ForegroundColor Yellow
     Write-Host '(A UAC prompt will appear. Approve it to continue.)' -ForegroundColor DarkGray
@@ -213,7 +213,13 @@ if (-not (Test-IsAdministrator)) {
                               -ErrorAction Stop
         # Propagate the elevated child's exit code back to the original
         # caller so scripts wrapping us see the right $LASTEXITCODE.
-        exit $proc.ExitCode
+        # ExitCode can be unreadable for elevated children (the parent
+        # doesn't always have rights to query it). Guard via PSObject.
+        $rc = 0
+        if ($proc -and $proc.PSObject.Properties['ExitCode'] -and $null -ne $proc.ExitCode) {
+            $rc = [int]$proc.ExitCode
+        }
+        exit $rc
     } catch [System.ComponentModel.Win32Exception] {
         # Win32 error 1223 = "The operation was canceled by the user"
         # (UAC prompt declined). Tell the user clearly what happened.
@@ -236,6 +242,13 @@ if (-not (Test-IsAdministrator)) {
 
 
 # --- 0. Resolve repo root + lay out paths --------------------------------
+# Wrap the entire script body in try/finally so the elevated child
+# always pauses before its (auto-launched) console window closes,
+# regardless of how it exits -- clean exit, Exit-WithPause, throw,
+# uncaught error in winget call, etc. No-op when the script is run
+# from an already-elevated shell (the user's terminal stays open
+# anyway).
+try {
 $repoRoot       = $PSScriptRoot
 $ripperDataRoot = Join-Path $env:LOCALAPPDATA 'MusicRipper'
 $configPath     = Join-Path $ripperDataRoot 'config.json'
@@ -458,3 +471,22 @@ Write-Host '  - PowerShell 7.'
 Write-Host ''
 
 if ($failures -gt 0) { Exit-WithPause -Code 1 } else { Exit-WithPause -Code 0 }
+}
+finally {
+    # Pause-before-window-closes for self-elevated runs. Runs after
+    # `exit N` (PowerShell honors finally blocks on exit), after
+    # uncaught throws, even after parser errors that happen mid-body.
+    # The user always gets to read the success/failure summary.
+    if ($LaunchedFromElevation) {
+        Write-Host ''
+        Write-Host '----------------------------------------------------------------' -ForegroundColor DarkGray
+        try {
+            Read-Host 'Press Enter to close this window'
+        } catch {
+            # If Read-Host itself throws (rare -- e.g. host doesn't
+            # support it) fall back to a sleep so the user still gets
+            # a few seconds to read the summary.
+            Start-Sleep -Seconds 10
+        }
+    }
+}
