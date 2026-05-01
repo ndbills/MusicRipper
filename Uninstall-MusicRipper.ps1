@@ -616,35 +616,86 @@ if ($KeepDependencies) {
                     }
 
                     Write-Warn "$id not tracked by winget but found in Programs: '$($regHit.DisplayName)'."
-                    # Prefer QuietUninstallString (Inno Setup populates
-                    # this with /VERYSILENT etc); fall back to UninstallString.
-                    $cmdLine = if ($regHit.QuietUninstallString) {
-                        $regHit.QuietUninstallString
+                    # Many installers (NSIS, Inno, MSI) self-elevate
+                    # and return immediately with a misleading exit
+                    # code while the real uninstall happens in a
+                    # forked elevated child. Don't trust the exit
+                    # code. Determine "was the install dir nuked?"
+                    # by checking the InstallLocation parent of the
+                    # UninstallString.
+                    $rawCmd = $regHit.UninstallString
+                    # Strip surrounding quotes / args to get the bare exe path.
+                    $exePath = $rawCmd
+                    if ($exePath.StartsWith('"')) {
+                        $closeQuote = $exePath.IndexOf('"', 1)
+                        if ($closeQuote -gt 1) { $exePath = $exePath.Substring(1, $closeQuote - 1) }
                     } else {
-                        # Append common silent flags for Inno Setup
-                        # (Picard) and MSI. Harmless if the installer
-                        # ignores them.
-                        "$($regHit.UninstallString) /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /quiet"
+                        # Take everything up to the first space (best-effort).
+                        $sp = $exePath.IndexOf(' ')
+                        if ($sp -gt 0) { $exePath = $exePath.Substring(0, $sp) }
                     }
-                    Write-Step "Running registry uninstaller: $cmdLine"
-                    try {
-                        # cmd /c so we can pass an entire command line
-                        # (UninstallString may include its own quoted args).
-                        $regProc = Start-Process -FilePath 'cmd.exe' `
-                                                 -ArgumentList @('/c', $cmdLine) `
-                                                 -Wait -PassThru -WindowStyle Hidden `
-                                                 -ErrorAction Stop
-                        $regRc = if ($regProc -and $regProc.PSObject.Properties['ExitCode']) { [int]$regProc.ExitCode } else { 0 }
-                        if ($regRc -eq 0) {
-                            Write-Ok "$id uninstalled via registry uninstaller."
-                        } else {
-                            Write-Warn "Registry uninstaller exited $regRc for '$($regHit.DisplayName)'."
-                            Write-Warn '  Open Settings -> Apps -> Installed apps to remove by hand if needed.'
-                            $failures++
+                    $installDir = Split-Path -Parent $exePath
+
+                    # Try silent-flag combos in order: NSIS (/S),
+                    # then Inno Setup (/VERYSILENT /SUPPRESSMSGBOXES
+                    # /NORESTART), then MSI (/quiet /norestart).
+                    # First combo that nukes $installDir wins.
+                    $attempts = @(
+                        @{ Name='NSIS'; Args = @('/S') },
+                        @{ Name='Inno'; Args = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') },
+                        @{ Name='MSI';  Args = @('/quiet', '/norestart') }
+                    )
+                    # If QuietUninstallString is set (Inno installers populate
+                    # this with their silent flags built-in), use it first
+                    # via cmd /c so any embedded quoting works.
+                    $picardOk = $false
+                    if ($regHit.QuietUninstallString) {
+                        Write-Step "Trying QuietUninstallString: $($regHit.QuietUninstallString)"
+                        try {
+                            Start-Process -FilePath 'cmd.exe' `
+                                          -ArgumentList @('/c', $regHit.QuietUninstallString) `
+                                          -Wait -WindowStyle Hidden -ErrorAction Stop | Out-Null
+                        } catch { Write-Warn "QuietUninstallString threw: $($_.Exception.Message)" }
+                        # Wait for the elevated child to actually finish nuking files.
+                        Start-Sleep -Seconds 3
+                        if ($installDir -and -not (Test-Path -LiteralPath $installDir)) {
+                            Write-Ok "$id uninstalled (QuietUninstallString). Install dir gone."
+                            $picardOk = $true
                         }
-                    } catch {
-                        Write-Fail "Registry uninstaller threw: $($_.Exception.Message)"
-                        Write-Warn '  Open Settings -> Apps -> Installed apps to remove by hand.'
+                    }
+
+                    if (-not $picardOk -and (Test-Path -LiteralPath $exePath -PathType Leaf)) {
+                        foreach ($a in $attempts) {
+                            Write-Step "Trying $($a.Name) silent flags: $exePath $($a.Args -join ' ')"
+                            try {
+                                Start-Process -FilePath $exePath `
+                                              -ArgumentList $a.Args `
+                                              -Wait -WindowStyle Hidden -ErrorAction Stop | Out-Null
+                            } catch {
+                                Write-Warn "$($a.Name) flags threw: $($_.Exception.Message)"
+                                continue
+                            }
+                            # Many installers self-elevate via UAC
+                            # (already granted to us), then a child
+                            # process does the real work asynchronously.
+                            # Poll for the install dir to disappear.
+                            $deadline = (Get-Date).AddSeconds(60)
+                            while ((Get-Date) -lt $deadline -and (Test-Path -LiteralPath $installDir)) {
+                                Start-Sleep -Seconds 1
+                            }
+                            if ($installDir -and -not (Test-Path -LiteralPath $installDir)) {
+                                Write-Ok "$id uninstalled ($($a.Name) flags worked). Install dir gone."
+                                $picardOk = $true
+                                break
+                            }
+                        }
+                    }
+
+                    if (-not $picardOk) {
+                        Write-Warn "$id couldn't be silently uninstalled via any known silent-flag combination."
+                        Write-Warn "  Install dir still present: $installDir"
+                        Write-Warn '  Open Settings -> Apps -> Installed apps to remove by hand,'
+                        Write-Warn "  or run manually: & '$exePath'"
                         $failures++
                     }
                 }
