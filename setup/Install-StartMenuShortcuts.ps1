@@ -1,13 +1,16 @@
 <#
 .SYNOPSIS
-    Create a per-user Start Menu folder "MusicRipper" containing
-    "Rip a CD.lnk" + "Uninstall MusicRipper.lnk".
+    Drop "MusicRipper - Rip a CD.lnk" and "MusicRipper - Uninstall.lnk"
+    directly into the per-user Start Menu Programs folder so they
+    show up in Search and the All apps list.
 
 .DESCRIPTION
-    Drops the two shortcuts under
-    %APPDATA%\Microsoft\Windows\Start Menu\Programs\MusicRipper\ so
-    they show up in the Windows Start menu (and Search) when the user
-    types "MusicRipper" or "Rip a CD". Per-user, no admin required.
+    Per-user, no admin required. Both shortcuts go directly under
+    %APPDATA%\Microsoft\Windows\Start Menu\Programs\ -- NOT into a
+    MusicRipper\ subfolder, because Win11's flat 'All apps' list
+    doesn't render Start Menu subfolders the way Win10 did. The
+    'MusicRipper - ' prefix on each filename is what groups them
+    visually in Search and the alphabetic All-apps list.
 
     Mirrors the layout / RunAsAdmin flags / WindowStyle of the
     Desktop versions:
@@ -20,13 +23,13 @@
                          the parent shell prompts; pre-elevating would
                          pop UAC before the friendly "Proceed?" question.
 
-    Idempotent: re-run any time to refresh both shortcuts (handles
-    install dir moves, pwsh path changes, etc.).
+    Idempotent: re-run any time to refresh both shortcuts. Cleans up
+    any legacy MusicRipper\ subfolder from older installs.
 
 .NOTES
-    The Start Menu folder is per-user (%APPDATA%, not %ProgramData%)
-    so we don't need admin to create or remove it. Uninstall-
-    MusicRipper.ps1 deletes the entire folder when run.
+    Per-user (%APPDATA%, not %ProgramData%) so we don't need admin
+    to create or remove. Uninstall-MusicRipper.ps1 deletes the two
+    shortcuts (and any legacy MusicRipper\ subfolder) when run.
 #>
 
 [CmdletBinding()]
@@ -38,10 +41,25 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $pwsh     = (Get-Command pwsh -ErrorAction Stop).Source
 
-$startMenuRoot = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\MusicRipper'
+$startMenuRoot = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
 if (-not (Test-Path -LiteralPath $startMenuRoot)) {
+    # Should always exist on Windows, but defensive: create if not.
     New-Item -ItemType Directory -Path $startMenuRoot -Force | Out-Null
-    Write-Host "Created Start Menu folder: $startMenuRoot" -ForegroundColor Green
+}
+
+# Clean up the legacy MusicRipper\ subfolder from older installs.
+# Win10 / pre-flatten layout dropped both shortcuts in a subfolder;
+# Win11's All apps list hides subfolders so we now place the .lnks
+# directly in Programs\. If the subfolder still exists from a prior
+# install, nuke it so we don't end up with stale duplicates.
+$legacyFolder = Join-Path $startMenuRoot 'MusicRipper'
+if (Test-Path -LiteralPath $legacyFolder -PathType Container) {
+    try {
+        Remove-Item -LiteralPath $legacyFolder -Recurse -Force
+        Write-Host "Removed legacy Start Menu folder: $legacyFolder" -ForegroundColor DarkGray
+    } catch {
+        Write-Warning "Couldn't remove legacy Start Menu folder '$legacyFolder': $($_.Exception.Message)"
+    }
 }
 
 # Optional MusicRipper icon (assets may not exist on every install).
@@ -54,11 +72,9 @@ $ripScript = Join-Path $repoRoot 'src\Start-Ripper.ps1'
 if (-not (Test-Path -LiteralPath $ripScript -PathType Leaf)) {
     throw "Start-Ripper.ps1 not found at '$ripScript'."
 }
-# 'MusicRipper - ...' prefix so the two shortcuts sort + group together
-# in Win11's flat 'All apps' list (Win11 doesn't render Start Menu
-# subfolders the way Win10 did; the on-disk MusicRipper\ folder is
-# invisible in the UI). Search by 'musicripper' or 'rip a cd' or
-# 'uninstall' all still work.
+# 'MusicRipper - ' prefix groups the two shortcuts together in the
+# alphabetic All apps list. Search by 'musicripper', 'rip a cd',
+# or 'uninstall' all surface them.
 $ripLnk = Join-Path $startMenuRoot 'MusicRipper - Rip a CD.lnk'
 $lnk = $shell.CreateShortcut($ripLnk)
 $lnk.TargetPath       = $pwsh

@@ -144,6 +144,65 @@ function Test-IsAdministrator {
     $p.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Find-RipperWindowsUninstaller {
+<#
+.SYNOPSIS
+    Find the standard Programs-and-Features uninstaller string for an
+    installed app whose DisplayName matches a wildcard.
+
+.DESCRIPTION
+    Used as a fallback when winget claims a package is "not installed"
+    but the binary clearly is on disk -- typically because the user
+    installed it via the vendor's own MSI / Inno Setup installer rather
+    than via winget, OR winget lost the package association after an
+    auto-update.
+
+    Walks the four standard registry roots:
+      HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\
+      HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\  (32-bit on 64-bit)
+      HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\
+      HKCU\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\
+
+    Returns a hashtable @{ DisplayName; UninstallString;
+    QuietUninstallString } for the first match, or $null if none.
+    Caller picks QuietUninstallString if present (Inno Setup populates
+    this with the silent flags built in), else parses UninstallString
+    and appends silent flags.
+#>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [string]$DisplayNameLike
+    )
+    $roots = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKCU:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+    )
+    foreach ($root in $roots) {
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+        try {
+            $matches = Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue |
+                       ForEach-Object {
+                           try {
+                               $p = Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction SilentlyContinue
+                               if ($p -and $p.DisplayName -and $p.DisplayName -like $DisplayNameLike) { $p }
+                           } catch { }
+                       } |
+                       Select-Object -First 1
+            if ($matches) {
+                return @{
+                    DisplayName          = [string]$matches.DisplayName
+                    UninstallString      = [string]$matches.UninstallString
+                    QuietUninstallString = if ($matches.PSObject.Properties['QuietUninstallString']) { [string]$matches.QuietUninstallString } else { $null }
+                }
+            }
+        } catch { }
+    }
+    return $null
+}
+
 
 # --- Common path layout (used by both phases) ----------------------------
 $repoRoot       = $PSScriptRoot
@@ -180,7 +239,7 @@ if (-not $ImAlreadyAdmin -and -not (Test-IsAdministrator)) {
     if (-not $KeepDependencies) { $plan += 'uninstall CUETools, Xiph.FLAC, MusicBrainz.Picard, WireGuard.WireGuard via winget' }
     if ($wgTunnelName)          { $plan += "uninstall WireGuard tunnel service '$wgTunnelName'" }
     if (-not $KeepShortcut)     { $plan += "remove Desktop shortcut '$ShortcutName.lnk'" }
-    if (-not $KeepShortcut)     { $plan += 'remove Start Menu folder "MusicRipper" (Rip a CD + Uninstall)' }
+    if (-not $KeepShortcut)     { $plan += "remove Start Menu shortcuts (Rip a CD + Uninstall)" }
     if (-not $KeepUserData)     { $plan += "delete $ripperDataRoot (config + credentials + logs)" }
 
     if ($plan.Count -eq 0) {
@@ -431,26 +490,52 @@ if ($KeepShortcut) {
 }
 
 
-# --- Step 2b: Start Menu folder -----------------------------------------
-# Per-user folder created by setup\Install-StartMenuShortcuts.ps1 at
-# install time; remove the whole "MusicRipper" subdir + its two .lnks
-# in one shot. Honours -KeepShortcut alongside the Desktop step (same
-# parent intent: "leave my launchers alone").
-$startMenuFolder = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\MusicRipper'
+# --- Step 2b: Start Menu shortcuts --------------------------------------
+# Two .lnks installed by setup\Install-StartMenuShortcuts.ps1 directly
+# in %APPDATA%\Microsoft\Windows\Start Menu\Programs\ (no subfolder --
+# Win11's flat All-apps list hides subfolders). Also clean up any
+# legacy MusicRipper\ subfolder from older installs that used the
+# pre-flatten layout.
+$startMenuProgs   = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+$startMenuLnks    = @(
+    (Join-Path $startMenuProgs 'MusicRipper - Rip a CD.lnk'),
+    (Join-Path $startMenuProgs 'MusicRipper - Uninstall.lnk')
+)
+$startMenuLegacy  = Join-Path $startMenuProgs 'MusicRipper'
 if ($KeepShortcut) {
-    Write-Step 'Start Menu folder'
+    Write-Step 'Start Menu shortcuts'
     Write-Skip '-KeepShortcut set; leaving in place.'
-} elseif (-not (Test-Path -LiteralPath $startMenuFolder -PathType Container)) {
-    Write-Step 'Start Menu folder'
-    Write-Skip "Not found: $startMenuFolder  (already gone, or never installed)."
-} elseif ($PSCmdlet.ShouldProcess($startMenuFolder, 'Remove Start Menu folder')) {
-    Write-Step 'Removing Start Menu folder'
-    try {
-        Remove-Item -LiteralPath $startMenuFolder -Recurse -Force
-        Write-Ok "Removed: $startMenuFolder"
-    } catch {
-        Write-Fail "Couldn't remove Start Menu folder: $($_.Exception.Message)"
-        $failures++
+} else {
+    Write-Step 'Removing Start Menu shortcuts'
+    $anyFound = $false
+    foreach ($lnk in $startMenuLnks) {
+        if (-not (Test-Path -LiteralPath $lnk -PathType Leaf)) { continue }
+        $anyFound = $true
+        if ($PSCmdlet.ShouldProcess($lnk, 'Remove Start Menu shortcut')) {
+            try {
+                Remove-Item -LiteralPath $lnk -Force
+                Write-Ok "Removed: $lnk"
+            } catch {
+                Write-Fail "Couldn't remove '$lnk': $($_.Exception.Message)"
+                $failures++
+            }
+        }
+    }
+    # Legacy subfolder cleanup (pre-flatten installs).
+    if (Test-Path -LiteralPath $startMenuLegacy -PathType Container) {
+        $anyFound = $true
+        if ($PSCmdlet.ShouldProcess($startMenuLegacy, 'Remove legacy Start Menu folder')) {
+            try {
+                Remove-Item -LiteralPath $startMenuLegacy -Recurse -Force
+                Write-Ok "Removed legacy folder: $startMenuLegacy"
+            } catch {
+                Write-Fail "Couldn't remove legacy folder: $($_.Exception.Message)"
+                $failures++
+            }
+        }
+    }
+    if (-not $anyFound) {
+        Write-Skip 'No Start Menu shortcuts found (already gone, or never installed).'
     }
 }
 
@@ -508,7 +593,61 @@ if ($KeepDependencies) {
 
             switch ($finalRc) {
                 0           { Write-Ok "$id uninstalled." }
-                -1978335212 { Write-Skip "$id was not installed." }
+                -1978335212 {
+                    # winget says NO_APPLICABLE_INSTALLER. Either it's
+                    # genuinely not installed, OR it was installed via
+                    # the vendor's own installer (not winget) and
+                    # winget can't see the package row. Probe the
+                    # standard Programs registry as a fallback.
+                    $regHit = $null
+                    if ($id -eq 'MusicBrainz.Picard') {
+                        $regHit = Find-RipperWindowsUninstaller -DisplayNameLike 'MusicBrainz Picard*'
+                    } elseif ($id -eq 'gchudov.CUETools') {
+                        $regHit = Find-RipperWindowsUninstaller -DisplayNameLike 'CUETools*'
+                    } elseif ($id -eq 'WireGuard.WireGuard') {
+                        $regHit = Find-RipperWindowsUninstaller -DisplayNameLike 'WireGuard*'
+                    } elseif ($id -eq 'Xiph.FLAC') {
+                        $regHit = Find-RipperWindowsUninstaller -DisplayNameLike 'FLAC*'
+                    }
+
+                    if (-not $regHit) {
+                        Write-Skip "$id was not installed."
+                        break
+                    }
+
+                    Write-Warn "$id not tracked by winget but found in Programs: '$($regHit.DisplayName)'."
+                    # Prefer QuietUninstallString (Inno Setup populates
+                    # this with /VERYSILENT etc); fall back to UninstallString.
+                    $cmdLine = if ($regHit.QuietUninstallString) {
+                        $regHit.QuietUninstallString
+                    } else {
+                        # Append common silent flags for Inno Setup
+                        # (Picard) and MSI. Harmless if the installer
+                        # ignores them.
+                        "$($regHit.UninstallString) /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /quiet"
+                    }
+                    Write-Step "Running registry uninstaller: $cmdLine"
+                    try {
+                        # cmd /c so we can pass an entire command line
+                        # (UninstallString may include its own quoted args).
+                        $regProc = Start-Process -FilePath 'cmd.exe' `
+                                                 -ArgumentList @('/c', $cmdLine) `
+                                                 -Wait -PassThru -WindowStyle Hidden `
+                                                 -ErrorAction Stop
+                        $regRc = if ($regProc -and $regProc.PSObject.Properties['ExitCode']) { [int]$regProc.ExitCode } else { 0 }
+                        if ($regRc -eq 0) {
+                            Write-Ok "$id uninstalled via registry uninstaller."
+                        } else {
+                            Write-Warn "Registry uninstaller exited $regRc for '$($regHit.DisplayName)'."
+                            Write-Warn '  Open Settings -> Apps -> Installed apps to remove by hand if needed.'
+                            $failures++
+                        }
+                    } catch {
+                        Write-Fail "Registry uninstaller threw: $($_.Exception.Message)"
+                        Write-Warn '  Open Settings -> Apps -> Installed apps to remove by hand.'
+                        $failures++
+                    }
+                }
                 -1978335189 { Write-Skip "$id was already in target state." }
                 -1978335230 {
                     # 0x8A150042 INSTALLER_PROHIBITS_ELEVATION -- the
