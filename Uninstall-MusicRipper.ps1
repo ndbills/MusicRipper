@@ -97,6 +97,15 @@
         1  one or more steps failed (see message log)
 #>
 
+# Require an elevated pwsh up-front. Two reasons:
+#   1. WireGuard tunnel uninstall (`/uninstalltunnelservice`) needs admin
+#      -- it touches the Service Control Manager.
+#   2. Several winget packages (esp. WireGuard.WireGuard) ship MSI / Inno
+#      uninstallers that prompt for elevation per-package; pre-elevating
+#      means the user gets ONE UAC prompt at launch (when they double-click
+#      this script) instead of one-per-package mid-run.
+#Requires -RunAsAdministrator
+
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
     [string] $ShortcutName    = 'Rip a CD',
@@ -116,12 +125,6 @@ function Write-Ok   { param([string]$M) Write-Host "[ok]   $M" -ForegroundColor 
 function Write-Skip { param([string]$M) Write-Host "[skip] $M" -ForegroundColor DarkGray }
 function Write-Warn { param([string]$M) Write-Host "[warn] $M" -ForegroundColor Yellow }
 function Write-Fail { param([string]$M) Write-Host "[fail] $M" -ForegroundColor Red }
-
-function Test-IsAdministrator {
-    $id = [System.Security.Principal.WindowsIdentity]::GetCurrent()
-    $p  = [System.Security.Principal.WindowsPrincipal]::new($id)
-    $p.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
-}
 
 
 # --- 0. Resolve repo root + lay out paths --------------------------------
@@ -184,16 +187,9 @@ if (-not $Force -and -not $WhatIfPreference) {
 $failures = 0
 
 
-# --- 3. WireGuard tunnel service (needs elevation) -----------------------
+# --- 3. WireGuard tunnel service ----------------------------------------
 if ($wgTunnelName) {
-    if (-not (Test-IsAdministrator)) {
-        Write-Step "Uninstalling WireGuard tunnel service '$wgTunnelName'"
-        Write-Warn 'Not running as Administrator -- skipping WireGuard tunnel uninstall.'
-        Write-Warn '  Re-run this script from an elevated pwsh to remove the tunnel,'
-        Write-Warn "  or remove it by hand: from an elevated terminal run:"
-        Write-Warn "    & `"$env:ProgramFiles\WireGuard\wireguard.exe`" /uninstalltunnelservice $wgTunnelName"
-        $failures++
-    } elseif ($PSCmdlet.ShouldProcess("WireGuard tunnel service '$wgTunnelName'", 'Uninstall')) {
+    if ($PSCmdlet.ShouldProcess("WireGuard tunnel service '$wgTunnelName'", 'Uninstall')) {
         Write-Step "Uninstalling WireGuard tunnel service '$wgTunnelName'"
         try {
             Import-Module (Join-Path $repoRoot 'src\lib\Wireguard.psd1') -Force -ErrorAction Stop
@@ -262,8 +258,21 @@ if ($KeepDependencies) {
                 #   -1978335212 : 0x8A150014 NO_APPLICABLE_INSTALLER (i.e. not installed)
                 #   -1978335189 : 0x8A150049 already in target state
                 # All three are "success for our purposes."
-                & winget uninstall --exact --id $id `
-                    --accept-source-agreements --silent --disable-interactivity 2>&1 | Out-Null
+                #
+                # Per-package overrides for installers that ignore winget's
+                # --silent and pop a window anyway:
+                #   - MusicBrainz.Picard ships an Inno Setup installer; its
+                #     silent flag is /VERYSILENT /SUPPRESSMSGBOXES /NORESTART.
+                #     Without --override the uninstall wizard pops a GUI even
+                #     under --silent --disable-interactivity. (Observed 1 May 2026.)
+                $wingetArgs = @(
+                    'uninstall', '--exact', '--id', $id,
+                    '--accept-source-agreements', '--silent', '--disable-interactivity'
+                )
+                if ($id -eq 'MusicBrainz.Picard') {
+                    $wingetArgs += @('--override', '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART')
+                }
+                & winget @wingetArgs 2>&1 | Out-Null
                 $rc = $LASTEXITCODE
                 switch ($rc) {
                     0           { Write-Ok "$id uninstalled." }
