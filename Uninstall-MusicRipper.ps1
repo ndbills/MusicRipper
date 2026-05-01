@@ -97,14 +97,20 @@
         1  one or more steps failed (see message log)
 #>
 
-# Require an elevated pwsh up-front. Two reasons:
+# Require an elevated pwsh. Two reasons:
 #   1. WireGuard tunnel uninstall (`/uninstalltunnelservice`) needs admin
 #      -- it touches the Service Control Manager.
 #   2. Several winget packages (esp. WireGuard.WireGuard) ship MSI / Inno
 #      uninstallers that prompt for elevation per-package; pre-elevating
-#      means the user gets ONE UAC prompt at launch (when they double-click
-#      this script) instead of one-per-package mid-run.
-#Requires -RunAsAdministrator
+#      means the user gets ONE UAC prompt at launch instead of
+#      one-per-package mid-run.
+#
+# Self-elevation: instead of #Requires -RunAsAdministrator (which just
+# bails with a stack-trace-y error), if we detect we're not admin we
+# Start-Process pwsh.exe -Verb RunAs and forward every parameter the
+# user supplied. UAC prompt fires once, the elevated child runs the
+# whole flow, the original (non-elevated) parent exits with the
+# child's exit code so $LASTEXITCODE is preserved for callers.
 
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
@@ -112,7 +118,14 @@ param(
     [switch] $KeepDependencies,
     [switch] $KeepUserData,
     [switch] $KeepShortcut,
-    [switch] $Force
+    [switch] $Force,
+
+    # Internal: set by the self-elevation hand-off so the elevated
+    # child (which opens in its own console window that would close
+    # the moment the script returns) pauses on the final summary so
+    # the user can read it. Not documented for human callers.
+    [Parameter(DontShow)]
+    [switch] $LaunchedFromElevation
 )
 
 Set-StrictMode -Version 3.0
@@ -125,6 +138,101 @@ function Write-Ok   { param([string]$M) Write-Host "[ok]   $M" -ForegroundColor 
 function Write-Skip { param([string]$M) Write-Host "[skip] $M" -ForegroundColor DarkGray }
 function Write-Warn { param([string]$M) Write-Host "[warn] $M" -ForegroundColor Yellow }
 function Write-Fail { param([string]$M) Write-Host "[fail] $M" -ForegroundColor Red }
+
+function Test-IsAdministrator {
+    $id = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $p  = [System.Security.Principal.WindowsPrincipal]::new($id)
+    $p.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Exit-WithPause {
+    # If the script was launched by self-elevation it's running in a
+    # fresh console window that will close the moment the script
+    # returns -- read-host on the way out so the user can read the
+    # summary. No-op when the user already had an elevated shell.
+    param([Parameter(Mandatory)] [int] $Code)
+    if ($LaunchedFromElevation) {
+        Write-Host ''
+        Read-Host 'Press Enter to close this window' | Out-Null
+    }
+    exit $Code
+}
+
+
+# --- Self-elevate if not admin -------------------------------------------
+if (-not (Test-IsAdministrator)) {
+    Write-Host ''
+    Write-Host 'MusicRipper uninstaller needs admin -- relaunching elevated...' -ForegroundColor Yellow
+    Write-Host '(A UAC prompt will appear. Approve it to continue.)' -ForegroundColor DarkGray
+
+    # Rebuild the original command line so the elevated child runs the
+    # same invocation the user typed. $PSBoundParameters captures every
+    # explicitly-supplied parameter (defaults are NOT in the dict, so
+    # we don't accidentally re-pass them).
+    $forwarded = @()
+    foreach ($kv in $PSBoundParameters.GetEnumerator()) {
+        $name = $kv.Key
+        $val  = $kv.Value
+        if ($val -is [System.Management.Automation.SwitchParameter]) {
+            if ($val.IsPresent) { $forwarded += "-$name" }
+        } elseif ($val -is [bool]) {
+            $forwarded += @("-$name", $(if ($val) { '$true' } else { '$false' }))
+        } else {
+            # String values containing spaces need to survive the
+            # ArgumentList round-trip. Wrap in single quotes (PowerShell
+            # parser keeps them literal) and double-up any embedded
+            # single quotes per PS quoting rules.
+            $escaped = ([string]$val) -replace "'", "''"
+            $forwarded += @("-$name", "'$escaped'")
+        }
+    }
+    # Honour -WhatIf even though it's not in $PSBoundParameters when set
+    # via $WhatIfPreference (which would happen if the user did
+    # 'Set-PSDebug -WhatIf' or imported it). For our use case this is
+    # belt-and-suspenders -- the parent's $WhatIfPreference doesn't
+    # cross the process boundary.
+    if ($WhatIfPreference -and -not $PSBoundParameters.ContainsKey('WhatIf')) {
+        $forwarded += '-WhatIf'
+    }
+
+    # Quote the script path in case the install dir has spaces.
+    $scriptArg = "'$($PSCommandPath -replace "'", "''")'"
+    # Tack on -LaunchedFromElevation so the child knows to pause for
+    # Read-Host at the end (otherwise the new console window vanishes
+    # before the user can read the summary).
+    $startArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptArg) + $forwarded + @('-LaunchedFromElevation')
+
+    try {
+        # Use pwsh.exe (PS7) explicitly; the script's pipeline expects PS7.
+        $pwshExe = (Get-Command pwsh -ErrorAction Stop).Source
+        $proc = Start-Process -FilePath $pwshExe `
+                              -ArgumentList $startArgs `
+                              -Verb RunAs `
+                              -PassThru `
+                              -Wait `
+                              -ErrorAction Stop
+        # Propagate the elevated child's exit code back to the original
+        # caller so scripts wrapping us see the right $LASTEXITCODE.
+        exit $proc.ExitCode
+    } catch [System.ComponentModel.Win32Exception] {
+        # Win32 error 1223 = "The operation was canceled by the user"
+        # (UAC prompt declined). Tell the user clearly what happened.
+        if ($_.Exception.NativeErrorCode -eq 1223) {
+            Write-Host ''
+            Write-Host 'UAC elevation declined; uninstall aborted.' -ForegroundColor Red
+            exit 2
+        }
+        Write-Host ''
+        Write-Host "Could not relaunch elevated: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host '  Open an elevated pwsh manually and re-run this script.' -ForegroundColor DarkGray
+        exit 3
+    } catch {
+        Write-Host ''
+        Write-Host "Could not relaunch elevated: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host '  Open an elevated pwsh manually and re-run this script.' -ForegroundColor DarkGray
+        exit 3
+    }
+}
 
 
 # --- 0. Resolve repo root + lay out paths --------------------------------
@@ -166,7 +274,7 @@ if (-not $KeepUserData)                        { $plan += "delete $ripperDataRoo
 if ($plan.Count -eq 0) {
     Write-Host ''
     Write-Warn 'Every step disabled by switches; nothing to do.'
-    exit 0
+    Exit-WithPause -Code 0
 }
 
 Write-Host ''
@@ -180,7 +288,7 @@ if (-not $Force -and -not $WhatIfPreference) {
     if ($answer -ne 'yes') {
         Write-Host ''
         Write-Skip 'Aborted at confirmation prompt.'
-        exit 0
+        Exit-WithPause -Code 0
     }
 }
 
@@ -349,4 +457,4 @@ Write-Host '  - <LibraryRoot>\.musicripper\discids.json + sync-state.json.'
 Write-Host '  - PowerShell 7.'
 Write-Host ''
 
-if ($failures -gt 0) { exit 1 } else { exit 0 }
+if ($failures -gt 0) { Exit-WithPause -Code 1 } else { Exit-WithPause -Code 0 }

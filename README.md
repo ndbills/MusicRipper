@@ -47,9 +47,8 @@ To uninstall later: `./Uninstall-MusicRipper.ps1` removes the desktop
 shortcut, dependency winget packages (CUETools, Xiph.FLAC, Picard,
 WireGuard), the WireGuard tunnel service, and `%LOCALAPPDATA%\MusicRipper\`
 (config + credentials + logs). Your music library is never touched, and
-PowerShell 7 stays installed. **Run from an elevated pwsh** (the script
-requires admin so all uninstalls happen without per-package UAC prompts).
-Add `-WhatIf` to preview without changing anything.
+PowerShell 7 stays installed. The script self-elevates if needed (one UAC
+prompt at launch). Add `-WhatIf` to preview without changing anything.
 
 Double-click the Desktop shortcut. On first launch the WPF settings
 editor opens (library root, MusicBrainz email, drive registration with
