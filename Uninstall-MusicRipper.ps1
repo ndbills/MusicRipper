@@ -7,28 +7,55 @@
     installed.
 
 .DESCRIPTION
-    Uninstall steps (in order, each independently best-effort):
+    Two-phase elevation pattern (modeled on
+    src/lib/Wireguard.psm1 :: Invoke-RipperVpnTunnelElevatedInstall,
+    which is the proven recipe in this codebase):
 
-      1. Try to read $env:LOCALAPPDATA\MusicRipper\config.json so we can
-         pick up cfg.WireGuardTunnelName (needed for the per-tunnel
-         service uninstall) before the next step deletes it.
+      Phase 1 (parent shell, NOT elevated):
+        Read config.json, build the planned-actions list, prompt the
+        user to confirm. If they say yes, write a small temp .ps1
+        helper that re-invokes THIS script with -ImAlreadyAdmin
+        -Force plus all the original switches forwarded, then launch
+        the helper via Start-Process -Verb RunAs -Wait. The helper
+        ends with Read-Host 'Press Enter to close this window' in a
+        finally block, so the elevated console window can never
+        vanish silently regardless of what happens inside.
 
-      2. WireGuard tunnel (per-tunnel service installed via
-         wireguard.exe /installtunnelservice). REQUIRES ELEVATION --
-         skipped with a warning if not running as admin. Uses
-         Uninstall-RipperVpnTunnel from src/lib/Wireguard.psm1.
+      Phase 2 (elevated child, started by the helper):
+        Detects -ImAlreadyAdmin and skips the elevation block.
+        Runs the actual uninstall steps. Exits via `return` so the
+        helper's pause+exit can run.
 
-      3. Desktop shortcut "Rip a CD" (or whatever name was used at
+    Why this shape:
+      - The user's existing terminal handles the confirm prompt
+        (Read-Host across the UAC boundary is unreliable -- stdin
+        can be EOF immediately).
+      - The helper's Read-Host runs in a freshly-launched -File
+        pwsh that DOES have working stdin (matches the WG install
+        flow that's been in production since Phase 6.6.F).
+      - The script body uses `return` instead of `exit N` so the
+        elevated child never terminates pwsh prematurely; the
+        helper's finally{} is what controls when the window closes.
+
+    What gets removed (in order):
+
+      1. WireGuard tunnel service (per-tunnel service installed via
+         wireguard.exe /installtunnelservice). Reads
+         cfg.WireGuardTunnelName before step 5 nukes the config.
+
+      2. Desktop shortcut "Rip a CD" (or whatever name was used at
          install time, via -ShortcutName override).
 
-      4. Winget packages: gchudov.CUETools, Xiph.FLAC,
+      3. Winget packages: gchudov.CUETools, Xiph.FLAC,
          MusicBrainz.Picard, WireGuard.WireGuard. Skipped under
          -KeepDependencies. Microsoft.PowerShell is intentionally
          NEVER touched -- the user explicitly wants it to stay.
+         Picard's Inno Setup uninstaller gets --override
+         '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' because winget's
+         --silent doesn't translate to Inno's silent flags.
 
-      5. $env:LOCALAPPDATA\MusicRipper\ recursively. This covers BOTH
-         (a) the parent-mode install dir copied here by
-         Install-MusicRipper.ps1, AND (b) the user-data files
+      4. $env:LOCALAPPDATA\MusicRipper\ recursively. Covers the
+         parent-mode install dir AND the user-data files
          (config.json, credentials.clixml, logs\). Skipped under
          -KeepUserData.
 
@@ -40,9 +67,7 @@
         These are library data, not MusicRipper installation data.
         If you want them gone, delete the folder by hand.
       - The repo itself (when this script lives at, e.g.,
-        C:\bin\MusicRipper\). The script never deletes its own
-        parent directory -- that would yank the rug out from under
-        a still-running pwsh process.
+        C:\bin\MusicRipper\).
       - PowerShell 7 (winget package Microsoft.PowerShell).
 
     Idempotent: re-running on an already-clean machine is a quiet
@@ -53,64 +78,42 @@
     (matches Install-Shortcut.ps1's default).
 
 .PARAMETER KeepDependencies
-    Skip the winget uninstall step. Useful when CUETools / FLAC /
-    Picard are also used by other tools on the machine and you don't
-    want to nuke them.
+    Skip the winget uninstall step.
 
 .PARAMETER KeepUserData
-    Leave $env:LOCALAPPDATA\MusicRipper\ alone. Removes the shortcut,
-    WG tunnel, and dependencies, but preserves the parent's settings
-    so a re-install picks up where they left off.
+    Leave $env:LOCALAPPDATA\MusicRipper\ alone.
 
 .PARAMETER KeepShortcut
-    Leave the Desktop shortcut in place. Mostly useful in combination
-    with -KeepUserData for "downgrade to data-only" weirdness.
+    Leave the Desktop shortcut in place.
 
 .PARAMETER Force
-    Skip the "are you sure?" confirmation prompt. Required for
-    unattended runs.
+    Skip the "are you sure?" confirmation prompt.
+
+.PARAMETER ImAlreadyAdmin
+    INTERNAL: set by the temp helper that the parent shell launches
+    under UAC. Tells this script "skip the elevation handshake; I'm
+    the elevated child now." Not for human callers.
 
 .EXAMPLE
     PS> .\Uninstall-MusicRipper.ps1
-    Interactive run -- prompts once before the destructive steps,
-    then walks through every uninstall step.
+    Interactive run. Prompts in the parent shell, then UAC,
+    elevated console runs the uninstall and stays open at a
+    "Press Enter to close" prompt.
 
 .EXAMPLE
     PS> .\Uninstall-MusicRipper.ps1 -KeepDependencies -Force
-    Strip MusicRipper itself but leave CUETools / FLAC / Picard /
-    WireGuard installed. No prompt.
-
-.EXAMPLE
-    PS> .\Uninstall-MusicRipper.ps1 -WhatIf
-    Show every action that would be taken, touch nothing.
+    Skip the parent-shell prompt and skip the winget uninstall.
+    Still self-elevates for the WG tunnel + folder delete.
 
 .NOTES
     Library root is sacred. If you typed it into Settings, the
     uninstaller never touches it. Period.
 
-    The WireGuard tunnel uninstall is the only step that strictly
-    needs elevation; everything else works under a normal user
-    context (winget elevates itself per package as needed).
-
     Exit codes:
         0  every step completed (or was skipped cleanly)
         1  one or more steps failed (see message log)
+        2  UAC elevation declined / aborted by user
 #>
-
-# Require an elevated pwsh. Two reasons:
-#   1. WireGuard tunnel uninstall (`/uninstalltunnelservice`) needs admin
-#      -- it touches the Service Control Manager.
-#   2. Several winget packages (esp. WireGuard.WireGuard) ship MSI / Inno
-#      uninstallers that prompt for elevation per-package; pre-elevating
-#      means the user gets ONE UAC prompt at launch instead of
-#      one-per-package mid-run.
-#
-# Self-elevation: instead of #Requires -RunAsAdministrator (which just
-# bails with a stack-trace-y error), if we detect we're not admin we
-# Start-Process pwsh.exe -Verb RunAs and forward every parameter the
-# user supplied. UAC prompt fires once, the elevated child runs the
-# whole flow, the original (non-elevated) parent exits with the
-# child's exit code so $LASTEXITCODE is preserved for callers.
 
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
@@ -118,7 +121,10 @@ param(
     [switch] $KeepDependencies,
     [switch] $KeepUserData,
     [switch] $KeepShortcut,
-    [switch] $Force
+    [switch] $Force,
+
+    [Parameter(DontShow)]
+    [switch] $ImAlreadyAdmin
 )
 
 Set-StrictMode -Version 3.0
@@ -139,30 +145,20 @@ function Test-IsAdministrator {
 }
 
 
-# --- Self-elevate if not admin -------------------------------------------
-# Relaunch under UAC if the user ran us from a non-elevated pwsh. Two
-# subtle requirements drive the shape of this block:
-#
-#   (a) -NoExit on the elevated pwsh keeps its console open AT END OF
-#       SCRIPT, but does NOT override an explicit `exit N` mid-script.
-#       So the script body uses `return` everywhere instead of `exit N`
-#       (with a manual `$global:LASTEXITCODE = N` for cosmetic accuracy).
-#
-#   (b) Read-Host inside the elevated child is unreliable -- stdin
-#       handling across the UAC boundary can hand Read-Host an EOF
-#       immediately, so the confirmation prompt would auto-abort.
-#       Fix: do the confirmation prompt HERE (in the non-elevated
-#       parent, where Read-Host works fine), then auto-add -Force to
-#       the forwarded args so the elevated child skips its own prompt.
-if (-not (Test-IsAdministrator)) {
-    # ---- Show the plan + confirm in the parent shell --------------------
-    # Need the same data the elevated child would compute. Mirror just
-    # enough config-reading to build the planned-actions list.
-    $ripperDataRoot = Join-Path $env:LOCALAPPDATA 'MusicRipper'
-    $configPath     = Join-Path $ripperDataRoot 'config.json'
-    $desktopPath    = [Environment]::GetFolderPath('Desktop')
-    $shortcutPath   = Join-Path $desktopPath "$ShortcutName.lnk"
+# --- Common path layout (used by both phases) ----------------------------
+$repoRoot       = $PSScriptRoot
+$ripperDataRoot = Join-Path $env:LOCALAPPDATA 'MusicRipper'
+$configPath     = Join-Path $ripperDataRoot 'config.json'
+$desktopPath    = [Environment]::GetFolderPath('Desktop')
+$shortcutPath   = Join-Path $desktopPath "$ShortcutName.lnk"
 
+
+# =========================================================================
+# Phase 1: parent shell -- prompt + relaunch elevated via temp helper.
+# =========================================================================
+if (-not $ImAlreadyAdmin -and -not (Test-IsAdministrator)) {
+
+    # Read WG tunnel name now (config.json may be deleted by step 4).
     $wgTunnelName = $null
     if (Test-Path -LiteralPath $configPath -PathType Leaf) {
         try {
@@ -177,6 +173,8 @@ if (-not (Test-IsAdministrator)) {
     Write-Host '================================================================' -ForegroundColor DarkCyan
     Write-Host ' MusicRipper uninstaller' -ForegroundColor DarkCyan
     Write-Host '================================================================' -ForegroundColor DarkCyan
+    Write-Host "Data root      : $ripperDataRoot"
+    Write-Host "Desktop shortcut: $shortcutPath"
 
     $plan = @()
     if (-not $KeepDependencies) { $plan += 'uninstall CUETools, Xiph.FLAC, MusicBrainz.Picard, WireGuard.WireGuard via winget' }
@@ -194,7 +192,7 @@ if (-not (Test-IsAdministrator)) {
     Write-Host 'Planned actions:' -ForegroundColor Yellow
     foreach ($p in $plan) { Write-Host "  - $p" -ForegroundColor Yellow }
     Write-Host ''
-    Write-Host "Will NOT touch: your library root (cfg.LibraryRoot), <LibraryRoot>\.musicripper\, or PowerShell 7." -ForegroundColor Green
+    Write-Host 'Will NOT touch: your music library, <LibraryRoot>\.musicripper\, or PowerShell 7.' -ForegroundColor Green
 
     if (-not $Force -and -not $WhatIfPreference) {
         Write-Host ''
@@ -207,117 +205,163 @@ if (-not (Test-IsAdministrator)) {
     }
 
     Write-Host ''
-    Write-Host 'MusicRipper uninstaller needs admin -- relaunching elevated...' -ForegroundColor Yellow
+    Write-Host 'Relaunching elevated...' -ForegroundColor Yellow
     Write-Host '(A UAC prompt will appear. Approve it to continue.)' -ForegroundColor DarkGray
 
-    # ---- Build forwarded args -------------------------------------------
-    # $PSBoundParameters captures every explicitly-supplied parameter
-    # (defaults are NOT in the dict, so we don't accidentally re-pass them).
-    $forwarded = @()
+    # ---- Build the temp helper script ----------------------------------
+    # The helper re-invokes us with -ImAlreadyAdmin (skips elevation)
+    # plus -Force (parent already prompted) plus every switch the user
+    # originally passed. ALWAYS Read-Host on the way out in a finally
+    # block so the elevated console can't vanish silently.
+    #
+    # Single-quoted strings inside the helper for path literals so
+    # backslashes don't get re-parsed; backtick-escape `$ everywhere
+    # we DO want runtime interpolation in the elevated child.
+
+    # Reconstruct the user's switches (minus -ImAlreadyAdmin which we add).
+    $forwardedSwitches = @()
     foreach ($kv in $PSBoundParameters.GetEnumerator()) {
         $name = $kv.Key
+        if ($name -eq 'ImAlreadyAdmin') { continue }   # internal, never re-pass
         $val  = $kv.Value
         if ($val -is [System.Management.Automation.SwitchParameter]) {
-            if ($val.IsPresent) { $forwarded += "-$name" }
+            if ($val.IsPresent) { $forwardedSwitches += "-$name" }
         } elseif ($val -is [bool]) {
-            $forwarded += @("-$name", $(if ($val) { '$true' } else { '$false' }))
+            $forwardedSwitches += @("-$name", $(if ($val) { '$true' } else { '$false' }))
         } else {
-            # Wrap string values in single quotes (PowerShell parser
-            # keeps them literal) and double-up any embedded single
-            # quotes per PS quoting rules.
             $escaped = ([string]$val) -replace "'", "''"
-            $forwarded += @("-$name", "'$escaped'")
+            $forwardedSwitches += @("-$name", "'$escaped'")
         }
     }
     if ($WhatIfPreference -and -not $PSBoundParameters.ContainsKey('WhatIf')) {
-        $forwarded += '-WhatIf'
+        $forwardedSwitches += '-WhatIf'
     }
-    # Auto-add -Force to the elevated invocation: we already prompted in
-    # the parent shell, AND Read-Host in the elevated child can return
-    # EOF immediately and silently auto-abort.
+    # -Force in the elevated child so its prompt path is never reached
+    # (defensive even though -ImAlreadyAdmin already implies "skip prompt").
     if (-not $PSBoundParameters.ContainsKey('Force') -and -not $WhatIfPreference) {
-        $forwarded += '-Force'
+        $forwardedSwitches += '-Force'
     }
+    $forwardedJoined = ($forwardedSwitches -join ' ')
 
-    $scriptArg = "'$($PSCommandPath -replace "'", "''")'"
-    # -NoExit: keep the elevated console at a pwsh prompt after the
-    # script ends. The script body uses `return` (not `exit`) so this
-    # actually works -- exit N inside the script would terminate pwsh
-    # regardless of -NoExit.
-    $startArgs = @(
-        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit',
-        '-File', $scriptArg
-    ) + $forwarded
+    $scriptPathLiteral = $PSCommandPath -replace "'", "''"
+    $helperPath = Join-Path ([System.IO.Path]::GetTempPath()) `
+                  ("musicripper-uninstall-$([guid]::NewGuid().Guid.Substring(0,8)).ps1")
+
+    $helperBody = @"
+Set-StrictMode -Version 3.0
+`$ErrorActionPreference = 'Continue'   # let the script handle its own errors
+`$exitCode = 0
+try {
+    & '$scriptPathLiteral' -ImAlreadyAdmin $forwardedJoined
+    if (`$null -ne `$LASTEXITCODE) { `$exitCode = [int]`$LASTEXITCODE }
+} catch {
+    Write-Host ''
+    Write-Host '======================================================================' -ForegroundColor Red
+    Write-Host 'Uninstall threw an unhandled error:' -ForegroundColor Red
+    Write-Host `$_.Exception.Message -ForegroundColor Red
+    if (`$_.ScriptStackTrace) {
+        Write-Host ''
+        Write-Host 'Stack trace:' -ForegroundColor DarkRed
+        Write-Host `$_.ScriptStackTrace -ForegroundColor DarkRed
+    }
+    Write-Host '======================================================================' -ForegroundColor Red
+    `$exitCode = 99
+} finally {
+    Write-Host ''
+    Write-Host '----------------------------------------------------------------' -ForegroundColor DarkGray
+    Read-Host 'Press Enter to close this window'
+}
+exit `$exitCode
+"@
+
+    Set-Content -LiteralPath $helperPath -Value $helperBody -Encoding UTF8
 
     try {
         $pwshExe = (Get-Command pwsh -ErrorAction Stop).Source
-        # No -Wait / -PassThru: kick off the elevated child and return
-        # immediately. The user interacts with the new window; the
-        # original (non-elevated) shell's prompt comes right back so
-        # they can do other things while reading the elevated output.
-        Start-Process -FilePath $pwshExe `
-                      -ArgumentList $startArgs `
-                      -Verb RunAs `
-                      -ErrorAction Stop | Out-Null
-        Write-Host 'Elevated uninstaller launched. The new window will stay open after it finishes -- close it when you''re done reading.' -ForegroundColor Green
-        exit 0
+        $proc = Start-Process -FilePath $pwshExe `
+                              -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $helperPath) `
+                              -Verb RunAs `
+                              -Wait `
+                              -PassThru `
+                              -ErrorAction Stop
+        # Helper exited cleanly -- delete the temp file. (We KEEP it on
+        # failure for diagnosis: helper script + its echoed errors are
+        # the engineer's only forensic artifact for the elevated run.)
+        $rc = 0
+        if ($proc -and $proc.PSObject.Properties['ExitCode'] -and $null -ne $proc.ExitCode) {
+            $rc = [int]$proc.ExitCode
+        }
+        if ($rc -eq 0) {
+            Remove-Item -LiteralPath $helperPath -Force -ErrorAction SilentlyContinue
+        } else {
+            Write-Host ''
+            Write-Warn "Elevated uninstaller exited with code $rc."
+            Write-Warn "Helper script kept at: $helperPath"
+        }
+        exit $rc
     } catch [System.ComponentModel.Win32Exception] {
-        # Win32 error 1223 = "The operation was canceled by the user"
-        # (UAC prompt declined). Tell the user clearly what happened.
+        # Win32 1223 = UAC declined.
         if ($_.Exception.NativeErrorCode -eq 1223) {
             Write-Host ''
             Write-Host 'UAC elevation declined; uninstall aborted.' -ForegroundColor Red
+            Remove-Item -LiteralPath $helperPath -Force -ErrorAction SilentlyContinue
             exit 2
         }
         Write-Host ''
         Write-Host "Could not relaunch elevated: $($_.Exception.Message)" -ForegroundColor Red
-        Write-Host '  Open an elevated pwsh manually and re-run this script.' -ForegroundColor DarkGray
+        Write-Host "Helper script kept at: $helperPath" -ForegroundColor DarkGray
         exit 3
     } catch {
         Write-Host ''
         Write-Host "Could not relaunch elevated: $($_.Exception.Message)" -ForegroundColor Red
-        Write-Host '  Open an elevated pwsh manually and re-run this script.' -ForegroundColor DarkGray
+        Write-Host "Helper script kept at: $helperPath" -ForegroundColor DarkGray
         exit 3
     }
 }
 
 
-# --- 0. Resolve repo root + lay out paths --------------------------------
-$repoRoot       = $PSScriptRoot
-$ripperDataRoot = Join-Path $env:LOCALAPPDATA 'MusicRipper'
-$configPath     = Join-Path $ripperDataRoot 'config.json'
-$desktopPath    = [Environment]::GetFolderPath('Desktop')
-$shortcutPath   = Join-Path $desktopPath "$ShortcutName.lnk"
+# =========================================================================
+# Phase 2: elevated child -- the actual uninstall work.
+# Reached when:
+#   (a) -ImAlreadyAdmin was passed (normal path: temp helper called us), OR
+#   (b) the user already had an elevated pwsh and ran us directly.
+# In both cases Test-IsAdministrator is true. Use `return` instead of
+# `exit N` so the temp helper's finally{} block can run -- pwsh exits
+# the running script via return + the helper's `exit $exitCode` does
+# the actual process exit AFTER the Read-Host pause.
+# =========================================================================
 
-Write-Host ''
-Write-Host '================================================================' -ForegroundColor DarkCyan
-Write-Host ' MusicRipper uninstaller' -ForegroundColor DarkCyan
-Write-Host '================================================================' -ForegroundColor DarkCyan
-Write-Host "Data root      : $ripperDataRoot"
-Write-Host "Desktop shortcut: $shortcutPath"
-Write-Host "Repo (this dir): $repoRoot"
-
-# --- 1. Read config for WireGuardTunnelName before we delete it ---------
-$wgTunnelName = $null
-if (Test-Path -LiteralPath $configPath -PathType Leaf) {
-    try {
-        $cfg = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-        if ($cfg.PSObject.Properties['WireGuardTunnelName'] -and $cfg.WireGuardTunnelName) {
-            $wgTunnelName = [string]$cfg.WireGuardTunnelName
-            Write-Host "WG tunnel       : $wgTunnelName  (from config.json)"
+# Refresh the WG tunnel name in case Phase 1 didn't run (i.e. user
+# already had elevated pwsh).
+if (-not (Get-Variable -Name wgTunnelName -Scope Local -ErrorAction SilentlyContinue)) {
+    $wgTunnelName = $null
+    if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+        try {
+            $cfg = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+            if ($cfg.PSObject.Properties['WireGuardTunnelName'] -and $cfg.WireGuardTunnelName) {
+                $wgTunnelName = [string]$cfg.WireGuardTunnelName
+            }
+        } catch {
+            Write-Warn "Couldn't parse config.json (non-fatal): $($_.Exception.Message)"
         }
-    } catch {
-        Write-Warn "Couldn't parse config.json (non-fatal): $($_.Exception.Message)"
     }
 }
 
-# --- 2. Confirm with the user --------------------------------------------
-$plan = @()
-if (-not $KeepDependencies)                    { $plan += 'uninstall CUETools, Xiph.FLAC, MusicBrainz.Picard, WireGuard.WireGuard via winget' }
-if ($wgTunnelName)                             { $plan += "uninstall WireGuard tunnel service '$wgTunnelName'" }
-if (-not $KeepShortcut)                        { $plan += "remove Desktop shortcut '$ShortcutName.lnk'" }
-if (-not $KeepUserData)                        { $plan += "delete $ripperDataRoot (config + credentials + logs)" }
+Write-Host ''
+Write-Host '================================================================' -ForegroundColor DarkCyan
+Write-Host ' MusicRipper uninstaller (elevated)' -ForegroundColor DarkCyan
+Write-Host '================================================================' -ForegroundColor DarkCyan
+Write-Host "Data root      : $ripperDataRoot"
+Write-Host "Desktop shortcut: $shortcutPath"
+if ($wgTunnelName) { Write-Host "WG tunnel       : $wgTunnelName  (from config.json)" }
 
+# Build the plan list (used for the no-op short-circuit in the rare
+# case that all the -Keep* switches are set + -Force).
+$plan = @()
+if (-not $KeepDependencies) { $plan += 'winget' }
+if ($wgTunnelName)          { $plan += 'wg-tunnel' }
+if (-not $KeepShortcut)     { $plan += 'shortcut' }
+if (-not $KeepUserData)     { $plan += 'user-data' }
 if ($plan.Count -eq 0) {
     Write-Host ''
     Write-Warn 'Every step disabled by switches; nothing to do.'
@@ -325,13 +369,12 @@ if ($plan.Count -eq 0) {
     return
 }
 
-Write-Host ''
-Write-Host 'Planned actions:' -ForegroundColor Yellow
-foreach ($p in $plan) { Write-Host "  - $p" -ForegroundColor Yellow }
-Write-Host ''
-Write-Host "Will NOT touch: your library root (cfg.LibraryRoot), <LibraryRoot>\.musicripper\, or PowerShell 7." -ForegroundColor Green
-
-if (-not $Force -and -not $WhatIfPreference) {
+# Confirmation should already have happened in Phase 1, but if a user
+# ran us directly from an elevated shell without -Force, prompt now.
+if (-not $Force -and -not $WhatIfPreference -and -not $ImAlreadyAdmin) {
+    Write-Host ''
+    Write-Host 'Will NOT touch: your music library, <LibraryRoot>\.musicripper\, or PowerShell 7.' -ForegroundColor Green
+    Write-Host ''
     $answer = Read-Host 'Proceed? Type "yes" to continue, anything else to abort'
     if ($answer -ne 'yes') {
         Write-Host ''
@@ -344,7 +387,7 @@ if (-not $Force -and -not $WhatIfPreference) {
 $failures = 0
 
 
-# --- 3. WireGuard tunnel service ----------------------------------------
+# --- Step 1: WireGuard tunnel service -----------------------------------
 if ($wgTunnelName) {
     if ($PSCmdlet.ShouldProcess("WireGuard tunnel service '$wgTunnelName'", 'Uninstall')) {
         Write-Step "Uninstalling WireGuard tunnel service '$wgTunnelName'"
@@ -368,15 +411,15 @@ if ($wgTunnelName) {
 }
 
 
-# --- 4. Desktop shortcut --------------------------------------------------
+# --- Step 2: Desktop shortcut -------------------------------------------
 if ($KeepShortcut) {
-    Write-Step "Desktop shortcut"
+    Write-Step 'Desktop shortcut'
     Write-Skip '-KeepShortcut set; leaving in place.'
 } elseif (-not (Test-Path -LiteralPath $shortcutPath -PathType Leaf)) {
-    Write-Step "Desktop shortcut"
+    Write-Step 'Desktop shortcut'
     Write-Skip "Not found: $shortcutPath  (already gone, or never installed)."
 } elseif ($PSCmdlet.ShouldProcess($shortcutPath, 'Remove desktop shortcut')) {
-    Write-Step "Removing desktop shortcut"
+    Write-Step 'Removing desktop shortcut'
     try {
         Remove-Item -LiteralPath $shortcutPath -Force
         Write-Ok "Removed: $shortcutPath"
@@ -387,7 +430,7 @@ if ($KeepShortcut) {
 }
 
 
-# --- 5. Winget packages ---------------------------------------------------
+# --- Step 3: Winget packages --------------------------------------------
 if ($KeepDependencies) {
     Write-Step 'Dependency packages (winget)'
     Write-Skip '-KeepDependencies set; not touching winget packages.'
@@ -402,7 +445,6 @@ if ($KeepDependencies) {
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
         Write-Step 'Dependency packages (winget)'
         Write-Warn "winget not found; can't uninstall: $($packages -join ', ')."
-        Write-Warn 'Remove these by hand from Settings -> Apps -> Installed apps if you want them gone.'
         $failures++
     } else {
         foreach ($id in $packages) {
@@ -412,20 +454,17 @@ if ($KeepDependencies) {
             try {
                 # winget uninstall exit codes:
                 #   0           : uninstalled
-                #   -1978335212 : 0x8A150014 NO_APPLICABLE_INSTALLER (i.e. not installed)
+                #   -1978335212 : 0x8A150014 NO_APPLICABLE_INSTALLER (not installed)
                 #   -1978335189 : 0x8A150049 already in target state
                 # All three are "success for our purposes."
-                #
-                # Per-package overrides for installers that ignore winget's
-                # --silent and pop a window anyway:
-                #   - MusicBrainz.Picard ships an Inno Setup installer; its
-                #     silent flag is /VERYSILENT /SUPPRESSMSGBOXES /NORESTART.
-                #     Without --override the uninstall wizard pops a GUI even
-                #     under --silent --disable-interactivity. (Observed 1 May 2026.)
                 $wingetArgs = @(
                     'uninstall', '--exact', '--id', $id,
                     '--accept-source-agreements', '--silent', '--disable-interactivity'
                 )
+                # MusicBrainz.Picard ships an Inno Setup uninstaller; its
+                # silent flag is /VERYSILENT /SUPPRESSMSGBOXES /NORESTART.
+                # Without --override the uninstall wizard pops a GUI even
+                # under --silent --disable-interactivity.
                 if ($id -eq 'MusicBrainz.Picard') {
                     $wingetArgs += @('--override', '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART')
                 }
@@ -449,31 +488,22 @@ if ($KeepDependencies) {
 }
 
 
-# --- 6. User data + parent-mode install dir ------------------------------
-# %LOCALAPPDATA%\MusicRipper\ houses both:
-#   (a) the parent-mode install copy (Install-MusicRipper.ps1's default
-#       target -- src\, setup\, assets\, etc.), AND
-#   (b) the user-data files (config.json, credentials.clixml, logs\).
-# Both get nuked together. Engineer/in-place users still keep their
-# repo (e.g. C:\bin\MusicRipper\) -- we never delete the script's own
-# parent.
+# --- Step 4: User data + parent-mode install dir ------------------------
 if ($KeepUserData) {
     Write-Step "User data + install dir ($ripperDataRoot)"
     Write-Skip '-KeepUserData set; leaving in place.'
 } elseif (-not (Test-Path -LiteralPath $ripperDataRoot)) {
-    Write-Step "User data + install dir"
+    Write-Step 'User data + install dir'
     Write-Skip "Not found: $ripperDataRoot  (already gone)."
 } else {
-    # Safety: NEVER delete the directory the running script lives in.
-    # Compare normalized paths.
+    # Self-protection: NEVER delete the directory the running script
+    # lives in. That'd yank the rug out from under our own pwsh.
     $repoFull = (Resolve-Path -LiteralPath $repoRoot).ProviderPath.TrimEnd('\').ToLowerInvariant()
     $dataFull = (Resolve-Path -LiteralPath $ripperDataRoot).ProviderPath.TrimEnd('\').ToLowerInvariant()
-    $isRunningFromTarget = $repoFull -eq $dataFull -or $repoFull.StartsWith("$dataFull\")
-    if ($isRunningFromTarget) {
+    if ($repoFull -eq $dataFull -or $repoFull.StartsWith("$dataFull\")) {
         Write-Step "User data + install dir ($ripperDataRoot)"
-        Write-Warn "This script is running FROM '$repoRoot', which lives under the install dir."
-        Write-Warn '  Copy Uninstall-MusicRipper.ps1 to a different folder (e.g. your Desktop) and re-run from there.'
-        Write-Warn '  Skipping deletion to avoid yanking the rug out from under the running pwsh process.'
+        Write-Warn "This script is running from '$repoRoot', under the install dir."
+        Write-Warn '  Copy Uninstall-MusicRipper.ps1 elsewhere (e.g. your Desktop) and re-run from there.'
         $failures++
     } elseif ($PSCmdlet.ShouldProcess($ripperDataRoot, 'Recursively delete')) {
         Write-Step "Deleting $ripperDataRoot"
@@ -482,15 +512,14 @@ if ($KeepUserData) {
             Write-Ok "Removed: $ripperDataRoot"
         } catch {
             Write-Fail "Delete failed: $($_.Exception.Message)"
-            Write-Warn "  Some files may be locked (open log file, running pwsh in that tree, etc.)."
-            Write-Warn "  Close any open handles to '$ripperDataRoot' and re-run."
+            Write-Warn "  Some files may be locked (open log file, running pwsh in that tree)."
             $failures++
         }
     }
 }
 
 
-# --- 7. Final summary ----------------------------------------------------
+# --- Final summary -------------------------------------------------------
 Write-Host ''
 Write-Host '================================================================' -ForegroundColor DarkCyan
 if ($failures -eq 0) {
@@ -505,9 +534,9 @@ Write-Host '  - Your music library (cfg.LibraryRoot).'
 Write-Host '  - <LibraryRoot>\.musicripper\discids.json + sync-state.json.'
 Write-Host '  - PowerShell 7.'
 Write-Host ''
-Write-Host '----------------------------------------------------------------' -ForegroundColor DarkGray
-Write-Host ' You can close this window when you''re done reading.' -ForegroundColor DarkGray
-Write-Host '----------------------------------------------------------------' -ForegroundColor DarkGray
-Write-Host ''
 
+# return (NOT exit) so the temp helper's finally{} -> Read-Host -> exit
+# sequence can run. When run directly from an already-elevated shell,
+# returning to an interactive prompt is also the right behaviour.
 if ($failures -gt 0) { $global:LASTEXITCODE = 1 } else { $global:LASTEXITCODE = 0 }
+return
