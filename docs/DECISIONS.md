@@ -1725,3 +1725,152 @@ Originally agreed to add a small WPF info dialog when the tunnel can't come up m
 - `tests/Wireguard.Tests.ps1` -- +6 tests for refcount + keep-alive (mocked at the `Test/Start/Stop-RipperVpnTunnel` wrapper layer, not `Get-Service`, since those primitives are unit-tested elsewhere in the same file).
 
 **Pester:** 440/0/1 green (was 434/0/1; +6 new tests).
+## D-027 -- Phase 7 polish + packaging (Phase 7)
+
+**Status:** Accepted.
+
+**Context.** Phase 7 closes out the parent-handoff backlog from plan.md: a one-shot installer (Install-MusicRipper.ps1), a top-level error handler that doesn't dump PowerShell stack traces in front of a parent, a tool to promote re-tagged albums out of _ReviewQueue/, and a polish pass on the between-discs loop. None of this changes the rip pipeline; it changes what the parent sees when something is the user-visible surface.
+
+**Decisions.**
+
+1. Top-level error handler is a script-scope 	rap in Start-Ripper.ps1, NOT a giant try/catch around the script body. The body is ~1000 lines spanning helpers, the resync block, the disc loop, and exit-time WG cleanup; a trap is a single-statement script-scope handler that fires on any uncaught script-terminating error, which is exactly the layer we want. The handler shows Show-RipperFatalErrorDialog (Copy-log-path button + Open-log-folder), logs full detail (exception type + message + ScriptStackTrace + CLR StackTrace), and exits 1 so callers can detect.
+
+2. Move-FromReviewQueue.ps1 reads tags from track-1 of the source folder via metaflac --show-tag (same Get-MetaflacPath helper Write-Tags + Update-AlbumTags use), reuses Get-RipperLibraryTargetDir from Move-ToLibrary so the target layout is bit-identical, and best-effort seeds discids.json (Phase 5.8 cross-session duplicate-disc detection). Pure-logic helpers are exported for Pester (Resolve-RipperReviewSourceMetadata, Get-RipperReviewPromotionPlan, Read-RipperReviewTxtDiscId). 19 tests, mocked metaflac at the Read-RipperFlacTagValue layer + tempdir-based end-to-end walk.
+
+3. Install-MusicRipper.ps1 has two modes: default (copy repo into %LOCALAPPDATA%\MusicRipper via robocopy then chain setup\Install-Dependencies + setup\Install-Shortcut) and -InPlace (skip the copy for engineers who cloned). robocopy was the right tool: handles long paths, idempotent, easy /XD /XF excludes (.git, .vs, .vscode, pester scratch, testResults.xml). Hands off to the Phase 6.6 WPF first-run flow on first shortcut launch -- no headless config wizard from the installer; that's now redundant with the WPF editor.
+
+4. The 'rip another disc' loop polish was copy-only (Show-BetweenDiscsDialog): friendlier title (singular/plural CD count), friendlier headline ('Ready for the next CD!'), watch text rephrased as instruction not narration ('Pop the next CD into D: -- the rip will start automatically.'), Quit relabelled 'I'm done -- Quit'. Added a one-line tip about stack ripping. No behavioural changes -- the auto-detect DispatcherTimer + button wiring are unchanged from Phase 5.7.
+
+**Files.**
+- Install-MusicRipper.ps1 (new, repo root, 265 lines).
+- src/tools/Move-FromReviewQueue.ps1 (new, 482 lines).
+- 	ests/Move-FromReviewQueue.Tests.ps1 (new, 19 tests).
+- src/ui/Show-FatalErrorDialog.ps1 (new, 220 lines, WPF + Copy-log-path + Open-log-folder).
+- src/Start-Ripper.ps1 -- script-scope 	rap calling the dialog, dot-source the new dialog.
+- src/ui/Show-BetweenDiscsDialog.ps1 -- copy polish only.
+- docs/PARENTS-QUICKSTART.md -- full rewrite, 5-step parent walkthrough with [screenshot: ...] placeholders.
+- docs/REVIEW-WORKFLOW.md -- documents Move-FromReviewQueue.ps1 above the manual hand-move recipe.
+
+**Rejected alternatives.**
+- *Big try/catch around Start-Ripper body*: 1000-line indent rewrite for no functional difference vs `trap`.
+- *Silent error handler that just exits*: violates the plan's 'friendly dialog with Copy log path button' promise; parents need to be told something happened.
+- *Drop -InPlace*: makes engineer dev loops painful (would have to run the copy on every test).
+- *Do the screenshot capture in code*: requires a fresh PC; the [screenshot: ...] markers + suggested filenames let the engineer fill these in incrementally without blocking the rest of Phase 7 from merging.
+
+---
+
+## D-028 -- Visual identity assets: app logo and README hero (Phase 7 polish)
+
+**Status:** Accepted.
+
+**Context.** After Phase 7 packaging/polish, the project needed a real visual identity: an app icon for shortcuts/WPF chrome and a README hero suitable for the eventual GitHub repository. The concepts live in `assets/logo-concepts/` so they can be referenced later without mixing generated design work into docs prose.
+
+**Canonical app mark.** `assets/logo-concepts/prompt-d-audiophile-disc-badge/prompt-d-variant-01.svg` is the source of truth for the MusicRipper mark. It is a flat-vector audiophile disc: charcoal puck, subtle radial highlight, three dark groove rings, cream center label with tan rings, crimson center dot, full cyan/violet/amber edge treatment, and a soft shadow. Later concepts embed this mark's primitives directly and only transform/place them; they do not redraw the disc.
+
+**Current README hero favorite.** `assets/logo-concepts/readme-hero-logo-concepts/readme-hero-concept-14.svg` is the preferred README hero candidate. It combines concept 12's centered spacing and horizontal tan rules with concept 11's wording: `Secure CD ripping for a bit-perfect FLAC library`. Among the final 13-16 iteration set, concept 14 gives the logo the strongest presence while keeping the text clear of the disc.
+
+**Iteration trail.**
+
+- Prompts A-C explored generic icon directions and were superseded.
+- Prompt D established the final disc mark; variant 01 became canonical.
+- Prompts E-J2 explored wordmarks, horizontal lockups, stacked README heroes, disc-as-tittle treatments, and narrative banners. Useful reference, not selected.
+- README hero concepts 01-16 explored GitHub-ready mastheads using the canonical disc mark.
+- Concepts 08, 11, and 12 were the convergence point: centered masthead, tan horizontal rules, restrained geometric sans wordmark.
+- Concepts 13-16 combined concept 12's spacing/rules with concept 11's tagline; concept 14 is the current favorite.
+
+**Exported app assets.** The shipped app icon assets live under `assets/` (`musicripper.svg`, `musicripper.png`, `musicripper.ico`, per-size `musicripper-{N}.png`, and `musicripper-hero.*`). `setup/Build-Icon.ps1` generates the per-size PNGs and `.ico` from the source mark.
+
+**Future rule.** New design explorations should land under `assets/logo-concepts/`. Promote only selected production assets to top-level `assets/`.
+
+
+## D-027 follow-on -- Phase 7 manual-verification fixes (Phase 7)
+
+**Status:** Accepted (most of the 33 commits on phase-7-polish are
+these follow-ons; this entry is the consolidated rationale).
+
+**Context.** End-to-end manual verification of the Phase 7 install +
+uninstall flow surfaced a long string of small bugs and parent-UX
+gaps that didn't make the original D-027 plan. Captured here so the
+follow-on rationale isn't buried in commit messages.
+
+**Cross-runspace logging.** Show-RipProgress and Show-PendingSyncProgress
+run their work in [runspacefactory] worker runspaces; PowerShell
+module state (incl. Logging's $script:LogPath) is per-runspace.
+Worse, every Import-Module Logging.psd1 -Force re-runs the .psm1
+and resets $script:LogPath = $null. Symptom: a real review-queue
+rip produced an album folder with no ripper-session.log AND a per-
+disc log that contained zero entries between 'Starting rip:' and
+'Rip finished:'. Fix: new Set-RipperLogPath adopt helper +
+parent passes Get-RipperLogPath through SessionStateProxy.SetVariable
++ worker re-adopts after dot-source chain. Same fix in pending-sync
+worker. Memory note added: "Module $script: state is per-runspace
+AND Import-Module -Force resets it."
+
+**Move-FromReviewQueue sync wiring.** Promoting an album from
+_ReviewQueue/ updated discids.json but never called the sync chain,
+so promoted albums skipped OneDrive/NAS. Fix: after the move +
+index seed, mirror what Invoke-RipperPostProcess does for normal
+Library-routed rips (Invoke-RipperSync against cfg.SyncTargets, then
+Invoke-RipperLibraryRetention). New -SkipSync switch for power
+users who want discids.json-only behaviour.
+
+**Uninstaller (Uninstall-MusicRipper.ps1).** Added per user request,
+modelled on Wireguard.psm1's Invoke-RipperVpnTunnelElevatedInstall
+(the working temp-helper elevation pattern in this codebase). Long
+list of bugs found and fixed during verification:
+  - Self-elevation via #Requires -RunAsAdministrator just bails;
+    don't use it. Self-elevation via Start-Process -Verb RunAs of
+    the same script with -NoExit doesn't work because explicit
+    `exit N` mid-script terminates pwsh regardless of -NoExit.
+  - Read-Host inside the elevated child returns EOF immediately
+    (stdin not wired across UAC). Move confirmation to parent shell
+    where Read-Host works; auto-pass -Force to the child.
+  - Final shape: parent shell prompts, writes a temp .ps1 helper
+    that calls back into THIS script with -ImAlreadyAdmin, launches
+    via Start-Process -Verb RunAs -Wait. Helper's finally block does
+    the Read-Host pause. Helper kept on failure for diagnosis.
+  - Picard's Inno-Setup-style /VERYSILENT was the WRONG silent flag;
+    Picard ships an NSIS installer (silent flag is /S). Fix: try
+    QuietUninstallString first, then NSIS /S, then Inno
+    /VERYSILENT /SUPPRESSMSGBOXES /NORESTART, then MSI /quiet
+    /norestart. Verify success by polling InstallLocation
+    disappearance, NOT by trusting the exit code (NSIS / Inno / MSI
+    all self-elevate via UAC and return immediately with rc=1 while
+    the real uninstall completes asynchronously in a forked child).
+  - UninstallString parser was naive (took everything up to the
+    first space). Picard's value 'C:\Program Files\MusicBrainz
+    Picard\uninst.exe' parsed to 'C:\Program', $installDir became
+    'C:\' (always exists), 'still present' check trivially passed.
+    Fix: walk left-to-right looking for the first .exe substring
+    whose path actually exists on disk. Plus use the registry's
+    InstallLocation when present (much more reliable).
+  - $scopesToTry = if (Picard) { @('user','machine',$null) } else
+    { @($null) } collapsed to empty array under StrictMode 3.0
+    (the powershell.md gotcha that bit Phase 6.1 too). Three
+    packages got bogusly counted as failures every run. Fix:
+    $scopesToTry = @(if ... { 'user','machine',$null } else
+    { $null }).
+  - Install-Dependencies.ps1 was leaking a non-zero $LASTEXITCODE
+    from the last winget call (-1978335189 = ALREADY_INSTALLED) up
+    to Install-MusicRipper.ps1's chain runner, which aborted the
+    install. Fix: explicit $global:LASTEXITCODE = 0 at the end of
+    the dependencies script + Invoke-SetupStep treats -1978335189
+    as success too.
+
+**Three shortcut surfaces.** Per parent-UX request: Desktop
+'Rip a CD.lnk', repo-root 'Uninstall MusicRipper.lnk' (gitignored,
+regenerated per-install since .lnks bake absolute paths), and Start
+Menu 'MusicRipper - Rip a CD.lnk' / 'MusicRipper - Uninstall.lnk'
+flat under Programs\ (Win11 doesn't render Start Menu subfolders).
+Uninstaller cleans up all three.
+
+**Hero banner.** assets/musicripper-hero.png referenced from README
+H1. Logo session contributed 3 commits (icon assets + WPF icon
+wiring); concept-exploration archive lives in assets/logo-concepts/.
+
+**Quickstart screenshots.** 12 PNGs in docs/images/ wired into
+PARENTS-QUICKSTART.md. Captured during a real fresh-install walk-
+through.
+
+**Pester:** 522/0/1 unchanged through all the follow-on fixes
+(everything live-tested on real hardware; no test regressions).

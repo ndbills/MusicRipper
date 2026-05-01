@@ -137,6 +137,7 @@ function Show-RipperRegisterDriveDialog {
     $window = [Windows.Markup.XamlReader]::Load($reader)
 
     if ($Owner) { try { $window.Owner = $Owner } catch {} }
+    Set-RipperWindowIcon $window
 
     # Dispatcher unhandled-exception sink.
     $sidecar = Join-Path $env:LOCALAPPDATA 'MusicRipper\logs\register-drive-dialog-dispatcher.log'

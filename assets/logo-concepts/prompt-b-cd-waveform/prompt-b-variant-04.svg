@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Prompt B CD-to-waveform icon variant 04</title>
+  <desc id="desc">A small-size optimized compact disc and waveform app icon mark; no text.</desc>
+  <metadata><![CDATA[{"prompt":"B","variant":"04","format":"icon","width":1024,"height":1024,"cornerRadiusPercent":18,"transparentOutsideRoundedSquare":true,"text":"none","palette":{"midnightBlue":"#081B2E","midnightBlue2":"#0E2842","discMist":"#F0F8FA","discGroove":"#9FB9C7","cyanAccent":"#5ED9F4"}}]]></metadata>
+  <defs>
+    <linearGradient id="bg" x1="116" y1="96" x2="908" y2="928" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0E2842"/>
+      <stop offset="1" stop-color="#081B2E"/>
+    </linearGradient>
+    <filter id="matteShadow" x="-12%" y="-12%" width="124%" height="130%" color-interpolation-filters="sRGB">
+      <feOffset in="SourceAlpha" dx="0" dy="22" result="offset"/>
+      <feGaussianBlur in="offset" stdDeviation="18" result="blur"/>
+      <feFlood flood-color="#020812" flood-opacity="0.28" result="color"/>
+      <feComposite in="color" in2="blur" operator="in" result="shadow"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect x="0" y="0" width="1024" height="1024" rx="184" fill="url(#bg)"/>
+  <g filter="url(#matteShadow)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="374" cy="512" r="226" fill="#F0F8FA" stroke="#F0F8FA" stroke-width="18"/>
+    <circle cx="374" cy="512" r="154" stroke="#9FB9C7" stroke-width="28" opacity="0.52"/>
+    <circle cx="374" cy="512" r="68" fill="#081B2E" stroke="#081B2E" stroke-width="16"/>
+    <circle cx="374" cy="512" r="38" fill="#5ED9F4" stroke="#5ED9F4" stroke-width="10"/>
+    <path d="M524 512 H600 C632 512 638 442 670 442 C704 442 708 582 740 582 C774 582 780 438 812 438 C844 438 850 512 886 512 H910" stroke="#5ED9F4" stroke-width="60"/>
+    <path d="M524 512 H600 C632 512 638 442 670 442 C704 442 708 582 740 582 C774 582 780 438 812 438 C844 438 850 512 886 512 H910" stroke="#F0F8FA" stroke-width="22" opacity="0.94"/>
+  </g>
+</svg>

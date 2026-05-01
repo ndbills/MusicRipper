@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Prompt D audiophile disc badge variant 04</title>
+  <desc id="desc">A small-favicon optimized circular compact disc badge with cream label rings, red dot, and a short rainbow edge accent; no text.</desc>
+  <metadata><![CDATA[{"prompt":"D","variant":"04","format":"icon","width":1024,"height":1024,"transparentBackground":true,"text":"none","faviconShape":"circular","palette":{"charcoal":"#1F2326","charcoal2":"#101315","cream":"#F5E8CC","creamLine":"#CBBCA0","deepRed":"#8E1F26","cyan":"#66D9E8","violet":"#8F6AE8","amber":"#E9B44C"}}]]></metadata>
+  <defs>
+    <radialGradient id="disc" cx="44%" cy="34%" r="68%">
+      <stop offset="0" stop-color="#353A3E"/>
+      <stop offset="0.58" stop-color="#1F2326"/>
+      <stop offset="1" stop-color="#101315"/>
+    </radialGradient>
+    <linearGradient id="rainbow" x1="716" y1="204" x2="848" y2="662" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#66D9E8"/>
+      <stop offset="0.50" stop-color="#8F6AE8"/>
+      <stop offset="1" stop-color="#E9B44C"/>
+    </linearGradient>
+    <filter id="softShadow" x="-14%" y="-14%" width="128%" height="132%" color-interpolation-filters="sRGB">
+      <feOffset in="SourceAlpha" dx="0" dy="26" result="offset"/>
+      <feGaussianBlur in="offset" stdDeviation="24" result="blur"/>
+      <feFlood flood-color="#050607" flood-opacity="0.26" result="color"/>
+      <feComposite in="color" in2="blur" operator="in" result="shadow"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <g filter="url(#softShadow)">
+    <circle cx="512" cy="512" r="378" fill="url(#disc)"/>
+    <path d="M736 208 A378 378 0 0 1 860 616" fill="none" stroke="url(#rainbow)" stroke-width="48" stroke-linecap="round" opacity="0.94"/>
+    <circle cx="512" cy="512" r="292" fill="none" stroke="#4B5054" stroke-width="12" opacity="0.34"/>
+    <circle cx="512" cy="512" r="226" fill="none" stroke="#090B0C" stroke-width="14" opacity="0.36"/>
+    <circle cx="512" cy="512" r="166" fill="#F5E8CC"/>
+    <circle cx="512" cy="512" r="120" fill="none" stroke="#CBBCA0" stroke-width="8" opacity="0.88"/>
+    <circle cx="512" cy="512" r="84" fill="none" stroke="#CBBCA0" stroke-width="7" opacity="0.82"/>
+    <circle cx="512" cy="512" r="52" fill="none" stroke="#CBBCA0" stroke-width="6" opacity="0.78"/>
+    <circle cx="512" cy="512" r="26" fill="#8E1F26"/>
+  </g>
+</svg>

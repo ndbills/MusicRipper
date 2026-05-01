@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Prompt B CD-to-waveform icon variant 02</title>
+  <desc id="desc">A compact disc with concentric grooves flowing into a compact cyan audio waveform; no text.</desc>
+  <metadata><![CDATA[{"prompt":"B","variant":"02","format":"icon","width":1024,"height":1024,"cornerRadiusPercent":18,"transparentOutsideRoundedSquare":true,"text":"none","palette":{"midnightBlue":"#081B2E","midnightBlue2":"#102940","discMist":"#EDF7FA","discGroove":"#A6BECA","cyanAccent":"#5ED9F4"}}]]></metadata>
+  <defs>
+    <linearGradient id="bg" x1="118" y1="102" x2="900" y2="920" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#102940"/>
+      <stop offset="1" stop-color="#081B2E"/>
+    </linearGradient>
+    <filter id="matteShadow" x="-12%" y="-12%" width="124%" height="130%" color-interpolation-filters="sRGB">
+      <feOffset in="SourceAlpha" dx="0" dy="22" result="offset"/>
+      <feGaussianBlur in="offset" stdDeviation="18" result="blur"/>
+      <feFlood flood-color="#020812" flood-opacity="0.28" result="color"/>
+      <feComposite in="color" in2="blur" operator="in" result="shadow"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect x="0" y="0" width="1024" height="1024" rx="184" fill="url(#bg)"/>
+  <g filter="url(#matteShadow)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <g transform="translate(382 512) rotate(-9) scale(1 0.92) translate(-382 -512)">
+      <circle cx="382" cy="512" r="248" fill="#EDF7FA" stroke="#EDF7FA" stroke-width="16"/>
+      <path d="M238 368 A204 204 0 1 1 514 662" stroke="#A6BECA" stroke-width="23" opacity="0.55"/>
+      <path d="M282 412 A142 142 0 1 1 488 616" stroke="#A6BECA" stroke-width="18" opacity="0.42"/>
+      <circle cx="382" cy="512" r="64" fill="#081B2E" stroke="#081B2E" stroke-width="14"/>
+      <circle cx="382" cy="512" r="34" fill="#5ED9F4" stroke="#5ED9F4" stroke-width="10"/>
+    </g>
+    <path d="M548 512 C585 512 590 452 618 452 C648 452 655 576 684 576 C712 576 722 398 752 398 C784 398 793 626 824 626 C854 626 862 494 894 494" stroke="#5ED9F4" stroke-width="50"/>
+    <path d="M548 512 C585 512 590 452 618 452 C648 452 655 576 684 576 C712 576 722 398 752 398 C784 398 793 626 824 626 C854 626 862 494 894 494" stroke="#EDF7FA" stroke-width="18" opacity="0.92"/>
+  </g>
+</svg>

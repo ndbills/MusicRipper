@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="600" viewBox="0 0 2400 600" role="img" aria-labelledby="title desc">
+  <title id="title">MusicRipper README wordmark variant 02</title>
+  <desc id="desc">Horizontal MusicRipper logo lockup with a compact icon and spacious modern wordmark.</desc>
+  <metadata><![CDATA[{"prompt":"E","variant":"02","format":"wordmark","width":2400,"height":600,"transparentBackground":true,"text":"MusicRipper","fontStack":"Segoe UI, Inter, Manrope, Arial, sans-serif","palette":{"darkSlate":"#243340","deepTeal":"#1F6F7A","slate":"#40515F","cream":"#F7EFE0","warmAmber":"#F2B441","folder":"#D9A43C","folderShadow":"#A9772D"}}]]></metadata>
+  <defs>
+    <radialGradient id="discGradient" cx="44%" cy="31%" r="72%">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.55" stop-color="#EAF2F4"/>
+      <stop offset="1" stop-color="#B9CED5"/>
+    </radialGradient>
+    <linearGradient id="folderGradient" x1="472" y1="300" x2="724" y2="434" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E8BA58"/>
+      <stop offset="1" stop-color="#C88C2A"/>
+    </linearGradient>
+    <filter id="softShadow" x="-16%" y="-22%" width="132%" height="150%" color-interpolation-filters="sRGB">
+      <feOffset in="SourceAlpha" dx="0" dy="14" result="offset"/>
+      <feGaussianBlur in="offset" stdDeviation="12" result="blur"/>
+      <feFlood flood-color="#13202A" flood-opacity="0.18" result="color"/>
+      <feComposite in="color" in2="blur" operator="in" result="shadow"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <g filter="url(#softShadow)" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M510 282 H610 C630 282 638 304 660 304 H764 C792 304 814 326 814 354 V424 C814 454 790 478 760 478 H510 C480 478 456 454 456 424 V336 C456 306 480 282 510 282 Z" fill="url(#folderGradient)"/>
+    <path d="M456 356 H814 V424 C814 454 790 478 760 478 H510 C480 478 456 454 456 424 Z" fill="#D9A43C" opacity="0.96"/>
+    <g transform="translate(276 292) rotate(-13) scale(1 0.74) translate(-276 -292)">
+      <circle cx="276" cy="292" r="156" fill="url(#discGradient)"/>
+      <circle cx="276" cy="292" r="116" fill="none" stroke="#C9DBE0" stroke-width="15"/>
+      <circle cx="276" cy="292" r="70" fill="none" stroke="#A8C3CA" stroke-width="10" opacity="0.72"/>
+      <circle cx="276" cy="292" r="36" fill="#243340"/>
+      <circle cx="276" cy="292" r="19" fill="#F2B441"/>
+    </g>
+    <path d="M392 252 H548" stroke="#243340" stroke-width="26"/>
+    <path d="M428 304 H584" stroke="#F2B441" stroke-width="26"/>
+    <path d="M462 356 H612" stroke="#243340" stroke-width="26" opacity="0.92"/>
+  </g>
+  <g fill="#243340" font-family="Segoe UI, Inter, Manrope, Arial, sans-serif" font-size="174" font-weight="600" letter-spacing="0">
+    <text x="900" y="360">Mus</text>
+    <rect x="1238" y="247" width="22" height="113" rx="10"/>
+    <circle cx="1249" cy="188" r="19" fill="#F2B441"/>
+    <text x="1274" y="360">cRipper</text>
+  </g>
+</svg>

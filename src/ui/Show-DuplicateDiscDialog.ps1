@@ -144,6 +144,7 @@ function Show-RipperDuplicateDiscDialog {
     $reader = [System.Xml.XmlNodeReader]::new(([xml]$xaml))
     $window = [Windows.Markup.XamlReader]::Load($reader)
     if ($Owner) { $window.Owner = $Owner }
+    Set-RipperWindowIcon $window
 
     # Phase 5.11: the host pwsh window is minimized so dialogs would
     # otherwise open behind whichever app the user was last using.

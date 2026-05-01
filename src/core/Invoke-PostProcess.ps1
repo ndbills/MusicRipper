@@ -201,25 +201,46 @@ function Invoke-RipperPostProcess {
     }
 
     if ($move.IsReviewQueue) {
+        # Best-effort: a flac.exe failure inside New-RipperReviewImage
+        # (or any unexpected throw from Write-RipperReviewTxt) must not
+        # bypass Copy-RipperLog below -- the session log is the most
+        # useful forensic artifact a parent / engineer has when a
+        # review-queue rip is being triaged later, especially when the
+        # reason it landed in the queue was "flac.exe choked on track 7."
         $logFileName = Split-Path -Leaf $LogFile
-        Write-RipperReviewTxt `
-            -ReviewFolder $move.Target `
-            -Quality      $quality `
-            -Metadata     $Metadata `
-            -DiscId       $DiscId `
-            -LogFileName  $logFileName | Out-Null
-        New-RipperReviewImage `
-            -ReviewFolder $move.Target `
-            -Metadata     $Metadata `
-            -DiscId       $DiscId | Out-Null
+        try {
+            Write-RipperReviewTxt `
+                -ReviewFolder $move.Target `
+                -Quality      $quality `
+                -Metadata     $Metadata `
+                -DiscId       $DiscId `
+                -LogFileName  $logFileName | Out-Null
+        } catch {
+            Write-RipperLog WARN 'PostProcess' "Write-RipperReviewTxt failed (continuing so session log still copies): $($_.Exception.Message)"
+        }
+        try {
+            New-RipperReviewImage `
+                -ReviewFolder $move.Target `
+                -Metadata     $Metadata `
+                -DiscId       $DiscId | Out-Null
+        } catch {
+            Write-RipperLog WARN 'PostProcess' "New-RipperReviewImage failed (continuing so session log still copies): $($_.Exception.Message)"
+        }
     }
 
     # Drop a copy of the structured session log next to the album so
     # whoever rips can inspect what happened without digging through
     # %LOCALAPPDATA%\MusicRipper\logs. Especially valuable for the review
     # queue, where a human will be triaging the rip after the fact.
-    # Best-effort — a failed copy must not undo the move.
-    $sessionLogCopy = Copy-RipperLog -Destination $move.Target
+    # Best-effort -- a failed copy must not undo the move. Wrapped in
+    # try/catch on top of Copy-RipperLog's own WARN-on-failure so even
+    # a strict-mode oddity in the helper can't bypass post-process exit.
+    $sessionLogCopy = $null
+    try {
+        $sessionLogCopy = Copy-RipperLog -Destination $move.Target
+    } catch {
+        Write-RipperLog WARN 'PostProcess' "Copy-RipperLog threw (non-fatal): $($_.Exception.Message)"
+    }
     if ($sessionLogCopy) {
         Write-RipperLog INFO 'PostProcess' "Snapshot of session log -> $sessionLogCopy"
     }

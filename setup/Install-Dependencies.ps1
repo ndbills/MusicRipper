@@ -73,4 +73,10 @@ foreach ($id in $packages) {
     }
 }
 
+# Clear $LASTEXITCODE so the parent installer (Install-MusicRipper.ps1's
+# Invoke-SetupStep) doesn't see the last winget call's possibly-non-zero
+# 'already installed' code (-1978335189) and abort the chain. We treated
+# it as success above; tell the caller too.
+$global:LASTEXITCODE = 0
+
 Write-Host "Dependencies installed. Next: ./setup/Register-Drive.ps1" -ForegroundColor Green

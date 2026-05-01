@@ -568,6 +568,7 @@ function Show-RipperConfigDialog {
 
     $reader = [System.Xml.XmlNodeReader]::new(([xml]$xaml))
     $window = [Windows.Markup.XamlReader]::Load($reader)
+    Set-RipperWindowIcon $window
 
     # Topmost-then-clear (Phase 5.11 lesson: pwsh host is minimised).
     $window.Topmost = $true

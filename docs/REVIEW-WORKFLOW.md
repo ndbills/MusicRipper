@@ -1,9 +1,5 @@
 # Review Workflow
 
-> **Status:** Phase 5 lands the queue itself. The `Move-FromReviewQueue.ps1`
-> promote-helper is still pending in Phase 7. Until then, promotion
-> is a hand-move: see [Promoting an album to the library](#promoting-an-album-to-the-library).
-
 When a rip can't be safely auto-filed into the main library, MusicRipper
 routes it to `<LibraryRoot>\_ReviewQueue\` instead. This page is the
 runbook for clearing that queue.
@@ -92,8 +88,17 @@ fix metadata before it landed in the library.
 
 ## Promoting an album to the library
 
-Until the Phase 7 helper ships, promotion is a hand-move. The library
-layout that the auto-router would have used:
+Use the Phase 7 helper -- it reads the (now-correct) tags off the
+per-track FLACs, computes the standard library path, moves library
+content into place, discards the review-queue scratch (REVIEW.txt +
+`_image\`), and seeds the cross-session duplicate-disc index for you:
+
+```powershell
+./src/tools/Move-FromReviewQueue.ps1 'E:\digitize\MusicRipper\_ReviewQueue\<folder>'
+```
+
+The target folder is computed from your config's `LibraryRoot` plus
+the Picard-written tags:
 
 ```
 <LibraryRoot>\
@@ -111,7 +116,27 @@ layout that the auto-router would have used:
 `<AlbumArtist>\`. Multi-disc releases stay flat at album root with the
 disc number prefixed in each filename, e.g. `1-01 - Track.flac`.)
 
-Steps:
+Useful flags:
+
+- `-WhatIf` -- show the planned move without touching disk.
+- `-AllowSideBySide` -- if the target folder already exists, land in
+  `<Album> (<Year>) [rip 2]` (then `[rip 3]`, ...) instead of erroring.
+- `-Force` -- overwrite existing destination files.
+- `-AlbumArtist`, `-Album`, `-Year`, `-IsCompilation` -- explicit
+  overrides for cases where Picard wrote slightly different values
+  than what you want on disk.
+- `-KeepReviewArtifacts` -- move REVIEW.txt and `_image\` into the
+  destination too instead of discarding them. Default is to discard.
+- `-SkipSync` -- by default, a promoted album follows the same sync
+  chain a normal Library-routed rip would (every `cfg.SyncTargets`
+  entry, then `cfg.LocalRetention`). Pass this to seed
+  `discids.json` only and leave sync for later (e.g. when you're
+  ripping offline and will sync back at home). Sync failures land
+  in `sync-state.json` and the next launch's pending-sync flow
+  picks them up automatically -- same recovery as a normal rip.
+
+If you'd rather move things by hand (or your particular case needs
+tweaks the script doesn't support), the same target layout applies:
 
 1. Move the per-track FLACs + `cover.jpg` + `<Album>.cue` + `<Album>.log`
    into the destination folder above. Use Windows Explorer or:
@@ -122,8 +147,7 @@ Steps:
    ```
 
 2. **Discard** the `_image\` subfolder and `REVIEW.txt` -- they're
-   review-queue artifacts, not library content. (The Phase 7 helper
-   will do this automatically.)
+   review-queue artifacts, not library content.
 3. (Optional) Open the album in your library and confirm Plex picks
    it up.
 4. (Optional) If you want this disc to participate in the
@@ -162,6 +186,8 @@ Two ways to listen:
 ## Re-ripping a queue entry
 
 Just reinsert the disc. The rip-time identification step recognizes
-the disc id and — once the loop in Phase 7 lands — will offer
-**Replace** vs **Add as duplicate**. Until then, delete the old queue
-folder by hand before re-ripping.
+the disc id and offers **Rip again** vs **Skip**
+([Show-DuplicateDiscDialog](../src/ui/Show-DuplicateDiscDialog.ps1)).
+If you choose Rip again the new rip will land side-by-side under
+`<Album> (<Year>) [rip 2]`; you can then delete whichever copy you
+don't want.

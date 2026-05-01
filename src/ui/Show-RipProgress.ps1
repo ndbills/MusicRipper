@@ -249,6 +249,7 @@ function Show-RipperRipProgress {
 
     $reader = [System.Xml.XmlNodeReader]::new(([xml]$xaml))
     $window = [Windows.Markup.XamlReader]::Load($reader)
+    Set-RipperWindowIcon $window
 
     # Phase 5.11: see Show-DuplicateDiscDialog -- steal foreground from
     # whatever was last in focus, since the host pwsh window is minimized.
@@ -347,6 +348,21 @@ function Show-RipperRipProgress {
     }
     $rs.SessionStateProxy.SetVariable('ripScriptPath', $ripScriptPath)
 
+    # Phase 7 fix: hand the parent runspace's active log file path to
+    # the worker so it can adopt it via Set-RipperLogPath. PowerShell
+    # module state is per-runspace -- without this, the worker's
+    # Logging module re-imports with $script:LogPath = $null, every
+    # Write-RipperLog from inside Invoke-Rip / Invoke-RipperPostProcess
+    # silently fails to hit the file (just the host stream), and
+    # Copy-RipperLog at end-of-post-process returns $null with a
+    # warning. Symptom that surfaced this: a 10-min review-queue rip
+    # produced an album folder with NO ripper-session.log copy and a
+    # per-disc log file that contained zero entries between "Starting
+    # rip:" and "Rip finished:".
+    $parentLogPath = $null
+    try { $parentLogPath = Get-RipperLogPath } catch {}
+    $rs.SessionStateProxy.SetVariable('parentLogPath', $parentLogPath)
+
     # Phase 6.2.C: ship the post-process action across the runspace
     # boundary as a string. Cross-runspace scriptblock invocation is
     # fragile (closures lose their module context) -- re-creating from
@@ -363,6 +379,17 @@ function Show-RipperRipProgress {
         $ErrorActionPreference = 'Stop'
         try {
             . $ripScriptPath
+            # Phase 7 fix: the dot-source above (and every src/core/*.ps1
+            # the post-process action below dot-sources) pulls Logging.psd1
+            # in this runspace with a fresh $script:LogPath = $null. Adopt
+            # the parent's log file so Write-RipperLog calls actually land
+            # in the per-disc log file and Copy-RipperLog snapshots the
+            # right thing. Best-effort -- if Set-RipperLogPath isn't
+            # available (older Logging build) the rip just runs without
+            # in-runspace file logging, same as before.
+            if ($parentLogPath -and (Get-Command -Name Set-RipperLogPath -ErrorAction SilentlyContinue)) {
+                Set-RipperLogPath -Path $parentLogPath -Context 'rip-worker'
+            }
             $progressCb = {
                 param($payload)
                 # Latest-wins: UI reads whatever is in $state.Progress at

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="600" viewBox="0 0 2400 600" role="img" aria-labelledby="title desc">
+  <title id="title">MusicRipper classic horizontal lockup variant 02</title>
+  <desc id="desc">Spacious horizontal MusicRipper lockup with larger audiophile disc and two-line text block.</desc>
+  <metadata><![CDATA[{"prompt":"F","variant":"02","format":"horizontal-lockup","width":2400,"height":600,"transparentBackground":true,"text":"MusicRipper","tagline":"Audio CDs → AccurateRip-verified FLAC","fontStack":"Segoe UI, Inter, Manrope, Arial, sans-serif","palette":{"disc":"#1B1B1F","groove":"#38383E","wordmark":"#22272E","tagline":"#596571","cream":"#F2EAD3","tan":"#B9A985","crimson":"#9A1B1B","cyan":"#7AC9E0","lavender":"#A98BD6","amber":"#E8B673"}}]]></metadata>
+  <defs>
+    <radialGradient id="discGradient" cx="43%" cy="34%" r="70%">
+      <stop offset="0" stop-color="#303036"/>
+      <stop offset="0.60" stop-color="#1B1B1F"/>
+      <stop offset="1" stop-color="#0E0E11"/>
+    </radialGradient>
+    <linearGradient id="arcGradient" x1="584" y1="102" x2="752" y2="500" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7AC9E0"/>
+      <stop offset="0.52" stop-color="#A98BD6"/>
+      <stop offset="1" stop-color="#E8B673"/>
+    </linearGradient>
+    <filter id="discShadow" x="-32%" y="-32%" width="164%" height="170%" color-interpolation-filters="sRGB">
+      <feOffset in="SourceAlpha" dx="0" dy="24" result="offset"/>
+      <feGaussianBlur in="offset" stdDeviation="22" result="blur"/>
+      <feFlood flood-color="#08090A" flood-opacity="0.24" result="color"/>
+      <feComposite in="color" in2="blur" operator="in" result="shadow"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <g filter="url(#discShadow)">
+    <circle cx="388" cy="300" r="218" fill="url(#discGradient)"/>
+    <path d="M535 139 A218 218 0 0 1 582 432" fill="none" stroke="url(#arcGradient)" stroke-width="32" stroke-linecap="round"/>
+    <circle cx="388" cy="300" r="172" fill="none" stroke="#38383E" stroke-width="7" opacity="0.58"/>
+    <circle cx="388" cy="300" r="140" fill="none" stroke="#09090B" stroke-width="8" opacity="0.45"/>
+    <circle cx="388" cy="300" r="110" fill="none" stroke="#38383E" stroke-width="6" opacity="0.50"/>
+    <circle cx="388" cy="300" r="83" fill="#F2EAD3"/>
+    <circle cx="388" cy="300" r="60" fill="none" stroke="#B9A985" stroke-width="4" opacity="0.86"/>
+    <circle cx="388" cy="300" r="42" fill="none" stroke="#B9A985" stroke-width="3" opacity="0.80"/>
+    <circle cx="388" cy="300" r="26" fill="none" stroke="#B9A985" stroke-width="3" opacity="0.74"/>
+    <circle cx="388" cy="300" r="13" fill="#9A1B1B"/>
+  </g>
+  <g font-family="Segoe UI, Inter, Manrope, Arial, sans-serif" letter-spacing="0">
+    <text x="740" y="278" fill="#22272E" font-size="158" font-weight="600">MusicRipper</text>
+    <text x="746" y="366" fill="#596571" font-size="52" font-weight="400">Audio CDs → AccurateRip-verified FLAC</text>
+  </g>
+</svg>

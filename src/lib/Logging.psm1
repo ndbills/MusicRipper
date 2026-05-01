@@ -164,6 +164,70 @@ function Get-RipperLogPath {
     $script:LogPath
 }
 
+function Set-RipperLogPath {
+<#
+.SYNOPSIS
+    Adopt an existing log file as the active session log for the
+    current runspace.
+
+.DESCRIPTION
+    The Logging module keeps `$script:LogPath` per-runspace
+    (PowerShell module state is per-runspace by design). Background
+    runspaces created by Show-RipProgress / Show-PendingSyncProgress
+    re-import the module on their own and start out with
+    `$script:LogPath = $null`, which silently drops every
+    `Write-RipperLog` call to the file (it still hits the host
+    stream) and makes `Copy-RipperLog` a no-op.
+
+    This function lets a worker runspace adopt the parent runspace's
+    active log file by absolute path, so subsequent `Write-RipperLog`
+    appends to the same file the parent is using and `Copy-RipperLog`
+    snapshots the right thing.
+
+    Best-effort: if `Path` doesn't exist or is unwritable, writes a
+    warning and leaves `$script:LogPath` unchanged. Never throws --
+    callers in worker runspaces shouldn't have to wrap this in
+    try/catch just to keep going.
+
+    The companion `Stop-RipperLog` will write the "Session ended"
+    footer when called from this runspace -- but the parent runspace
+    is the canonical owner of the lifecycle. Don't call
+    `Stop-RipperLog` from a worker that adopted the parent's log;
+    let the parent close it.
+
+.PARAMETER Path
+    Absolute path to an existing log file (typically the value
+    returned by `Get-RipperLogPath` in the parent runspace).
+
+.PARAMETER Context
+    Optional human-readable context tag (e.g. 'rip-disc-3-worker'),
+    surfaced via `Get-RipperLogPath` callers in this runspace if
+    they need it. Defaults to '<adopted>'.
+
+.EXAMPLE
+    PS> # main runspace
+    PS> $logPath = Get-RipperLogPath
+    PS> # ... pass $logPath into the worker via SessionStateProxy.SetVariable ...
+    PS> # worker runspace (after dot-sourcing whatever imports Logging):
+    PS> Set-RipperLogPath -Path $logPath
+#>
+    [CmdletBinding()]
+    [OutputType([void])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [string]$Context = '<adopted>'
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        Write-Warning "Set-RipperLogPath: log file not found: $Path"
+        return
+    }
+    $script:LogPath    = $Path
+    $script:LogContext = $Context
+}
+
 function Copy-RipperLog {
 <#
 .SYNOPSIS
@@ -224,4 +288,4 @@ function Copy-RipperLog {
     }
 }
 
-Export-ModuleMember -Function Start-RipperLog, Write-RipperLog, Stop-RipperLog, Get-RipperLogPath, Copy-RipperLog
+Export-ModuleMember -Function Start-RipperLog, Write-RipperLog, Stop-RipperLog, Get-RipperLogPath, Set-RipperLogPath, Copy-RipperLog

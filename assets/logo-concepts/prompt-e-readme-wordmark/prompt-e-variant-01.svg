@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="600" viewBox="0 0 2400 600" role="img" aria-labelledby="title desc">
+  <title id="title">MusicRipper README wordmark variant 01</title>
+  <desc id="desc">Horizontal MusicRipper logo lockup with compact disc, file rows flowing into a folder, and a clean geometric wordmark.</desc>
+  <metadata><![CDATA[{"prompt":"E","variant":"01","format":"wordmark","width":2400,"height":600,"transparentBackground":true,"text":"MusicRipper","fontStack":"Segoe UI, Inter, Manrope, Arial, sans-serif","palette":{"darkSlate":"#273643","deepTeal":"#1F6F7A","slate":"#40515F","cream":"#F7EFE0","warmAmber":"#F2B441","folder":"#D9A43C","folderShadow":"#A9772D"}}]]></metadata>
+  <defs>
+    <radialGradient id="discGradient" cx="42%" cy="32%" r="70%">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.56" stop-color="#E7F0F2"/>
+      <stop offset="1" stop-color="#BFD4DA"/>
+    </radialGradient>
+    <linearGradient id="folderGradient" x1="470" y1="286" x2="700" y2="408" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E4B651"/>
+      <stop offset="1" stop-color="#C99031"/>
+    </linearGradient>
+    <filter id="softShadow" x="-16%" y="-22%" width="132%" height="150%" color-interpolation-filters="sRGB">
+      <feOffset in="SourceAlpha" dx="0" dy="14" result="offset"/>
+      <feGaussianBlur in="offset" stdDeviation="12" result="blur"/>
+      <feFlood flood-color="#13202A" flood-opacity="0.20" result="color"/>
+      <feComposite in="color" in2="blur" operator="in" result="shadow"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <g filter="url(#softShadow)" stroke-linecap="round" stroke-linejoin="round">
+    <g transform="translate(260 300) rotate(-10) scale(1 0.76) translate(-260 -300)">
+      <circle cx="260" cy="300" r="150" fill="url(#discGradient)"/>
+      <circle cx="260" cy="300" r="110" fill="none" stroke="#C9DBE0" stroke-width="14"/>
+      <circle cx="260" cy="300" r="66" fill="none" stroke="#A8C3CA" stroke-width="10" opacity="0.72"/>
+      <circle cx="260" cy="300" r="33" fill="#273643"/>
+      <circle cx="260" cy="300" r="18" fill="#F2B441"/>
+      <path d="M158 230 C218 190 310 190 366 230" fill="none" stroke="#FFFFFF" stroke-width="20" opacity="0.62"/>
+    </g>
+    <path d="M370 260 H520" stroke="#273643" stroke-width="28"/>
+    <path d="M400 312 H550" stroke="#F2B441" stroke-width="28"/>
+    <path d="M430 364 H548" stroke="#273643" stroke-width="28" opacity="0.92"/>
+    <path d="M554 252 H618 C636 252 642 272 664 272 H760 C786 272 806 292 806 318 V406 C806 434 784 456 756 456 H552 C524 456 502 434 502 406 V304 C502 276 526 252 554 252 Z" fill="url(#folderGradient)"/>
+    <path d="M502 330 H806 V406 C806 434 784 456 756 456 H552 C524 456 502 434 502 406 Z" fill="#D9A43C" opacity="0.96"/>
+  </g>
+  <g fill="#273643" font-family="Segoe UI, Inter, Manrope, Arial, sans-serif" font-size="184" font-weight="600" letter-spacing="0">
+    <text x="900" y="366">Mus</text>
+    <rect x="1258" y="246" width="23" height="120" rx="11"/>
+    <circle cx="1269.5" cy="184" r="20" fill="#F2B441"/>
+    <text x="1296" y="366">cRipper</text>
+  </g>
+</svg>

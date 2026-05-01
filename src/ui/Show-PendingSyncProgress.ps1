@@ -249,6 +249,7 @@ function Show-RipperPendingSyncProgress {
     $reader = [System.Xml.XmlNodeReader]::new([xml]$xaml)
     $window = [System.Windows.Markup.XamlReader]::Load($reader)
     if ($Owner) { try { $window.Owner = $Owner } catch { } }
+    Set-RipperWindowIcon $window
 
     # Steal foreground from whatever was last in focus -- the host pwsh
     # window is usually minimized to the tray at startup, so without this
@@ -322,6 +323,14 @@ function Show-RipperPendingSyncProgress {
         $rs.SessionStateProxy.SetVariable('repoRoot',    $RepoRoot)
         $rs.SessionStateProxy.SetVariable('LibraryRoot', $LibraryRoot)
         $rs.SessionStateProxy.SetVariable('Config',      $Config)
+        # Phase 7 fix: hand the parent runspace's active log path to the
+        # worker so its Logging-module $script:LogPath actually points at
+        # the same per-disc / startup log file. Without this every Sync /
+        # Retention / LibraryIndex log line goes to the host stream only
+        # and the file log is silent for the entire pending-sync run.
+        $parentLogPath = $null
+        try { $parentLogPath = Get-RipperLogPath } catch {}
+        $rs.SessionStateProxy.SetVariable('parentLogPath', $parentLogPath)
         $ps = [powershell]::Create()
         $ps.Runspace = $rs
         [void]$ps.AddScript({
@@ -347,6 +356,13 @@ function Show-RipperPendingSyncProgress {
                 . (Join-Path $repoRoot 'src\sync\Invoke-LibraryRetention.ps1')
                 . (Join-Path $repoRoot 'src\sync\Invoke-PendingSync.ps1')
                 . (Join-Path $repoRoot 'src\ui\Show-TargetExistsDialog.ps1')
+                # Phase 7 fix: re-adopt the parent's log file AFTER all
+                # the Import-Module / dot-source above. Each
+                # Import-Module Logging.psd1 -Force resets
+                # $script:LogPath = $null in this runspace.
+                if ($parentLogPath -and (Get-Command -Name Set-RipperLogPath -ErrorAction SilentlyContinue)) {
+                    Set-RipperLogPath -Path $parentLogPath -Context 'pending-sync-worker'
+                }
 
                 $cb = {
                     param($Phase, $AlbumIdx, $AlbumTotal, $AlbumKey, $AlbumLabel, $ResultStatus, $ResultDetail)
