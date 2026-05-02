@@ -580,8 +580,13 @@ function Show-RipperConfigDialog {
     Set-RipperWindowIcon $window
 
     # Topmost-then-clear (Phase 5.11 lesson: pwsh host is minimised).
+    # WindowState=Normal in Loaded is a defensive belt against WPF
+    # inheriting SW_SHOWMINIMIZED from a parent process that just
+    # launched minimised -- bit the F-6 standalone Settings shortcut
+    # entry point where the WPF comes up <100 ms after pwsh starts.
     $window.Topmost = $true
     $window.Add_Loaded({
+        $this.WindowState = [System.Windows.WindowState]::Normal
         $this.Activate() | Out-Null
         $this.Topmost = $false
     }.GetNewClosure())

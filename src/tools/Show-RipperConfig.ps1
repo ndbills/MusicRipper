@@ -39,6 +39,31 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+
+# Self-minimize the host pwsh window so the WPF settings dialog is the
+# only user-visible surface. The Start Menu .lnk also sets
+# WindowStyle=7 (Minimized), but launching the WPF immediately after
+# pwsh starts can leave the dialog inheriting the parent's minimized
+# state OR failing to activate due to foreground-rights timing. The
+# self-minimize here matches the pattern in src\Start-Ripper.ps1 and
+# gives the WPF Window's Topmost+Activate-on-Loaded handler a clean
+# slate to come forward. Best-effort: if the P/Invoke or window
+# handle isn't available (ISE, redirected console) we just continue.
+try {
+    if (-not ('MusicRipper.Win32' -as [type])) {
+        Add-Type -Namespace MusicRipper -Name Win32 -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern System.IntPtr GetConsoleWindow();
+'@ | Out-Null
+    }
+    $hwnd = [MusicRipper.Win32]::GetConsoleWindow()
+    if ($hwnd -ne [IntPtr]::Zero) {
+        [void][MusicRipper.Win32]::ShowWindow($hwnd, 6)   # 6 = SW_MINIMIZE
+    }
+} catch {}
+
 Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
 Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1')  -Force
