@@ -1317,6 +1317,9 @@ problem statement) is now implemented by this decision.
 
 ## F-6 -- Standalone "MusicRipper – Settings" Start Menu shortcut for editing config *(Phase 8)*
 
+**Status:** Implemented.
+**Date:** 2026-05-01.
+
 **Problem.** The Phase 6.6 WPF config editor (`Show-RipperConfigDialog`)
 is currently reachable only via the first-run path in `Start-Ripper.ps1`
 or the no-drive-registered prompt. A parent who wants to add a sync
@@ -1407,6 +1410,32 @@ Phase 7 (Start Menu shortcut infrastructure in
 `setup/Install-StartMenuShortcuts.ps1`), F-4 (notifier — separate
 Phase 8 backlog item, not bundled).
 
+**Outcome.** Three commits on `phase-8-config-shortcut`, merged to
+`main` with --no-ff:
+- `0f935f6` docs: this entry, recorded up-front before any code.
+- `bc3c924` feat: `src/tools/Show-RipperConfig.ps1` adapter, third
+  Start Menu shortcut, Save-toast (suppressed in `-FirstRun` because
+  Start-Ripper enters the rip flow immediately and there is no
+  "next launch" to wait for), removed the stale `.NOTES` reference
+  to a never-shipped between-discs Configure... button. Pester
+  522/0/1 (Phase 7 baseline unchanged).
+- `16b9599` fix: foreground-the WPF when launched from the Settings
+  shortcut. **Gotcha not anticipated in the original sketch:** the
+  .lnk's `WindowStyle=7` (Minimized) on pwsh, combined with the WPF
+  opening <100 ms after pwsh starts, let the dialog inherit
+  `SW_SHOWMINIMIZED` from the parent process and/or fail to activate
+  due to foreground-rights timing. Fix matches the long-standing
+  pattern in `src/Start-Ripper.ps1`: the adapter self-minimizes the
+  pwsh host via `MusicRipper.Win32.ShowWindow(SW_MINIMIZE)` before
+  importing modules, and the dialog's `Loaded` handler also forces
+  `WindowState = Normal` alongside the existing
+  Topmost+Activate-on-Loaded sequence. Belt-and-suspenders against
+  elevated launches that don't honour the .lnk WindowStyle.
+
+**Manual verification (1 May 2026).** All re-entry-checklist items
+passed end-to-end: clean launch from Settings shortcut, foreground
+steal works, Save toast fires, change persists across re-open, no
+interference observed when launched alongside a running main app.
 
 ## D-019 -- Wire user-driven Send to Review through the rip pipeline (Phase 5.9)
 

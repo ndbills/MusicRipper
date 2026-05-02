@@ -35,6 +35,7 @@ Phase 6.2, Synology NAS over WireGuard in Phase 6.3+).
 | 6.4.1 | Refcounted WG tunnel lifecycle           | ✅ complete    |
 | 6.6   | WPF first-run + config editor overhaul   | ✅ complete    |
 | 7     | Polish, packaging, parent-friendly UX    | ✅ complete    |
+| F-6   | Standalone Settings Start Menu shortcut  | ✅ complete    |
 
 ## 3-line quickstart (engineer install)
 
