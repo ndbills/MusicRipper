@@ -35,6 +35,7 @@ Phase 6.2, Synology NAS over WireGuard in Phase 6.3+).
 | 6.4.1 | Refcounted WG tunnel lifecycle           | ✅ complete    |
 | 6.6   | WPF first-run + config editor overhaul   | ✅ complete    |
 | 7     | Polish, packaging, parent-friendly UX    | ✅ complete    |
+| F-6   | Standalone Settings Start Menu shortcut  | ✅ complete    |
 
 ## 3-line quickstart (engineer install)
 
@@ -78,7 +79,7 @@ MusicRipper/
 │   ├── New-RipperConfig.ps1        # Headless config wizard (WPF editor preferred)
 │   ├── Install-Shortcut.ps1        # Desktop shortcut "Rip a CD"
 │   ├── Install-UninstallShortcut.ps1   # In-repo "Uninstall MusicRipper.lnk"
-│   └── Install-StartMenuShortcuts.ps1  # Start Menu "MusicRipper - Rip a CD" + "MusicRipper - Uninstall"
+│   └── Install-StartMenuShortcuts.ps1  # Start Menu "MusicRipper - Rip a CD" + "Settings" + "Uninstall"
 │
 ├── assets/                         # App icons + hero banner
 │   ├── musicripper.ico             # Multi-resolution icon for shortcuts
@@ -91,7 +92,7 @@ MusicRipper/
 │   ├── ui/                         # WPF dialogs (Phase 3+)
 │   ├── core/                       # Disc-id, metadata, rip, tag (Phase 2-5)
 │   ├── sync/                       # Per-album sync targets + retention (Phase 6.1+)
-│   ├── tools/                      # Move-FromReviewQueue (Phase 7)
+│   ├── tools/                      # Move-FromReviewQueue (Phase 7), Show-RipperConfig (F-6)
 │   └── lib/
 │       ├── Config.psm1             # config.json + DPAPI credential storage
 │       ├── Logging.psm1            # Per-session log files

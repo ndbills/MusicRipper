@@ -70,6 +70,7 @@ the first thing to update.
 | `src/tools/Update-AlbumTags.ps1`   | 5     | Re-tag an existing album in place; looks up MB by ALBUMID/DISCID/text. |
 | `src/tools/Build-LibraryDiscIndex.ps1` | 5.8 | One-shot seed of `discids.json` from existing library FLACs (uses MUSICBRAINZ_DISCID tag). |
 | `src/tools/Sync-PendingAlbums.ps1` | 6.1 | Retry sync for every album in `sync-state.json` whose configured targets aren't all `OK`; reapplies retention. Supports `-WhatIf`, `-Force`, `-LibraryRoot`. |
+| `src/tools/Show-RipperConfig.ps1`  | F-6 | Standalone WPF config-editor entry point fronted by the "MusicRipper - Settings" Start Menu shortcut. Self-minimizes the host pwsh, opens `Show-RipperConfigDialog` on the existing config (or in `-FirstRun` if `config.json` is absent). Saved settings apply on the next launch of the main app. |
 | `Install-MusicRipper.ps1` (root)   | 7     | One-shot self-installer.                               |
 
 ## State on disk

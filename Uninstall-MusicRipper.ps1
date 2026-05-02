@@ -291,7 +291,7 @@ if (-not $ImAlreadyAdmin -and -not (Test-IsAdministrator)) {
     if (-not $KeepDependencies) { $plan += 'uninstall CUETools, Xiph.FLAC, MusicBrainz.Picard, WireGuard.WireGuard via winget' }
     if ($wgTunnelName)          { $plan += "uninstall WireGuard tunnel service '$wgTunnelName'" }
     if (-not $KeepShortcut)     { $plan += "remove Desktop shortcut '$ShortcutName.lnk'" }
-    if (-not $KeepShortcut)     { $plan += "remove Start Menu shortcuts (Rip a CD + Uninstall)" }
+    if (-not $KeepShortcut)     { $plan += "remove Start Menu shortcuts (Rip a CD + Settings + Uninstall)" }
     if (-not $KeepUserData)     { $plan += "delete $ripperDataRoot (config + credentials + logs)" }
 
     if ($plan.Count -eq 0) {
@@ -543,7 +543,7 @@ if ($KeepShortcut) {
 
 
 # --- Step 2b: Start Menu shortcuts --------------------------------------
-# Two .lnks installed by setup\Install-StartMenuShortcuts.ps1 directly
+# Three .lnks installed by setup\Install-StartMenuShortcuts.ps1 directly
 # in %APPDATA%\Microsoft\Windows\Start Menu\Programs\ (no subfolder --
 # Win11's flat All-apps list hides subfolders). Also clean up any
 # legacy MusicRipper\ subfolder from older installs that used the
@@ -551,6 +551,7 @@ if ($KeepShortcut) {
 $startMenuProgs   = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
 $startMenuLnks    = @(
     (Join-Path $startMenuProgs 'MusicRipper - Rip a CD.lnk'),
+    (Join-Path $startMenuProgs 'MusicRipper - Settings.lnk'),
     (Join-Path $startMenuProgs 'MusicRipper - Uninstall.lnk')
 )
 $startMenuLegacy  = Join-Path $startMenuProgs 'MusicRipper'

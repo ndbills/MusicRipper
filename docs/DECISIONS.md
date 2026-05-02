@@ -1313,6 +1313,129 @@ synced log location.
 **Reverse references:** D-017 (the backlog entry that captured the
 problem statement) is now implemented by this decision.
 
+---
+
+## F-6 -- Standalone "MusicRipper – Settings" Start Menu shortcut for editing config *(Phase 8)*
+
+**Status:** Implemented.
+**Date:** 2026-05-01.
+
+**Problem.** The Phase 6.6 WPF config editor (`Show-RipperConfigDialog`)
+is currently reachable only via the first-run path in `Start-Ripper.ps1`
+or the no-drive-registered prompt. A parent who wants to add a sync
+target, change `LibraryRoot`, refresh DPAPI creds, or swap the
+WireGuard tunnel after install has no friendly entry point.
+
+**Choice.** Add a fourth Start Menu shortcut, **"MusicRipper – Settings"**,
+pointing at a new `src/tools/Show-RipperConfig.ps1` adapter that imports
+the relevant modules, calls `Show-RipperConfigDialog -Config $cfg
+-ConfigPath $path`, and exits. No in-app gear button on the rip /
+between-discs windows.
+
+**Reload model: next launch only.** The Save toast reads "New settings
+will apply the next time MusicRipper runs." This is honest whether the
+app is closed, idle, or mid-rip — see runtime safety analysis below.
+
+**Why no in-app gear / live reload:**
+- `LibraryRoot` mid-session would split-brain `_inbox`, `discids.json`,
+  and `sync-state.json` for an in-flight rip.
+- WireGuard refcount/env-var sentinel (`MUSICRIPPER_WG_SESSION_REF`)
+  is per-session; swapping tunnels mid-session would orphan a tunnel
+  we started.
+- Drive letter is captured by the rip-progress runspace, the
+  between-discs DispatcherTimer, and the MCI tray-close code — a
+  mid-session swap means tearing all of those down.
+- DPAPI creds are imported into sync-runspace closures at sync time;
+  edits don't bite the active runspace anyway.
+- The mid-session-safe knobs (providers, `EjectAfterRip`,
+  `ContinuousMode`) are not worth a separate "live-reload allowlist"
+  code path. Parents already understand "save and relaunch" from
+  every other Windows app.
+
+**Why no in-process race when both run simultaneously:**
+- Main app reads `cfg` once at startup (Phase 6.6 made
+  `Get-RipperConfig` startup-only); it never polls.
+- Main app does not write `config.json`. State writes go to
+  `discids.json` / `sync-state.json` — disjoint from the editor's
+  writes.
+- No single-instance Mutex exists today (or is needed). Settings is
+  a separate pwsh process and parent file-locks via `Save-RipperConfig`
+  are short-lived.
+
+**Implementation sketch.**
+1. New `src/tools/Show-RipperConfig.ps1` — thin adapter (~30 lines):
+   import `Common`, `Logging`, `Config` modules; dot-source
+   `Show-RipperConfigDialog.ps1`; resolve `$configPath` via
+   `Get-RipperConfigPath`; load cfg if present (or pass `-FirstRun`
+   if absent so a never-installed user still gets the right flow);
+   call `Show-RipperConfigDialog`; exit 0 regardless of save/cancel.
+   Same dot-source / module-import pattern as
+   `src/tools/Sync-PendingAlbums.ps1`.
+2. New shortcut entry in `setup/Install-StartMenuShortcuts.ps1`
+   pointing at the adapter. Use the same icon as the main app
+   (`assets/musicripper-app-icon.ico`).
+3. One-line update to the Save-confirmation MessageBox in
+   `Show-RipperConfigDialog.ps1` to read "New settings will apply
+   the next time MusicRipper runs." (Currently silent on OK; the
+   tooltip on the Save button already says "Restart MusicRipper to
+   apply.")
+4. Remove the stale `.NOTES` reference to a never-shipped
+   between-discs Configure... button in `Show-RipperConfigDialog.ps1`.
+5. Docs:
+   - `docs/SETUP.md` — note the new entry point in the install
+     output section.
+   - `docs/PARENTS-QUICKSTART.md` — one short paragraph + screenshot
+     placeholder under a new "Changing settings later" subsection.
+   - `README.md` directory-map — list `src/tools/Show-RipperConfig.ps1`.
+6. No new Pester surface needed; the dialog and `Save-RipperConfig`
+   already have tests, and the adapter is glue.
+
+**Out of scope (re-pick if/when parents ask):**
+- In-app gear button on rip-progress / between-discs windows.
+  Same dialog code, just a different entry point with a "changes
+  apply on next launch" header banner.
+- Live-reload allowlist for mid-session-safe knobs.
+- Single-instance enforcement on the main app (orthogonal; not
+  required for F-6 to be safe).
+
+**Re-entry checklist:** branch `phase-8-config-shortcut` from `main`;
+verify Settings shortcut launches cleanly with no rip session active;
+verify two-process scenario (main app running, open Settings, save,
+exit Settings, finish current rip, relaunch — confirm new cfg in
+effect on the second launch); update README "Current status" table
++ docs index.
+
+**Cross-references:** Phase 6.6 (config editor implementation),
+Phase 7 (Start Menu shortcut infrastructure in
+`setup/Install-StartMenuShortcuts.ps1`), F-4 (notifier — separate
+Phase 8 backlog item, not bundled).
+
+**Outcome.** Three commits on `phase-8-config-shortcut`, merged to
+`main` with --no-ff:
+- `0f935f6` docs: this entry, recorded up-front before any code.
+- `bc3c924` feat: `src/tools/Show-RipperConfig.ps1` adapter, third
+  Start Menu shortcut, Save-toast (suppressed in `-FirstRun` because
+  Start-Ripper enters the rip flow immediately and there is no
+  "next launch" to wait for), removed the stale `.NOTES` reference
+  to a never-shipped between-discs Configure... button. Pester
+  522/0/1 (Phase 7 baseline unchanged).
+- `16b9599` fix: foreground-the WPF when launched from the Settings
+  shortcut. **Gotcha not anticipated in the original sketch:** the
+  .lnk's `WindowStyle=7` (Minimized) on pwsh, combined with the WPF
+  opening <100 ms after pwsh starts, let the dialog inherit
+  `SW_SHOWMINIMIZED` from the parent process and/or fail to activate
+  due to foreground-rights timing. Fix matches the long-standing
+  pattern in `src/Start-Ripper.ps1`: the adapter self-minimizes the
+  pwsh host via `MusicRipper.Win32.ShowWindow(SW_MINIMIZE)` before
+  importing modules, and the dialog's `Loaded` handler also forces
+  `WindowState = Normal` alongside the existing
+  Topmost+Activate-on-Loaded sequence. Belt-and-suspenders against
+  elevated launches that don't honour the .lnk WindowStyle.
+
+**Manual verification (1 May 2026).** All re-entry-checklist items
+passed end-to-end: clean launch from Settings shortcut, foreground
+steal works, Save toast fires, change persists across re-open, no
+interference observed when launched alongside a running main app.
 
 ## D-019 -- Wire user-driven Send to Review through the rip pipeline (Phase 5.9)
 

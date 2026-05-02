@@ -118,6 +118,20 @@ engineer, and close the window.
 
 ---
 
+## Step 5 — Changing settings later
+
+Need to point MusicRipper at a different folder, add the family NAS,
+or refresh a password? Open the Start Menu and click
+**MusicRipper - Settings**. The same window from first-run opens, with
+your current settings pre-filled. Change what you need and click
+**Save** — a little message confirms *"New settings will apply the
+next time MusicRipper runs."*
+
+It's safe to open Settings even while MusicRipper is busy ripping a
+CD; the changes just queue up for the next time you launch the app.
+
+---
+
 ## Where do my CDs end up?
 
 Inside the **library folder** you picked during first-run setup,

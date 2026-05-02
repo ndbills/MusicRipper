@@ -75,6 +75,18 @@ After Phase 6.6 the shortcut is the user-facing entry point: it launches
 the full ripper, and on first run pops the WPF settings editor described
 in step 3.
 
+`Install-MusicRipper.ps1` also drops three Start Menu shortcuts via
+`setup/Install-StartMenuShortcuts.ps1`:
+
+- **MusicRipper - Rip a CD** — same target as the Desktop shortcut.
+- **MusicRipper - Settings** *(F-6, Phase 8)* — opens the WPF settings
+  editor standalone via `src/tools/Show-RipperConfig.ps1`. Use this any
+  time after install to change `LibraryRoot`, sync targets, the NAS
+  credential, or the WireGuard tunnel. Saved settings apply the next
+  time MusicRipper runs (the Save toast says so). Safe to launch even
+  while MusicRipper is mid-rip — main reads config once at startup.
+- **MusicRipper - Uninstall** — runs `Uninstall-MusicRipper.ps1`.
+
 ## 5. Verify
 
 ```powershell
