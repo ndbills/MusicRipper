@@ -37,9 +37,18 @@
 
 .NOTES
     Phase 6.6 explicit decision: NO live-reload. The contract is
-    "save and restart". The Configure... button on the between-discs
-    dialog (added in 6.6.C) will surface a "Restart MusicRipper to
-    apply." message after a save.
+    "save and restart". The Save button persists immediately via
+    Save-RipperConfig and shows a toast reminding the user that
+    new settings apply the next time MusicRipper runs.
+
+    Reachable from three entry points:
+      - Start-Ripper.ps1 first-run (when config.json doesn't exist).
+      - Start-Ripper.ps1 no-drive prompt (Phase 6.6.E/F.2 path).
+      - src\tools\Show-RipperConfig.ps1 standalone adapter, fronted
+        by the "MusicRipper - Settings" Start Menu shortcut
+        (F-6 / Phase 8). Safe to launch while the main app is
+        running -- main reads config once at startup; saved edits
+        apply on the next launch. See DECISIONS.md F-6.
 
     The pure-logic predicates (`Test-RipperConfigEditorComplete`,
     `Move-RipperConfigEditorListItem`) are exported so the Pester
@@ -938,6 +947,15 @@ function Show-RipperConfigDialog {
                 Save-RipperConfig -Config $cfg
             }
             $resultBox.Value = $cfg
+            # F-6: nudge the user that this is a save-and-restart
+            # contract. Suppressed in -FirstRun because Start-Ripper
+            # immediately enters the rip flow with the just-saved
+            # config -- there is no "next launch" to wait for.
+            if (-not $FirstRun) {
+                [System.Windows.MessageBox]::Show(
+                    "Settings saved.`n`nNew settings will apply the next time MusicRipper runs.",
+                    'MusicRipper - Settings', 'OK', 'Information') | Out-Null
+            }
             $window.DialogResult = $true
             $window.Close()
         } catch {

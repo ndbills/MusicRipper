@@ -1,11 +1,12 @@
 <#
 .SYNOPSIS
-    Drop "MusicRipper - Rip a CD.lnk" and "MusicRipper - Uninstall.lnk"
-    directly into the per-user Start Menu Programs folder so they
-    show up in Search and the All apps list.
+    Drop "MusicRipper - Rip a CD.lnk", "MusicRipper - Settings.lnk",
+    and "MusicRipper - Uninstall.lnk" directly into the per-user
+    Start Menu Programs folder so they show up in Search and the
+    All apps list.
 
 .DESCRIPTION
-    Per-user, no admin required. Both shortcuts go directly under
+    Per-user, no admin required. All shortcuts go directly under
     %APPDATA%\Microsoft\Windows\Start Menu\Programs\ -- NOT into a
     MusicRipper\ subfolder, because Win11's flat 'All apps' list
     doesn't render Start Menu subfolders the way Win10 did. The
@@ -18,17 +19,22 @@
                          SHLLINK structure), WindowStyle=Minimized.
                          CUETools' SCSI driver needs admin to open
                          the optical drive.
+      - Settings       : F-6 / Phase 8. NO RunAsAdministrator flag
+                         (config edits don't touch the optical drive),
+                         WindowStyle=Minimized so the WPF editor is
+                         the user-visible surface and not the pwsh
+                         console. Targets src\tools\Show-RipperConfig.ps1.
       - Uninstall      : NO RunAsAdministrator flag, WindowStyle=Normal.
                          Uninstall-MusicRipper.ps1 self-elevates AFTER
                          the parent shell prompts; pre-elevating would
                          pop UAC before the friendly "Proceed?" question.
 
-    Idempotent: re-run any time to refresh both shortcuts. Cleans up
+    Idempotent: re-run any time to refresh all shortcuts. Cleans up
     any legacy MusicRipper\ subfolder from older installs.
 
 .NOTES
     Per-user (%APPDATA%, not %ProgramData%) so we don't need admin
-    to create or remove. Uninstall-MusicRipper.ps1 deletes the two
+    to create or remove. Uninstall-MusicRipper.ps1 deletes all three
     shortcuts (and any legacy MusicRipper\ subfolder) when run.
 #>
 
@@ -96,7 +102,29 @@ $bytes[21] = $bytes[21] -bor 0x20
 [System.IO.File]::WriteAllBytes($ripLnk, $bytes)
 Write-Host "Created shortcut: $ripLnk  (will request elevation on launch)" -ForegroundColor Green
 
-# --- 2. "MusicRipper - Uninstall" ---------------------------------------
+# --- 2. "MusicRipper - Settings" (F-6, Phase 8) -------------------------
+# Standalone entry point for the Phase 6.6 WPF config editor so a
+# parent can change LibraryRoot, sync targets, creds, etc. without
+# launching a rip session. NOT elevated -- config edits don't touch
+# the optical drive, and avoiding UAC keeps the parent flow friction-
+# less. WindowStyle=Minimized so the WPF dialog is the user-visible
+# surface, not the pwsh console (same idiom as Rip a CD).
+$settingsScript = Join-Path $repoRoot 'src\tools\Show-RipperConfig.ps1'
+if (-not (Test-Path -LiteralPath $settingsScript -PathType Leaf)) {
+    throw "Show-RipperConfig.ps1 not found at '$settingsScript'."
+}
+$settingsLnk = Join-Path $startMenuRoot 'MusicRipper - Settings.lnk'
+$lnk = $shell.CreateShortcut($settingsLnk)
+$lnk.TargetPath       = $pwsh
+$lnk.Arguments        = "-NoProfile -ExecutionPolicy Bypass -File `"$settingsScript`""
+$lnk.WorkingDirectory = Split-Path -Parent $settingsScript
+$lnk.Description      = 'MusicRipper - edit settings (applies the next time MusicRipper runs)'
+$lnk.IconLocation     = if (Test-Path -LiteralPath $iconPath) { $iconPath } else { "$pwsh,0" }
+$lnk.WindowStyle      = 7
+$lnk.Save()
+Write-Host "Created shortcut: $settingsLnk" -ForegroundColor Green
+
+# --- 3. "MusicRipper - Uninstall" ---------------------------------------
 $uninstallScript = Join-Path $repoRoot 'Uninstall-MusicRipper.ps1'
 if (-not (Test-Path -LiteralPath $uninstallScript -PathType Leaf)) {
     throw "Uninstall-MusicRipper.ps1 not found at '$uninstallScript'."
