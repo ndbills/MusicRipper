@@ -17,9 +17,13 @@
     Provider contract: see Get-CoverArtFromCoverArtArchive.ps1.
 
 .NOTES
-    No API key required. iTunes Search has a soft rate limit of ~20
-    requests/min from a single IP -- well above what a one-disc-at-a-
-    time ripper needs.
+    No API key required. Apple's published soft rate limit is
+    ~20 req/min from a single IP. We enforce a per-process minimum
+    of 1500 ms between iTunes API calls (~40 req/min) -- still well
+    below Apple's burst threshold and invisible during normal
+    rip-one-disc-at-a-time use. The CDN downloads (3000x3000bb.jpg
+    etc.) are not iTunes API calls and are not throttled.
+    See `docs/DECISIONS.md` D-028 for the rationale.
 
     The artworkUrl100 -> artworkUrl{N}x{N} trick is well-documented
     community knowledge:
@@ -37,6 +41,32 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
+
+# Per-process throttle state for the iTunes Search API call this
+# provider issues. Independent from the metadata-provider counter
+# (different file scope); coordinated rate-limiting across both
+# would need a global, and in practice they don't fire concurrently.
+$script:LastItunesCoverArtRequestTicks = 0L
+
+function Wait-RipperItunesCoverArtThrottle {
+<#
+.SYNOPSIS
+    Sleep until at least 1500 ms have elapsed since the previous
+    iTunes Search call from this provider in this process.
+
+.DESCRIPTION
+    Internal helper. See file-level .NOTES + D-028 for rationale.
+#>
+    [CmdletBinding()] param()
+    $minIntervalTicks = [TimeSpan]::FromMilliseconds(1500).Ticks
+    $now = [DateTime]::UtcNow.Ticks
+    $elapsed = $now - $script:LastItunesCoverArtRequestTicks
+    if ($script:LastItunesCoverArtRequestTicks -gt 0 -and $elapsed -lt $minIntervalTicks) {
+        $sleepMs = [int][math]::Ceiling(([double]($minIntervalTicks - $elapsed)) / [TimeSpan]::TicksPerMillisecond)
+        Start-Sleep -Milliseconds $sleepMs
+    }
+    $script:LastItunesCoverArtRequestTicks = [DateTime]::UtcNow.Ticks
+}
 
 function Invoke-ItunesSearchCoverArtProvider {
 <#
@@ -65,6 +95,7 @@ function Invoke-ItunesSearchCoverArtProvider {
     $searchUrl = "https://itunes.apple.com/search?term=$term&entity=album&limit=5"
 
     try {
+        Wait-RipperItunesCoverArtThrottle
         $resp = Invoke-RestMethod -Uri $searchUrl -TimeoutSec 30 -UseBasicParsing
     } catch {
         $msg = "iTunes search failed: $($_.Exception.Message)"

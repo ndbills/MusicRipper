@@ -102,7 +102,9 @@ status), see [docs/THIRD-PARTY.md](docs/THIRD-PARTY.md).
   [Search API terms](https://performance-partners.apple.com/search-api).
 - **How we use it:** Text-search fallback for album metadata
   (`/search?term=...&entity=album`) and high-resolution cover-art lookup.
-  Throttled to comply with Apple's documented soft limit.
+  Per-process throttle of 1500 ms between API calls (~40 req/min); CDN
+  downloads (artworkUrl{N}x{N}.jpg) are not Search API calls and are
+  not throttled. See `docs/DECISIONS.md` D-029 for rationale.
 - **Attribution (per Apple's API ToS):**
   *"Album metadata provided in part by the iTunes Search API, © Apple Inc."*
 - **Bundled:** No (network service).

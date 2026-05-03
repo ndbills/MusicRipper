@@ -1998,3 +1998,55 @@ through.
 
 **Pester:** 522/0/1 unchanged through all the follow-on fixes
 (everything live-tested on real hardware; no test regressions).
+
+---
+
+## D-029 -- iTunes Search API throttle + attribution surfacing (Release prep)
+
+**Choice:** Enforce a per-process minimum of 1500 ms between any two
+iTunes Search API calls (~40 req/min). Apply in both call sites:
+`src/core/metadata/Get-MetadataFromItunesSearch.ps1` (text-search modal)
+and `src/core/coverart/Get-CoverArtFromItunesSearch.ps1` (per-rip cover-
+art fallback). The CDN downloads (artworkUrl{N}x{N}.jpg) are NOT iTunes
+API calls and remain unthrottled. Skip the throttle when a test seam
+is supplied so the suite doesn't drag.
+
+**Why 1500 ms (not the spec-strict 3000 ms = 20 req/min):** Apple's
+published documentation cites a soft limit of 'around 20 calls per
+minute,' but the documented behavior of their rate limiter is
+4xx-blocking on sustained bursts, not per-call. 1500 ms keeps a typical
+text-search round-trip (1 search + 5 lookups) at ~9 seconds end-to-end
+rather than ~18, which materially improves the UX of the 'Search by
+text...' modal a parent might reach when a disc is unidentifiable.
+A single rip's cover-art fallback issues exactly one /search call per
+album, so the throttle is invisible during normal use.
+
+**Attribution.** Apple's Search API ToS requires attribution when album
+metadata is surfaced to end users. We satisfy this in two places:
+  1. `NOTICE.md` carries the verbatim attribution string under the
+     iTunes Search API entry.
+  2. `docs/THIRD-PARTY.md` mirrors it in the structured table.
+MusicRipper is a CLI / WPF tool (no website, no UI banners); the docs-
+level acknowledgement is appropriate for the form factor and matches
+the pattern other CLI tools using the API follow.
+
+**Alternatives considered:**
+  - 3000 ms strict (==20 req/min): spec-conformant but doubles every
+    text-search wall-clock time. Rejected.
+  - 750 ms (~80 req/min): faster, but real risk of triggering Apple's
+    burst limiter on a chatty session. Rejected.
+  - Per-endpoint throttle (e.g. 3000 ms for /search, 1500 ms for
+    /lookup): more code, marginal benefit, kicks the question of
+    per-endpoint policy down the road. Rejected.
+
+**Implementation note.** Each provider file owns its own per-process`r
+`script:LastItunes*RequestTicks` counter rather than sharing a global
+(test-seam isolation, simpler reasoning). The two providers don't fire
+concurrently in practice -- the cover-art chain runs synchronously
+during post-process; the text-search modal blocks the WPF UI thread.
+
+---
+
+## D-030 -- Deezer API ToS investigation (Release prep)
+
+**Status:** Investigation pending (Phase B3 of the release-prep work).

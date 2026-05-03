@@ -24,7 +24,12 @@
         lookup response is the album record itself, songs follow.
 
 .NOTES
-    No API key required. Soft rate limit ~20 req/min from one IP.
+    No API key required. Apple's published soft rate limit is
+    ~20 req/min from a single IP. We enforce a per-process minimum
+    of 1500 ms between calls (~40 req/min) which still sits well
+    inside Apple's burst tolerance and cuts a typical text-search
+    round-trip (1 search + 5 lookups) to ~9 seconds end-to-end.
+    See `docs/DECISIONS.md` D-028 for the rationale.
     Reference: https://performance-partners.apple.com/search-api
 #>
 
@@ -33,6 +38,33 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
+
+# Per-process throttle state for iTunes Search. UTC ticks of the
+# last request issued through Wait-RipperItunesSearchThrottle.
+$script:LastItunesSearchRequestTicks = 0L
+
+function Wait-RipperItunesSearchThrottle {
+<#
+.SYNOPSIS
+    Sleep until at least 1500 ms have elapsed since the previous
+    iTunes Search call from this process.
+
+.DESCRIPTION
+    Internal helper. Apple's documented soft limit is ~20 req/min;
+    1500 ms gap = ~40 req/min, still well below the burst threshold
+    we've observed in practice but fast enough to keep the text-
+    search modal responsive. See D-028 for the trade-off.
+#>
+    [CmdletBinding()] param()
+    $minIntervalTicks = [TimeSpan]::FromMilliseconds(1500).Ticks
+    $now = [DateTime]::UtcNow.Ticks
+    $elapsed = $now - $script:LastItunesSearchRequestTicks
+    if ($script:LastItunesSearchRequestTicks -gt 0 -and $elapsed -lt $minIntervalTicks) {
+        $sleepMs = [int][math]::Ceiling(([double]($minIntervalTicks - $elapsed)) / [TimeSpan]::TicksPerMillisecond)
+        Start-Sleep -Milliseconds $sleepMs
+    }
+    $script:LastItunesSearchRequestTicks = [DateTime]::UtcNow.Ticks
+}
 
 function ConvertFrom-ItunesAlbumLookup {
 <#
@@ -209,6 +241,9 @@ function Invoke-ItunesSearchTextSearchProvider {
     $term = [System.Uri]::EscapeDataString(("$Artist $Album").Trim())
     $searchUrl = "https://itunes.apple.com/search?term=$term&entity=album&limit=$Limit"
 
+    # Throttle real HTTP calls. When a test seam is supplied, skip
+    # the sleep so the suite doesn't drag.
+    $useTestSeam = [bool]$InvokeWebRequest
     $invoke = if ($InvokeWebRequest) { $InvokeWebRequest } else {
         { param($Url) Invoke-RestMethod -Uri $Url -TimeoutSec 30 -UseBasicParsing }
     }
@@ -216,6 +251,7 @@ function Invoke-ItunesSearchTextSearchProvider {
     Write-RipperLog INFO 'iTunesSearch' "Text search: '$Artist' / '$Album'"
 
     try {
+        if (-not $useTestSeam) { Wait-RipperItunesSearchThrottle }
         $searchResp = & $invoke -Url $searchUrl
     } catch {
         $msg = "iTunes search failed: $($_.Exception.Message)"
@@ -242,6 +278,7 @@ function Invoke-ItunesSearchTextSearchProvider {
         if (-not $h.PSObject.Properties['collectionId'] -or -not $h.collectionId) { continue }
         $detailUrl = "https://itunes.apple.com/lookup?id=$($h.collectionId)&entity=song"
         try {
+            if (-not $useTestSeam) { Wait-RipperItunesSearchThrottle }
             $detail = & $invoke -Url $detailUrl
             ConvertFrom-ItunesAlbumLookup -Response $detail
         } catch {
