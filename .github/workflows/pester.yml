@@ -1,0 +1,81 @@
+name: Pester
+
+# Runs the Pester test suite on every push to main + every pull request.
+# Mirrors the local invocation `Invoke-Pester ./tests` that contributors
+# use, with NUnit XML output uploaded as a workflow artifact so a failed
+# CI run is debuggable without re-running locally.
+#
+# Why windows-latest: MusicRipper is Windows-only -- it shells out to
+# CUETools / metaflac / robocopy / WireGuard, uses Win32 MCI for tray
+# control, drives WPF dialogs, and reads HKCU registry keys for OneDrive
+# discovery. Running on ubuntu-latest would skip 90% of the suite.
+#
+# Why pwsh as the default shell: PowerShell 7+ is a hard requirement
+# (Set-StrictMode -Version 3.0, ternary operator, ?. operators).
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pester-tests:
+    name: Pester (Windows + PowerShell 7)
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Print PowerShell + OS version
+        run: |
+          $PSVersionTable | Format-List
+          [System.Environment]::OSVersion | Format-List
+
+      - name: Install Pester 5.x
+        run: |
+          # SkipPublisherCheck because Pester ships under a different signing
+          # identity than the version pre-bundled with Windows PowerShell.
+          # MinimumVersion 5.0 picks up whatever the latest 5.x is on the
+          # PowerShell Gallery -- our test files declare
+          # `#requires -Modules @{ ModuleName='Pester'; ModuleVersion='5.0.0' }`.
+          Install-Module Pester -MinimumVersion 5.0 -Force -SkipPublisherCheck -Scope CurrentUser
+          Get-Module Pester -ListAvailable |
+              Sort-Object Version -Descending |
+              Select-Object -First 1 |
+              Format-Table Name, Version
+
+      - name: Run Pester
+        run: |
+          # Use the config-object form so we can ask for both NUnit XML
+          # (for the CI artifact) AND the human-readable Detailed output
+          # in one pass.
+          $cfg                            = New-PesterConfiguration
+          $cfg.Run.Path                   = './tests'
+          $cfg.Run.Throw                  = $true
+          $cfg.Run.PassThru               = $true
+          $cfg.Output.Verbosity           = 'Detailed'
+          $cfg.TestResult.Enabled         = $true
+          $cfg.TestResult.OutputFormat    = 'NUnitXml'
+          $cfg.TestResult.OutputPath      = 'testResults.xml'
+          Invoke-Pester -Configuration $cfg
+
+      - name: Upload test results
+        # Run even when Pester fails so the artifact is available for
+        # post-mortem on a red CI run.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pester-test-results
+          path: testResults.xml
+          if-no-files-found: warn
