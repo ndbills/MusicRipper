@@ -77,14 +77,18 @@ function Test-RipperConfigEditorComplete {
     in-progress config? Pulled out so tests don't need a Window.
 
 .DESCRIPTION
-    -FirstRun       LibraryRoot + a non-empty MusicBrainz contact
-                    address (email or URL) + at least one sync target
-                    selected. These are the irreducible requirements
-                    for the rest of the pipeline to even function.
-    Otherwise       LibraryRoot only. (We let an existing user
-                    temporarily blank out MB or sync targets to
-                    experiment -- they already proved they could
-                    finish setup once.)
+    -FirstRun       LibraryRoot + non-empty MusicBrainz contact
+                    address (email or URL) + at least one sync
+                    target selected. These are the irreducible
+                    requirements for the rest of the pipeline to
+                    even function.
+    Otherwise       LibraryRoot + non-empty MusicBrainz contact
+                    address. (We let an existing user temporarily
+                    blank out sync targets to experiment, but the
+                    contact address is required by MusicBrainz on
+                    every metadata call -- erasing it would silently
+                    break disc identification on the very next rip,
+                    so the editor refuses to save it blank.)
 #>
     [CmdletBinding()]
     [OutputType([bool])]
@@ -109,12 +113,15 @@ function Test-RipperConfigEditorComplete {
         if (-not $unc -or ([string]$unc).Trim().Length -eq 0) { return $false }
     }
 
-    if (-not $FirstRun) { return $true }
-
-    # First-run-only checks below.
+    # MusicBrainz contact address is required in both modes -- MB / CTDB /
+    # GnuDB all need it on every metadata call, so a blank value would
+    # silently break disc identification on the very next rip.
     $contact = if ($Config.PSObject.Properties['contactAddress']) { [string]$Config.contactAddress } else { '' }
     if ([string]::IsNullOrWhiteSpace($contact)) { return $false }
 
+    if (-not $FirstRun) { return $true }
+
+    # First-run-only checks below.
     $st = $Config.SyncTargets
     if (-not $st -or @($st).Count -eq 0) { return $false }
     return $true
@@ -891,6 +898,10 @@ function Show-RipperConfigDialog {
         } else {
             $bits = New-Object System.Collections.Generic.List[string]
             if (-not $cfg.LibraryRoot) { $bits.Add('Library root is required.') }
+            $contactVal2 = if ($cfg.PSObject.Properties['contactAddress']) { [string]$cfg.contactAddress } else { '' }
+            if ([string]::IsNullOrWhiteSpace($contactVal2)) {
+                $bits.Add('MusicBrainz contact (email or URL) is required -- needed on every metadata call.')
+            }
             if (@($cfg.SyncTargets) -contains 'OneDrive' -and
                 (-not $cfg.OneDriveSyncTargetRoot -or
                  ([string]$cfg.OneDriveSyncTargetRoot).Trim().Length -eq 0)) {

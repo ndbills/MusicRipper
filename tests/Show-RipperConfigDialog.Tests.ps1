@@ -36,10 +36,10 @@ BeforeAll {
 
 Describe 'Test-RipperConfigEditorComplete' {
     Context 'non-FirstRun' {
-        It 'requires only LibraryRoot' {
+        It 'requires LibraryRoot AND a non-empty contactAddress' {
             $cfg = [pscustomobject]@{
                 LibraryRoot          = 'C:\Music'
-                contactAddress       = $null
+                contactAddress       = 'me@example.com'
                 SyncTargets          = @()
             }
             (Test-RipperConfigEditorComplete -Config $cfg) | Should -BeTrue
@@ -48,6 +48,22 @@ Describe 'Test-RipperConfigEditorComplete' {
             $cfg = [pscustomobject]@{
                 LibraryRoot          = '   '
                 contactAddress       = 'me@example.com'
+                SyncTargets          = @('Stub')
+            }
+            (Test-RipperConfigEditorComplete -Config $cfg) | Should -BeFalse
+        }
+        It 'rejects a blank contactAddress (required by MB on every metadata call)' {
+            $cfg = [pscustomobject]@{
+                LibraryRoot          = 'C:\Music'
+                contactAddress       = $null
+                SyncTargets          = @('Stub')
+            }
+            (Test-RipperConfigEditorComplete -Config $cfg) | Should -BeFalse
+        }
+        It 'rejects a whitespace-only contactAddress' {
+            $cfg = [pscustomobject]@{
+                LibraryRoot          = 'C:\Music'
+                contactAddress       = '   '
                 SyncTargets          = @('Stub')
             }
             (Test-RipperConfigEditorComplete -Config $cfg) | Should -BeFalse
