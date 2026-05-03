@@ -374,9 +374,10 @@ winning conflicts while GnuDB fills the tail.
 
 **Rate-limit discipline:** GnuDB requires a distinct
 `hello=email+host+app+version` on every request or they collapse
-generic clients into one shared quota. We reuse
-`cfg.MusicBrainzUserAgent` (which already has the user's email in
-`( ... )`) and identify as `musicripper/0.1`. One query + up to 3
+generic clients into one shared quota. We pass `cfg.contactAddress`
+directly (an email is what the GnuDB hello= contract really wants;
+URL forms still get accepted but won't satisfy the spirit of the
+policy) and identify as `musicripper/<version>`. One query + up to 3
 reads per disc is well under the per-user quota.
 
 **Client-side filter:** `ConvertFrom-XmcdEntry` returns `$null` for

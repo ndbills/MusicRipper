@@ -217,14 +217,15 @@ function Get-RipperDiscMetadata {
                 Invoke-MusicBrainzMetadataProvider -DiscIdInfo $DiscIdInfo -PreferredCountry $PreferredCountry
             }
             'CuetoolsDb' {
-                # Pull a UA out of config for the CTDB request. Falls back
-                # to the provider's own default when config is unreadable.
+                # Pull contactAddress out of config and compose the UA
+                # for the CTDB request. Falls back to the provider's
+                # own self-describing default when config is unreadable.
                 $ua = $null
                 try {
                     Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1') -Force
                     $cfgLocal = Import-RipperConfig
-                    if ($cfgLocal.PSObject.Properties['MusicBrainzUserAgent'] -and $cfgLocal.MusicBrainzUserAgent) {
-                        $ua = [string]$cfgLocal.MusicBrainzUserAgent
+                    if ($cfgLocal.PSObject.Properties['contactAddress'] -and $cfgLocal.contactAddress) {
+                        $ua = "MusicRipper/$(Get-RipperVersion) ( $([string]$cfgLocal.contactAddress) )"
                     }
                 } catch { }
                 if ($ua) {
@@ -234,19 +235,20 @@ function Get-RipperDiscMetadata {
                 }
             }
             'GnuDb' {
-                # GnuDB reuses the same MB-shaped UA for its hello= field
-                # (the email in the parens is what actually matters to GnuDB's
-                # rate-limiter). Same cfg-lookup + fallback pattern as CTDB.
-                $ua = $null
+                # GnuDB takes the contact address directly for its hello=
+                # parameter (it ultimately wants an email, but accepts
+                # whatever the user supplied). Same cfg-lookup pattern
+                # as CTDB above.
+                $contact = $null
                 try {
                     Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1') -Force
                     $cfgLocal = Import-RipperConfig
-                    if ($cfgLocal.PSObject.Properties['MusicBrainzUserAgent'] -and $cfgLocal.MusicBrainzUserAgent) {
-                        $ua = [string]$cfgLocal.MusicBrainzUserAgent
+                    if ($cfgLocal.PSObject.Properties['contactAddress'] -and $cfgLocal.contactAddress) {
+                        $contact = [string]$cfgLocal.contactAddress
                     }
                 } catch { }
-                if ($ua) {
-                    Invoke-GnuDbMetadataProvider -DiscIdInfo $DiscIdInfo -UserAgent $ua
+                if ($contact) {
+                    Invoke-GnuDbMetadataProvider -DiscIdInfo $DiscIdInfo -ContactAddress $contact
                 } else {
                     Invoke-GnuDbMetadataProvider -DiscIdInfo $DiscIdInfo
                 }

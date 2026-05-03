@@ -39,9 +39,9 @@
           6-arg form keeps the call shape parallel to Invoke-Rip.
 
 .NOTES
-    The user-agent string sent to CTDB reuses cfg.MusicBrainzUserAgent.
-    CTDB is more relaxed about UA format than MB but a contact email is
-    still polite.
+    The user-agent string sent to CTDB is composed by the orchestrator
+    from cfg.contactAddress + Get-RipperVersion. CTDB is more relaxed
+    about UA format than MusicBrainz but a contact email is still polite.
 #>
 
 Set-StrictMode -Version 3.0
@@ -247,10 +247,11 @@ function Invoke-CuetoolsDbMetadataProvider {
 .PARAMETER UserAgent
     The UA string to identify this client to db.cuetools.net. Defaults
     to a self-describing value when not supplied; production callers
-    pass cfg.MusicBrainzUserAgent.
+    pass a composed 'MusicRipper/<version> ( <contactAddress> )' string
+    built from cfg.contactAddress + Get-RipperVersion.
 
 .EXAMPLE
-    PS> $resp = Invoke-CuetoolsDbMetadataProvider -DiscIdInfo $disc -UserAgent $cfg.MusicBrainzUserAgent
+    PS> $resp = Invoke-CuetoolsDbMetadataProvider -DiscIdInfo $disc -UserAgent "MusicRipper/$(Get-RipperVersion) ( $($cfg.contactAddress) )"
     PS> $resp.Status
     Match
 #>

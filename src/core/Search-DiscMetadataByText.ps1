@@ -222,7 +222,22 @@ function Search-RipperMetadataByText {
                 Invoke-DeezerTextSearchProvider -Artist $Artist -Album $Album -Year $Year
             }
             'GnuDb' {
-                Invoke-GnuDbTextSearchProvider -Artist $Artist -Album $Album -Year $Year
+                # Pull contactAddress from cfg so GnuDB's hello= identifies us
+                # properly. Falls back to the provider's own self-describing
+                # default if config is unreadable.
+                $contact = $null
+                try {
+                    Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1') -Force
+                    $cfgLocal = Import-RipperConfig
+                    if ($cfgLocal.PSObject.Properties['contactAddress'] -and $cfgLocal.contactAddress) {
+                        $contact = [string]$cfgLocal.contactAddress
+                    }
+                } catch { }
+                if ($contact) {
+                    Invoke-GnuDbTextSearchProvider -Artist $Artist -Album $Album -Year $Year -ContactAddress $contact
+                } else {
+                    Invoke-GnuDbTextSearchProvider -Artist $Artist -Album $Album -Year $Year
+                }
             }
             default {
                 Write-RipperLog WARN 'Search-DiscMetadataByText' "Unknown text-search provider '$name'; skipping."

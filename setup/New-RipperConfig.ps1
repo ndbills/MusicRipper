@@ -125,7 +125,7 @@ if ($existing) {
     Write-Host ""
     Write-Host "Existing config found at $configPath" -ForegroundColor Cyan
     Write-Host "  LibraryRoot           : $($existing.LibraryRoot)"
-    Write-Host "  MusicBrainzUserAgent  : $($existing.MusicBrainzUserAgent)"
+    Write-Host "  contactAddress        : $(if ($existing.PSObject.Properties['contactAddress']) { $existing.contactAddress } else { '(missing -- will prompt below)' })"
     Write-Host "  OneDriveSyncTargetRoot: $($existing.OneDriveSyncTargetRoot)"
     Write-Host "  SynologyUnc           : $($existing.SynologyUnc)"
     Write-Host "  DriveLetter / Offset  : $($existing.DriveLetter) / $($existing.DriveOffset)"
@@ -219,12 +219,18 @@ if (-not (Test-Path -LiteralPath $libraryRoot)) {
     Write-RipperLog INFO 'New-RipperConfig' "Created library root '$libraryRoot'."
 }
 
-# --- MusicBrainz UA / contact email ---------------------------------------
+# --- MusicBrainz contact address (required by their ToS) ------------------
 Write-RipperConfigSection 'MusicBrainz contact (required by their ToS)'
-$defaultUa = if ($existing) { $existing.MusicBrainzUserAgent } else { 'MusicRipper/0.1 ( unknown@example.com )' }
-$email = Read-WithDefault -Prompt 'MusicBrainz contact email' `
-                          -Default ($defaultUa -replace '.*\(\s*', '' -replace '\s*\).*', '')
-$ua = "MusicRipper/0.1 ( $email )"
+Write-Host 'MusicBrainz requires a contact address per their API terms' -ForegroundColor DarkGray
+Write-Host '(https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting). It is sent only with' -ForegroundColor DarkGray
+Write-Host 'requests to musicbrainz.org and stays on your machine in `config.json`.' -ForegroundColor DarkGray
+Write-Host 'An email address or a URL (e.g., your GitHub profile) both work.' -ForegroundColor DarkGray
+$defaultContact = if ($existing -and $existing.PSObject.Properties['contactAddress']) { [string]$existing.contactAddress } else { '' }
+$contactAddress = Read-WithDefault -Prompt 'MusicBrainz contact address (email or URL)' `
+                                   -Default $defaultContact
+if ([string]::IsNullOrWhiteSpace($contactAddress)) {
+    throw 'MusicBrainz contact address is required (email or URL).'
+}
 
 # --- OneDrive (optional, Phase 6.2) --------------------------------------
 # Stores cfg.OneDriveSyncTargetRoot. Read-RipperPathPrompt opens a
@@ -514,7 +520,7 @@ $cfg = New-RipperConfigObject `
     -OneDriveSyncTargetRoot $oneDrive `
     -SynologyUnc   $syn
 
-$cfg.MusicBrainzUserAgent  = $ua
+$cfg.contactAddress        = $contactAddress
 $cfg.HasSynologyCredential = $hasCred
 $cfg.MetadataProviders     = $metadataProviders
 $cfg.CoverArtProviders     = $coverArtProviders

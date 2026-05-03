@@ -439,4 +439,4 @@ function Set-RipperWindowIcon {
     }
 }
 
-Export-ModuleMember -Function ConvertTo-SafeWindowsPathSegment, Get-RipperRepoRoot, Get-CueToolsPath, Get-MetaflacPath, Test-RipperDependencies, Get-RipperAssetPath, Set-RipperWindowIcon
+Export-ModuleMember -Function ConvertTo-SafeWindowsPathSegment, Get-RipperRepoRoot, Get-CueToolsPath, Get-MetaflacPath, Test-RipperDependencies, Get-RipperAssetPath, Set-RipperWindowIcon, Get-RipperVersion

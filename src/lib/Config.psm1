@@ -131,9 +131,16 @@ function New-RipperConfigObject {
         DriveLetter             = $DriveLetter
         DriveOffset             = $DriveOffset
 
-        # MusicBrainz identification — required by their ToS so they can contact
-        # us about misbehaving clients. Filled in New-RipperConfig.ps1.
-        MusicBrainzUserAgent    = 'MusicRipper/0.1 ( unknown@example.com )'
+        # MusicBrainz contact address -- email or URL. Required by the
+        # MusicBrainz API terms of service so they can reach out about
+        # misbehaving clients (e.g. a stuck retry loop hammering their
+        # endpoint). Sent ONLY in the User-Agent header on requests to
+        # musicbrainz.org / db.cuetools.net / gnudb.org and never
+        # leaves the machine otherwise. Empty by default; first-run
+        # WPF dialog (or setup/New-RipperConfig.ps1) prompts for it.
+        # Either an email (you@example.com) or a URL (e.g. your GitHub
+        # profile) is acceptable per MusicBrainz policy.
+        contactAddress          = ''
 
         # Optional post-processor targets. Empty/null = disabled.
         OneDriveSyncTargetRoot  = $OneDriveSyncTargetRoot

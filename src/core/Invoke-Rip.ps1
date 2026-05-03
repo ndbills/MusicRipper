@@ -301,8 +301,11 @@ function Invoke-RipperRip {
                 # ctor + Init. Calling the 6-arg overload with a $null
                 # server raises "Invalid URI: The hostname could not
                 # be parsed."
-                $ua = [string]$cfg.MusicBrainzUserAgent
-                if (-not $ua) { throw 'config.json missing MusicBrainzUserAgent.' }
+                $contact = if ($cfg.PSObject.Properties['contactAddress']) { [string]$cfg.contactAddress } else { '' }
+                if ([string]::IsNullOrWhiteSpace($contact)) {
+                    throw "config.json missing 'contactAddress'. Open Settings and fill in the MusicBrainz contact field."
+                }
+                $ua = "MusicRipper/$(Get-RipperVersion) ( $contact )"
                 $ctdb.ContactDB('db.cuetools.net', $ua, [string]$reader.EACName, $true, $true, 0) | Out-Null
                 Write-RipperLog INFO 'Invoke-Rip' "CTDB contact: $($ctdb.DBStatus)"
             } catch {
