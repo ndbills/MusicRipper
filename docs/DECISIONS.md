@@ -2049,4 +2049,69 @@ during post-process; the text-search modal blocks the WPF UI thread.
 
 ## D-030 -- Deezer API ToS investigation (Release prep)
 
-**Status:** Investigation pending (Phase B3 of the release-prep work).
+**Status:** Investigation complete; no code changes this round.
+**Verdict:** Compliant for MusicRipper's documented use case
+(personal/family CD ripping, MIT-licensed, no monetization).
+
+**ToU snapshot reviewed:** developers.deezer.com/termsofuse, Dec 2024
+capture via web.archive.org (Deezer's live site renders client-side
+and resists static fetch).
+
+**Endpoints exercised** (all unauthenticated public reads, no API key):
+  - `GET https://api.deezer.com/search/album?q=...` -- both the
+    metadata text-search fallback (`Get-MetadataFromDeezer.ps1`) and
+    the cover-art fallback (`Get-CoverArtFromDeezer.ps1`).
+  - `GET https://api.deezer.com/album/{id}` -- per-hit detail fetch
+    during text search.
+  - `GET <cover_xl URL>` -- direct CDN download (not an API call).
+
+**Volume per rip:**
+  - Cover-art: 0-1 `/search/album` calls + 0-1 image download (only
+    fires if CAA + iTunes both come back empty).
+  - Metadata text-search: only fires on the no-match modal's
+    explicit "Search" click; 1 + N detail calls (N=DetailLimit, default 5).
+
+**Critical clauses:**
+
+  1. **Section IV -- Non-commercial / family scope** is the load-
+     bearing one. *"The use of the Content is limited to a strictly
+     private use within a family scope."* That maps cleanly to
+     MusicRipper's stated mission ("family music-digitization
+     project" per README). MIT-licensed open source with no
+     monetization satisfies the non-commercial environment language.
+
+  2. **Section VII -- IP** declares cover-art images as Deezer's
+     property. The Section IV carve-out is the legal basis for
+     embedding them in the user's local FLAC files. **A user
+     repurposing MusicRipper for paid work (DJ catalog / music-
+     licensing prep / commercial archive) would NOT be covered.**
+     Surfaced this caveat in NOTICE.md + THIRD-PARTY.md.
+
+  3. **Auth.** Deezer's ToU formally requires Developer-account
+     acceptance, but the listed endpoints are served openly. We
+     don't bypass any auth check, so we're operating within the
+     access controls Deezer themselves chose to publish.
+
+  4. **No explicit attribution clause** (vs. Apple's Search API
+     ToS which requires the verbatim "Album metadata provided in
+     part by..." line). NOTICE.md still acknowledges Deezer because
+     it's polite + matches the pattern for every other dep.
+
+  5. **No documented rate limit in the ToU.** The "50 req/sec/IP"
+     figure baked into the existing code comment is community lore;
+     not a ToU obligation.
+
+**Followups parked (not in this round):**
+  - Set an identifying `User-Agent` on Deezer requests (parallel to
+    MB / CTDB / GnuDB). Pure good-citizenship; no compliance gain.
+  - Surface the non-commercial caveat in user-facing docs (README /
+    SETUP / TROUBLESHOOTING) so a future user with a commercial use
+    case understands they should disable the Deezer provider.
+  - Honor 50 req/sec/IP with an explicit throttle if a future
+    feature (e.g. batch re-tag) changes call patterns.
+
+**Why no code changes this round:** the spec is explicit ("Do not
+change code, config, or NOTICE wording for Deezer in this round,
+regardless of the finding"). The caveat surfacing is a doc change
+only, which the spec does want.
+

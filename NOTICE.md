@@ -114,9 +114,13 @@ status), see [docs/THIRD-PARTY.md](docs/THIRD-PARTY.md).
 
 - **Author:** © Deezer
 - **License:** Usage subject to Deezer's
-  [API terms](https://developers.deezer.com/api).
+  [API terms](https://developers.deezer.com/termsofuse). Use of Deezer's
+  Content is limited by Section IV of those terms to *"a strictly
+  private use within a family scope"* and is **non-commercial only**.
 - **How we use it:** Text-search fallback for album metadata
   (`/search/album`, `/album/{id}`) and cover-art (`cover_xl`,
-  `cover_big`). Public unauthenticated read endpoints.
+  `cover_big`). Public unauthenticated read endpoints. See
+  `docs/THIRD-PARTY.md` for the compliance investigation summary
+  and `docs/DECISIONS.md` D-030 for the decision rationale.
 - **Bundled:** No (network service).
 - **Project:** <https://developers.deezer.com/api>
