@@ -21,12 +21,12 @@ BeforeAll {
         # The minimum field set required by Test-RipperConfigEditorComplete.
         param(
             [string]$LibraryRoot                = 'C:\Music',
-            [string]$Email                      = 'me@example.com',
+            [string]$ContactAddress             = 'me@example.com',
             [string[]]$SyncTargets              = @('Stub')
         )
         [pscustomobject]@{
             LibraryRoot             = $LibraryRoot
-            MusicBrainzUserAgent    = "MusicRipper/0.1 ( $Email )"
+            contactAddress          = $ContactAddress
             SyncTargets             = $SyncTargets
             OneDriveSyncTargetRoot  = $null
             SynologyUnc             = $null
@@ -36,10 +36,10 @@ BeforeAll {
 
 Describe 'Test-RipperConfigEditorComplete' {
     Context 'non-FirstRun' {
-        It 'requires only LibraryRoot' {
+        It 'requires LibraryRoot AND a non-empty contactAddress' {
             $cfg = [pscustomobject]@{
                 LibraryRoot          = 'C:\Music'
-                MusicBrainzUserAgent = $null
+                contactAddress       = 'me@example.com'
                 SyncTargets          = @()
             }
             (Test-RipperConfigEditorComplete -Config $cfg) | Should -BeTrue
@@ -47,7 +47,23 @@ Describe 'Test-RipperConfigEditorComplete' {
         It 'rejects a blank LibraryRoot' {
             $cfg = [pscustomobject]@{
                 LibraryRoot          = '   '
-                MusicBrainzUserAgent = 'MusicRipper/0.1 ( me@example.com )'
+                contactAddress       = 'me@example.com'
+                SyncTargets          = @('Stub')
+            }
+            (Test-RipperConfigEditorComplete -Config $cfg) | Should -BeFalse
+        }
+        It 'rejects a blank contactAddress (required by MB on every metadata call)' {
+            $cfg = [pscustomobject]@{
+                LibraryRoot          = 'C:\Music'
+                contactAddress       = $null
+                SyncTargets          = @('Stub')
+            }
+            (Test-RipperConfigEditorComplete -Config $cfg) | Should -BeFalse
+        }
+        It 'rejects a whitespace-only contactAddress' {
+            $cfg = [pscustomobject]@{
+                LibraryRoot          = 'C:\Music'
+                contactAddress       = '   '
                 SyncTargets          = @('Stub')
             }
             (Test-RipperConfigEditorComplete -Config $cfg) | Should -BeFalse
@@ -55,20 +71,20 @@ Describe 'Test-RipperConfigEditorComplete' {
     }
 
     Context 'FirstRun' {
-        It 'accepts a fully-populated config' {
+        It 'accepts a fully-populated config (email contact)' {
             $cfg = New-MinimalCfg
             (Test-RipperConfigEditorComplete -Config $cfg -FirstRun) | Should -BeTrue
         }
-        It 'rejects the placeholder unknown@example.com email' {
-            $cfg = New-MinimalCfg -Email 'unknown@example.com'
+        It 'accepts a URL contact address (e.g. GitHub profile)' {
+            $cfg = New-MinimalCfg -ContactAddress 'https://github.com/example'
+            (Test-RipperConfigEditorComplete -Config $cfg -FirstRun) | Should -BeTrue
+        }
+        It 'rejects an empty contactAddress' {
+            $cfg = New-MinimalCfg -ContactAddress ''
             (Test-RipperConfigEditorComplete -Config $cfg -FirstRun) | Should -BeFalse
         }
-        It 'rejects a UA missing the email parens' {
-            $cfg = [pscustomobject]@{
-                LibraryRoot          = 'C:\Music'
-                MusicBrainzUserAgent = 'MusicRipper/0.1 me@example.com'
-                SyncTargets          = @('Stub')
-            }
+        It 'rejects a whitespace-only contactAddress' {
+            $cfg = New-MinimalCfg -ContactAddress '   '
             (Test-RipperConfigEditorComplete -Config $cfg -FirstRun) | Should -BeFalse
         }
         It 'rejects an empty SyncTargets list' {

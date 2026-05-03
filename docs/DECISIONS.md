@@ -374,9 +374,10 @@ winning conflicts while GnuDB fills the tail.
 
 **Rate-limit discipline:** GnuDB requires a distinct
 `hello=email+host+app+version` on every request or they collapse
-generic clients into one shared quota. We reuse
-`cfg.MusicBrainzUserAgent` (which already has the user's email in
-`( ... )`) and identify as `musicripper/0.1`. One query + up to 3
+generic clients into one shared quota. We pass `cfg.contactAddress`
+directly (an email is what the GnuDB hello= contract really wants;
+URL forms still get accepted but won't satisfy the spirit of the
+policy) and identify as `musicripper/<version>`. One query + up to 3
 reads per disc is well under the per-user quota.
 
 **Client-side filter:** `ConvertFrom-XmcdEntry` returns `$null` for
@@ -1997,3 +1998,127 @@ through.
 
 **Pester:** 522/0/1 unchanged through all the follow-on fixes
 (everything live-tested on real hardware; no test regressions).
+
+---
+
+## D-029 -- iTunes Search API throttle + attribution surfacing (Release prep)
+
+**Choice:** Enforce a per-process minimum of 1500 ms between any two
+iTunes Search API calls (~40 req/min). Apply in both call sites:
+`src/core/metadata/Get-MetadataFromItunesSearch.ps1` (text-search modal)
+and `src/core/coverart/Get-CoverArtFromItunesSearch.ps1` (per-rip cover-
+art fallback). The CDN downloads (artworkUrl{N}x{N}.jpg) are NOT iTunes
+API calls and remain unthrottled. Skip the throttle when a test seam
+is supplied so the suite doesn't drag.
+
+**Why 1500 ms (not the spec-strict 3000 ms = 20 req/min):** Apple's
+published documentation cites a soft limit of 'around 20 calls per
+minute,' but the documented behavior of their rate limiter is
+4xx-blocking on sustained bursts, not per-call. 1500 ms keeps a typical
+text-search round-trip (1 search + 5 lookups) at ~9 seconds end-to-end
+rather than ~18, which materially improves the UX of the 'Search by
+text...' modal a parent might reach when a disc is unidentifiable.
+A single rip's cover-art fallback issues exactly one /search call per
+album, so the throttle is invisible during normal use.
+
+**Attribution.** Apple's Search API ToS requires attribution when album
+metadata is surfaced to end users. We satisfy this in two places:
+  1. `NOTICE.md` carries the verbatim attribution string under the
+     iTunes Search API entry.
+  2. `docs/THIRD-PARTY.md` mirrors it in the structured table.
+MusicRipper is a CLI / WPF tool (no website, no UI banners); the docs-
+level acknowledgement is appropriate for the form factor and matches
+the pattern other CLI tools using the API follow.
+
+**Alternatives considered:**
+  - 3000 ms strict (==20 req/min): spec-conformant but doubles every
+    text-search wall-clock time. Rejected.
+  - 750 ms (~80 req/min): faster, but real risk of triggering Apple's
+    burst limiter on a chatty session. Rejected.
+  - Per-endpoint throttle (e.g. 3000 ms for /search, 1500 ms for
+    /lookup): more code, marginal benefit, kicks the question of
+    per-endpoint policy down the road. Rejected.
+
+**Implementation note.** Each provider file owns its own per-process`r
+`script:LastItunes*RequestTicks` counter rather than sharing a global
+(test-seam isolation, simpler reasoning). The two providers don't fire
+concurrently in practice -- the cover-art chain runs synchronously
+during post-process; the text-search modal blocks the WPF UI thread.
+
+---
+
+## D-030 -- Deezer API ToS investigation (Release prep)
+
+**Status:** Investigation complete; no code changes this round.
+**Verdict:** Compliant for MusicRipper's documented use case
+(personal/family CD ripping, MIT-licensed, no monetization).
+
+**ToU snapshot reviewed:** developers.deezer.com/termsofuse, Dec 2024
+capture via web.archive.org (Deezer's live site renders client-side
+and resists static fetch).
+
+**Endpoints exercised** (all unauthenticated public reads, no API key):
+  - `GET https://api.deezer.com/search/album?q=...` -- both the
+    metadata text-search fallback (`Get-MetadataFromDeezer.ps1`) and
+    the cover-art fallback (`Get-CoverArtFromDeezer.ps1`).
+  - `GET https://api.deezer.com/album/{id}` -- per-hit detail fetch
+    during text search.
+  - `GET <cover_xl URL>` -- direct CDN download (not an API call).
+
+**Volume per rip:**
+  - Cover-art: 0-1 `/search/album` calls + 0-1 image download (only
+    fires if CAA + iTunes both come back empty).
+  - Metadata text-search: only fires on the no-match modal's
+    explicit "Search" click; 1 + N detail calls (N=DetailLimit, default 5).
+
+**Critical clauses:**
+
+  1. **Section IV -- Non-commercial / family scope** is the load-
+     bearing one. *"The use of the Content is limited to a strictly
+     private use within a family scope."* That maps cleanly to
+     MusicRipper's stated mission ("family music-digitization
+     project" per README). MIT-licensed open source with no
+     monetization satisfies the non-commercial environment language.
+
+  2. **Section VII -- IP** declares cover-art images as Deezer's
+     property. The Section IV carve-out is the legal basis for
+     embedding them in the user's local FLAC files. **A user
+     repurposing MusicRipper for paid work (DJ catalog / music-
+     licensing prep / commercial archive) would NOT be covered.**
+     Surfaced this caveat in NOTICE.md + THIRD-PARTY.md.
+
+  3. **Auth.** Deezer's ToU formally requires Developer-account
+     acceptance, but the listed endpoints are served openly. We
+     don't bypass any auth check, so we're operating within the
+     access controls Deezer themselves chose to publish.
+
+  4. **No explicit attribution clause** (vs. Apple's Search API
+     ToS which requires the verbatim "Album metadata provided in
+     part by..." line). NOTICE.md still acknowledges Deezer because
+     it's polite + matches the pattern for every other dep.
+
+  5. **No documented rate limit in the ToU.** The "50 req/sec/IP"
+     figure baked into the existing code comment is community lore;
+     not a ToU obligation.
+
+**Followups parked (not in this round):**
+  - Set an identifying `User-Agent` on Deezer requests (parallel to
+    MB / CTDB / GnuDB). Pure good-citizenship; no compliance gain.
+    **Done in B3 follow-up commit** -- both Deezer providers now send
+    `MusicRipper/<version> ( <contactAddress> )` (or plain version-
+    only when no contact configured).
+  - Surface the non-commercial caveat in user-facing docs (README /
+    SETUP / TROUBLESHOOTING) so a future user with a commercial use
+    case understands they should disable the Deezer provider.
+    **Done in B3 follow-up commit.**
+  - Honor 50 req/sec/IP with an explicit throttle if a future
+    feature (e.g. batch re-tag) changes call patterns.
+    **Done in B3 follow-up commit** -- 25 ms gap (~40 req/sec) on
+    both Deezer providers, parallel to D-029's iTunes pattern.
+    Test-seam aware: skipped when `-InvokeWebRequest` is supplied.
+
+**Why no code changes this round:** the spec is explicit ("Do not
+change code, config, or NOTICE wording for Deezer in this round,
+regardless of the finding"). The caveat surfacing is a doc change
+only, which the spec does want.
+

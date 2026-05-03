@@ -2,14 +2,24 @@
 
 ![MusicRipper — Secure CD ripping for a bit-perfect FLAC library](assets/musicripper-hero.png)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Pester](https://github.com/ndbills/MusicRipper/actions/workflows/pester.yml/badge.svg?branch=main)](https://github.com/ndbills/MusicRipper/actions/workflows/pester.yml)
+[![PowerShell 7+](https://img.shields.io/badge/PowerShell-7%2B-5391FE.svg?logo=powershell)](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows)
+[![Windows](https://img.shields.io/badge/platform-Windows-0078D6.svg?logo=windows)](#)
+
+> **Disclaimer.** MusicRipper is not affiliated with or endorsed by Plex,
+> MusicBrainz, the CUETools project, the WireGuard project, Apple, Deezer,
+> or Illustrate (AccurateRip / dBpoweramp). Trademarks belong to their
+> respective owners.
+
 A Windows + PowerShell 7 tool that rips Audio CDs to FLAC for a family
 music-digitization project. Click "Rip a CD," confirm the auto-detected
 metadata, walk away, and end up with a clean, AccurateRip-verified FLAC
 library that can also be reconstructed back into a bit-identical Audio CD.
 
 Built on **CUETools / CUERipper** for the rip engine, with an extensible
-sync framework for pushing finished albums off the rip box (OneDrive in
-Phase 6.2, Synology NAS over WireGuard in Phase 6.3+).
+sync framework for pushing finished albums off the rip box (OneDrive +
+Synology NAS over WireGuard).
 
 ## Who this is for
 
@@ -19,6 +29,15 @@ Phase 6.2, Synology NAS over WireGuard in Phase 6.3+).
   and a one-page quickstart. They never see PowerShell.
 
 ## Current status
+
+**Feature-complete.** Initial development closed out the rip pipeline,
+quality gating, library layout, three sync targets, WireGuard auto-toggle,
+the WPF first-run + settings editor, and the parent-friendly polish pass.
+See [docs/DECISIONS.md](docs/DECISIONS.md) for the architectural decision
+log and the reasoning behind each choice.
+
+<details>
+<summary>Development phase history</summary>
 
 | Phase | Title                                    | Status        |
 | ----- | ---------------------------------------- | ------------- |
@@ -37,11 +56,14 @@ Phase 6.2, Synology NAS over WireGuard in Phase 6.3+).
 | 7     | Polish, packaging, parent-friendly UX    | ✅ complete    |
 | F-6   | Standalone Settings Start Menu shortcut  | ✅ complete    |
 
+</details>
+
 ## 3-line quickstart (engineer install)
 
 ```powershell
-git clone <this-repo> C:\bin\MusicRipper ; cd C:\bin\MusicRipper
+git clone https://github.com/ndbills/MusicRipper.git C:\bin\MusicRipper ; cd C:\bin\MusicRipper
 ./Install-MusicRipper.ps1 -InPlace   # chains setup steps; or omit -InPlace to copy into %LOCALAPPDATA%\MusicRipper
+# Then double-click the new "Rip a CD" Desktop shortcut. First launch opens the WPF Settings editor.
 ```
 
 To uninstall later: `./Uninstall-MusicRipper.ps1` removes the desktop
@@ -51,10 +73,9 @@ WireGuard), the WireGuard tunnel service, and `%LOCALAPPDATA%\MusicRipper\`
 PowerShell 7 stays installed. The script self-elevates if needed (one UAC
 prompt at launch). Add `-WhatIf` to preview without changing anything.
 
-Double-click the Desktop shortcut. On first launch the WPF settings
-editor opens (library root, MusicBrainz email, drive registration with
-progress bar, OneDrive / Synology NAS sync targets, WireGuard `.conf`
-picker). Save and you're ripping.
+On first launch the WPF settings editor opens (library root, MusicBrainz
+contact address, drive registration with progress bar, OneDrive / Synology
+NAS sync targets, WireGuard `.conf` picker). Save and you're ripping.
 
 After setup the shortcut identifies each inserted disc, queries
 MusicBrainz, pops the confirm dialog, and (on **Rip**) performs a
@@ -154,3 +175,26 @@ Invoke-Pester ./tests
 ```
 
 Pester 5+ is required (`Install-Module Pester -MinimumVersion 5.0`).
+
+## License
+
+MusicRipper is released under the MIT License. See [LICENSE](LICENSE) for
+the full text.
+
+## Acknowledgements
+
+MusicRipper is built on top of, and gratefully acknowledges, a number of
+third-party tools and services. See [NOTICE.md](NOTICE.md) for the full
+list (and [docs/THIRD-PARTY.md](docs/THIRD-PARTY.md) for a structured
+table view).
+
+> **Deezer usage is non-commercial only.** The Deezer API provider is enabled by
+> default for cover-art and text-search fallback. Per
+> [Deezer's developer terms of use](https://developers.deezer.com/termsofuse)
+> (Section IV), use of Deezer Content is *"strictly limited for a non-commercial
+> purpose...within a family scope."* That maps cleanly onto MusicRipper's stated
+> mission, but if you're repurposing this tool for paid work (DJ catalogs,
+> commercial archives, etc.) **disable the Deezer providers** in your config
+> (`Settings -> Metadata` and `Settings -> Cover Art` tabs, or remove `"Deezer"`
+> from `MetadataProviders` / `CoverArtProviders` in `config.json`). MusicBrainz,
+> Cover Art Archive, and iTunes Search remain available without that limitation.

@@ -46,8 +46,9 @@
     Server identification:
         GnuDB requires a real-looking email + a distinct app name in
         the `hello=` query parameter or they rate-limit us into the
-        ground. We reuse cfg.MusicBrainzUserAgent to extract the email
-        (same "( user@host.com )" format both services expect) and
+        ground. We pass cfg.contactAddress directly (an email is what
+        GnuDB actually wants here; URL forms still get accepted but
+        won't satisfy the spirit of the rate-limit policy) and
         identify as `musicripper`.
 
 .NOTES
@@ -400,10 +401,12 @@ function Invoke-GnuDbMetadataProvider {
     Disc-id object from Get-RipperDiscId. Uses .Tracks[] to compute the
     CDDB disc-id and the query parameters.
 
-.PARAMETER UserAgent
-    Optional. Used to extract an email for GnuDB's hello= contact
-    requirement. Caller typically passes cfg.MusicBrainzUserAgent
-    (which embeds the user's email in the "( user@host )" suffix).
+.PARAMETER ContactAddress
+    Optional. The user's MusicBrainz contact address (cfg.contactAddress)
+    -- email or URL. GnuDB strongly prefers an email in its hello=
+    parameter; URL contact strings still produce a valid request but
+    may rate-limit harder. Defaults to a generic placeholder for
+    test convenience.
 
 .PARAMETER BaseUrl
     Optional. Lets tests inject a local fake. Production callers omit
@@ -419,7 +422,7 @@ function Invoke-GnuDbMetadataProvider {
     `cddb read`. Defaults to 3 to keep traffic polite.
 
 .EXAMPLE
-    PS> $r = Invoke-GnuDbMetadataProvider -DiscIdInfo $disc -UserAgent $cfg.MusicBrainzUserAgent
+    PS> $r = Invoke-GnuDbMetadataProvider -DiscIdInfo $disc -ContactAddress $cfg.contactAddress
     PS> $r.Status
     Match
 #>
@@ -429,7 +432,7 @@ function Invoke-GnuDbMetadataProvider {
         [Parameter(Mandatory)]
         [pscustomobject]$DiscIdInfo,
 
-        [string]$UserAgent = 'MusicRipper/1.0 ( unknown@example.com )',
+        [string]$ContactAddress = 'unknown@example.com',
 
         [string]$BaseUrl = 'https://gnudb.gnudb.org/~cddb/cddb.cgi',
 
@@ -450,15 +453,13 @@ function Invoke-GnuDbMetadataProvider {
         }
     }
 
-    # Extract email from the MB-shaped UA so we can identify properly
-    # to GnuDB. Falls back to a generic placeholder if the UA isn't in
-    # the expected "MusicRipper/x.y ( email )" shape.
-    $email = 'unknown@example.com'
-    if ($UserAgent -match '\(\s*([^)\s]+@[^)\s]+)\s*\)') {
-        $email = $Matches[1]
-    }
+    # Use the user's contact address directly (no UA-string
+    # parsing). An email is the spirit of GnuDB's hello= contract;
+    # if the user supplied a URL instead we just URL-escape it and
+    # GnuDB will still accept the request.
+    $email = if ([string]::IsNullOrWhiteSpace($ContactAddress)) { 'unknown@example.com' } else { $ContactAddress }
     $emailEsc = $email -replace '@', '+'   # GnuDB hello= uses + for @.
-    $helloVal = "$emailEsc+musicripper+0.1"
+    $helloVal = "$emailEsc+musicripper+$(Get-RipperVersion)"
 
     # Build the query URL. CDDB "+" means literal space; we use it here
     # intentionally for the command separator, and System.Uri will leave
@@ -585,9 +586,11 @@ function Invoke-GnuDbTextSearchProvider {
     Cap on how many `cddb read` round-trips to issue. CDDB is rate
     sensitive so 5 is a reasonable ceiling.
 
-.PARAMETER UserAgent
-    The MusicBrainz-shaped UA. Used only to extract the contact email
-    GnuDB needs in `hello=`.
+.PARAMETER ContactAddress
+    The user's MusicBrainz contact address (cfg.contactAddress) -- email
+    or URL. GnuDB strongly prefers an email in its hello= parameter; URL
+    contact strings still produce a valid request but may rate-limit
+    harder. Defaults to a generic placeholder for test convenience.
 
 .PARAMETER BaseUrl
     Override for tests. Production callers omit and get the real
@@ -605,7 +608,7 @@ function Invoke-GnuDbTextSearchProvider {
         [int]$Year,
         [int]$Limit       = 10,
         [int]$DetailLimit = 5,
-        [string]$UserAgent = 'MusicRipper/1.0 ( unknown@example.com )',
+        [string]$ContactAddress = 'unknown@example.com',
         [string]$BaseUrl   = 'https://gnudb.gnudb.org/~cddb/cddb.cgi',
         [scriptblock]$InvokeWebRequest
     )
@@ -620,11 +623,12 @@ function Invoke-GnuDbTextSearchProvider {
         }
     }
 
-    # Build hello= the same way the disc-id provider does.
-    $email = 'unknown@example.com'
-    if ($UserAgent -match '\(\s*([^)\s]+@[^)\s]+)\s*\)') { $email = $Matches[1] }
+    # Use the user's contact address directly (no UA-string parsing).
+    # An email is the spirit of GnuDB's hello= contract; URL forms
+    # still produce a valid request but may rate-limit harder.
+    $email = if ([string]::IsNullOrWhiteSpace($ContactAddress)) { 'unknown@example.com' } else { $ContactAddress }
     $emailEsc = $email -replace '@', '+'
-    $helloVal = "$emailEsc+musicripper+0.1"
+    $helloVal = "$emailEsc+musicripper+$(Get-RipperVersion)"
 
     # Combine artist + album (and year, if given) into one query string.
     # CDDB tokens are space-separated; URL-encode the whole thing.

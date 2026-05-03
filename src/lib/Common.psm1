@@ -16,6 +16,34 @@
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
+# Single source of truth for the MusicRipper version string. Used to
+# build the MusicBrainz / CTDB / GnuDB User-Agent at runtime so we
+# don't have to chase hardcoded 'MusicRipper/0.1' strings across the
+# codebase whenever we cut a release. Bump here, recompose UA there.
+$script:RipperVersion = '0.1'
+
+function Get-RipperVersion {
+<#
+.SYNOPSIS
+    Return the current MusicRipper version string (e.g. '0.1').
+
+.DESCRIPTION
+    Used by the metadata providers to compose User-Agent headers of
+    the form 'MusicRipper/<version> ( <contactAddress> )'. There is
+    no automated bumping wired up yet (see the Phase-8 backlog item
+    on versioning + git tagging) -- update `$script:RipperVersion`
+    in this module when cutting a release.
+
+.EXAMPLE
+    PS> Get-RipperVersion
+    0.1
+#>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+    $script:RipperVersion
+}
+
 function ConvertTo-SafeWindowsPathSegment {
 <#
 .SYNOPSIS
@@ -411,4 +439,4 @@ function Set-RipperWindowIcon {
     }
 }
 
-Export-ModuleMember -Function ConvertTo-SafeWindowsPathSegment, Get-RipperRepoRoot, Get-CueToolsPath, Get-MetaflacPath, Test-RipperDependencies, Get-RipperAssetPath, Set-RipperWindowIcon
+Export-ModuleMember -Function ConvertTo-SafeWindowsPathSegment, Get-RipperRepoRoot, Get-CueToolsPath, Get-MetaflacPath, Test-RipperDependencies, Get-RipperAssetPath, Set-RipperWindowIcon, Get-RipperVersion

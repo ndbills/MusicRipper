@@ -9,7 +9,7 @@
     first-run hook from Start-Ripper when no config exists).
 
     Tabs:
-      General        LibraryRoot (path+Browse), MusicBrainzUserAgent,
+      General        LibraryRoot (path+Browse), contactAddress,
                      EjectAfterRip, ContinuousMode,
                      RetryPendingSyncOnStartup. Drive is read-only
                      here -- it's managed by setup/Register-Drive.ps1
@@ -77,14 +77,18 @@ function Test-RipperConfigEditorComplete {
     in-progress config? Pulled out so tests don't need a Window.
 
 .DESCRIPTION
-    -FirstRun       LibraryRoot + a real (non-placeholder) MusicBrainz
-                    contact email + at least one sync target selected.
-                    These are the irreducible requirements for the
-                    rest of the pipeline to even function.
-    Otherwise       LibraryRoot only. (We let an existing user
-                    temporarily blank out MB or sync targets to
-                    experiment -- they already proved they could
-                    finish setup once.)
+    -FirstRun       LibraryRoot + non-empty MusicBrainz contact
+                    address (email or URL) + at least one sync
+                    target selected. These are the irreducible
+                    requirements for the rest of the pipeline to
+                    even function.
+    Otherwise       LibraryRoot + non-empty MusicBrainz contact
+                    address. (We let an existing user temporarily
+                    blank out sync targets to experiment, but the
+                    contact address is required by MusicBrainz on
+                    every metadata call -- erasing it would silently
+                    break disc identification on the very next rip,
+                    so the editor refuses to save it blank.)
 #>
     [CmdletBinding()]
     [OutputType([bool])]
@@ -109,15 +113,15 @@ function Test-RipperConfigEditorComplete {
         if (-not $unc -or ([string]$unc).Trim().Length -eq 0) { return $false }
     }
 
+    # MusicBrainz contact address is required in both modes -- MB / CTDB /
+    # GnuDB all need it on every metadata call, so a blank value would
+    # silently break disc identification on the very next rip.
+    $contact = if ($Config.PSObject.Properties['contactAddress']) { [string]$Config.contactAddress } else { '' }
+    if ([string]::IsNullOrWhiteSpace($contact)) { return $false }
+
     if (-not $FirstRun) { return $true }
 
     # First-run-only checks below.
-    $ua = $Config.MusicBrainzUserAgent
-    if (-not $ua)                          { return $false }
-    if ($ua -match 'unknown@example\.com') { return $false }
-    # Crude email regex: present + has @ and a dot in the domain.
-    if ($ua -notmatch '\(\s*\S+@\S+\.\S+\s*\)') { return $false }
-
     $st = $Config.SyncTargets
     if (-not $st -or @($st).Count -eq 0) { return $false }
     return $true
@@ -373,10 +377,10 @@ function Show-RipperConfigDialog {
             </Grid>
 
             <TextBlock Text="MusicBrainz contact" FontWeight="Bold"/>
-            <TextBlock Text="MusicBrainz requires a contact string in the form 'AppName/Version ( email@example.com )' so they can reach out about misbehaving clients."
+            <TextBlock Text="MusicBrainz requires a contact address per their API terms. It is sent only with requests to musicbrainz.org and stays on your machine in config.json. An email address or a URL (e.g., your GitHub profile) both work."
                        Foreground="#666" TextWrapping="Wrap" Margin="0,2,0,4"/>
-            <TextBox x:Name="MbUaText" Padding="4" Margin="0,0,0,14"
-                     ToolTip="Format: 'MusicRipper/0.1 ( you@example.com )'"/>
+            <TextBox x:Name="ContactText" Padding="4" Margin="0,0,0,14"
+                     ToolTip="Email (you@example.com) or URL (https://github.com/yourname)."/>
 
             <CheckBox x:Name="EjectCheck" Content="Eject the disc after each rip"
                       Margin="0,0,0,8"
@@ -613,7 +617,7 @@ function Show-RipperConfigDialog {
     # ---- find named widgets ---------------------------------------
     $libText      = $window.FindName('LibraryRootText')
     $libBrowse    = $window.FindName('LibraryRootBrowse')
-    $mbUaText     = $window.FindName('MbUaText')
+    $contactText  = $window.FindName('ContactText')
     $ejectCheck   = $window.FindName('EjectCheck')
     $contCheck    = $window.FindName('ContinuousCheck')
     $retryCheck   = $window.FindName('RetryPendingCheck')
@@ -647,7 +651,7 @@ function Show-RipperConfigDialog {
 
     # ---- seed values from $cfg ------------------------------------
     $libText.Text       = if ($cfg.LibraryRoot)            { [string]$cfg.LibraryRoot } else { '' }
-    $mbUaText.Text      = if ($cfg.MusicBrainzUserAgent)   { [string]$cfg.MusicBrainzUserAgent } else { '' }
+    $contactText.Text   = if ($cfg.PSObject.Properties['contactAddress'] -and $cfg.contactAddress) { [string]$cfg.contactAddress } else { '' }
     $ejectCheck.IsChecked  = [bool]$cfg.EjectAfterRip
     $contCheck.IsChecked   = [bool]$cfg.ContinuousMode
     $retryCheck.IsChecked  = [bool]$cfg.RetryPendingSyncOnStartup
@@ -853,7 +857,7 @@ function Show-RipperConfigDialog {
         # Mutate $cfg in-place from current widget values. Used both
         # by the live OK-enable check and by the final Save.
         $cfg.LibraryRoot                  = $libText.Text.Trim()
-        $cfg.MusicBrainzUserAgent         = $mbUaText.Text.Trim()
+        $cfg.contactAddress               = $contactText.Text.Trim()
         $cfg.EjectAfterRip                = [bool]$ejectCheck.IsChecked
         $cfg.ContinuousMode               = [bool]$contCheck.IsChecked
         $cfg.RetryPendingSyncOnStartup    = [bool]$retryCheck.IsChecked
@@ -881,9 +885,8 @@ function Show-RipperConfigDialog {
         } elseif ($FirstRun) {
             $missing = New-Object System.Collections.Generic.List[string]
             if (-not $cfg.LibraryRoot)                                        { $missing.Add('Library root') }
-            if (-not $cfg.MusicBrainzUserAgent -or
-                $cfg.MusicBrainzUserAgent -match 'unknown@example\.com' -or
-                $cfg.MusicBrainzUserAgent -notmatch '\(\s*\S+@\S+\.\S+\s*\)') { $missing.Add('MusicBrainz contact (with real email)') }
+            $contactVal = if ($cfg.PSObject.Properties['contactAddress']) { [string]$cfg.contactAddress } else { '' }
+            if ([string]::IsNullOrWhiteSpace($contactVal))                    { $missing.Add('MusicBrainz contact (email or URL)') }
             if (-not $cfg.SyncTargets -or @($cfg.SyncTargets).Count -eq 0)    { $missing.Add('at least one sync target') }
             if (@($cfg.SyncTargets) -contains 'OneDrive' -and
                 (-not $cfg.OneDriveSyncTargetRoot -or
@@ -895,6 +898,10 @@ function Show-RipperConfigDialog {
         } else {
             $bits = New-Object System.Collections.Generic.List[string]
             if (-not $cfg.LibraryRoot) { $bits.Add('Library root is required.') }
+            $contactVal2 = if ($cfg.PSObject.Properties['contactAddress']) { [string]$cfg.contactAddress } else { '' }
+            if ([string]::IsNullOrWhiteSpace($contactVal2)) {
+                $bits.Add('MusicBrainz contact (email or URL) is required -- needed on every metadata call.')
+            }
             if (@($cfg.SyncTargets) -contains 'OneDrive' -and
                 (-not $cfg.OneDriveSyncTargetRoot -or
                  ([string]$cfg.OneDriveSyncTargetRoot).Trim().Length -eq 0)) {
@@ -910,7 +917,7 @@ function Show-RipperConfigDialog {
     }
 
     # Wire change events so OK enables/disables live.
-    foreach ($tb in @($libText, $mbUaText, $oneDriveText, $synUncText, $wgTunnelText)) {
+    foreach ($tb in @($libText, $contactText, $oneDriveText, $synUncText, $wgTunnelText)) {
         $tb.Add_TextChanged({ & $refreshOk }.GetNewClosure())
     }
     foreach ($cb in @($ejectCheck, $contCheck, $retryCheck, $synRqCheck, $wgAutoCheck, $wgKeepCheck)) {

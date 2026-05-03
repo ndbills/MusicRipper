@@ -96,8 +96,9 @@ try {
     $ctdb = [CUETools.CTDB.CUEToolsDB]::new($toc, $proxy)
     $ctdb.Init($ar) | Out-Null
     try {
-        $ua = [string]$cfg.MusicBrainzUserAgent
-        if (-not $ua) { throw "config.json missing MusicBrainzUserAgent." }
+        $contact = if ($cfg.PSObject.Properties['contactAddress']) { [string]$cfg.contactAddress } else { '' }
+        if ([string]::IsNullOrWhiteSpace($contact)) { throw "config.json missing contactAddress." }
+        $ua = "MusicRipper/$(Get-RipperVersion) ( $contact )"
         Write-Host "  UA        : $ua"
         $ctdb.ContactDB('db.cuetools.net', $ua, [string]$reader.EACName, $true, $true, 0) | Out-Null
         Write-Host "  DBStatus  : $($ctdb.DBStatus)" -ForegroundColor Green

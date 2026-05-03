@@ -391,9 +391,12 @@ function Invoke-RipperMusicBrainzRequest {
     )
 
     Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1') -Force
-    $cfg = Import-RipperConfig
-    $ua  = $cfg.MusicBrainzUserAgent
-    if (-not $ua) { throw "config.json missing MusicBrainzUserAgent. Re-run setup/New-RipperConfig.ps1." }
+    $cfg     = Import-RipperConfig
+    $contact = if ($cfg.PSObject.Properties['contactAddress']) { [string]$cfg.contactAddress } else { '' }
+    if ([string]::IsNullOrWhiteSpace($contact)) {
+        throw "config.json missing 'contactAddress'. MusicBrainz requires a contact email or URL per their API terms (https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting). Open Settings ('MusicRipper - Settings' Start Menu shortcut, or run setup/New-RipperConfig.ps1) and fill in the MusicBrainz contact field."
+    }
+    $ua = "MusicRipper/$(Get-RipperVersion) ( $contact )"
 
     # Throttle. MB asks for <= 1 req/sec; we leave 100 ms slack.
     $minIntervalTicks = [TimeSpan]::FromMilliseconds(1100).Ticks

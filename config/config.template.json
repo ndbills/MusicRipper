@@ -11,8 +11,8 @@
   "//DriveOffset":             "AccurateRip read offset in samples for this drive. Filled by setup/Register-Drive.ps1.",
   "DriveOffset": null,
 
-  "//MusicBrainzUserAgent":    "Required by MusicBrainz ToS. Format: 'AppName/Version ( contact-email )'. Set by New-RipperConfig.ps1.",
-  "MusicBrainzUserAgent": "MusicRipper/0.1 ( unknown@example.com )",
+  "//contactAddress":         "MusicBrainz contact address -- email or URL. Required by the MusicBrainz API terms (https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting) so they can reach out about misbehaving clients. Sent ONLY in the User-Agent header on requests to musicbrainz.org / db.cuetools.net / gnudb.org and never leaves the machine otherwise. Either an email address (you@example.com) or a URL (e.g. https://github.com/yourname) is acceptable per MusicBrainz policy. Empty by default; the WPF first-run editor (or setup/New-RipperConfig.ps1) prompts for it.",
+  "contactAddress": "",
 
   "//OneDriveSyncTargetRoot":  "Phase 6.2: absolute path inside the user's OneDrive (or any local folder) where ripped albums get mirrored when 'OneDrive' is in SyncTargets. Pick the folder via setup/New-RipperConfig.ps1 (it pops a folder picker seeded at the OneDrive root detected from HKCU\\Software\\Microsoft\\OneDrive\\UserFolder). null = OneDrive sync target reports Failed (nothing to copy to).",
   "OneDriveSyncTargetRoot": null,
