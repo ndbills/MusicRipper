@@ -14,7 +14,10 @@
         3. Look up the drive's AccurateRip read offset:
              a. Try scraping http://www.accuraterip.com/driveoffsets.htm.
              b. On any failure (network down, page format change), fall back
-                to the bundled data/driveoffsets.cached.json.
+                to the install-time data/driveoffsets.cached.json (populated
+                by setup/Install-DriveOffsetCache.ps1 during first install;
+                the AccurateRip offset list is not redistributable, so we
+                fetch it fresh on the user's machine).
              c. If still no match, prompt the user to enter manually (or 0
                 with a warning that AR verification will be unreliable).
         4. Update config.json with DriveLetter + DriveOffset.

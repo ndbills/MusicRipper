@@ -16,11 +16,14 @@ id with `winget search <name>` and update the `$packages` list in
 maintainer's GitHub handle), not `CUETools.CUETools`.
 
 ### `Register-Drive.ps1` says "no AccurateRip offset found"
-The live AccurateRip page may have been unreachable AND the bundled
-fallback list (`data/driveoffsets.cached.json`) doesn't have your
-drive. Look up your drive at <http://www.accuraterip.com/driveoffsets.htm>
-manually and enter the offset when prompted. Open a PR adding the
-drive to `data/driveoffsets.cached.json` while you're there.
+The live AccurateRip page was unreachable AND the install-time
+cache (`data/driveoffsets.cached.json`, populated by
+`setup/Install-DriveOffsetCache.ps1` on first install) doesn't
+have your drive. Look up your drive at
+<http://www.accuraterip.com/driveoffsets.htm> manually and enter
+the offset when prompted. Re-running
+`./setup/Install-DriveOffsetCache.ps1 -Force` will refresh the
+local cache from the live page if you suspect it's gone stale.
 
 ### `Import-RipperConfig` throws "config not found"
 You haven't run `./setup/New-RipperConfig.ps1` yet on this machine, or

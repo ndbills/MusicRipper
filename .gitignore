@@ -29,8 +29,16 @@ desktop.ini
 # baked in at creation time, so a committed shortcut would be stale on
 # any machine cloning to a different path. setup/Install-UninstallShortcut.ps1
 # regenerates it (and Install-MusicRipper.ps1 chains that as part of the
-# install flow).
-Uninstall MusicRipper.lnk
+# install flow). Same reasoning applies to any .lnk anywhere in the tree.
+*.lnk
+
+# AccurateRip drive-offset cache. The list is proprietary (c) Illustrate
+# (Spoon) and not redistributable, so we never commit the JSON itself.
+# setup/Install-DriveOffsetCache.ps1 fetches it live from
+# accuraterip.com on first install (one-time, idempotent); the runtime
+# fallback in src/lib/DriveRegistration.psm1 also re-scrapes the live
+# page on demand so a missing cache file never blocks a rip.
+data/driveoffsets.cached.json
 
 # Temp / build
 tmp/
@@ -40,3 +48,4 @@ dist/
 testResults.xml
 
 pester-result.txt
+pester-out.txt

@@ -86,11 +86,16 @@ function Find-RipperAccurateRipOffset {
         try {
             $resp = Invoke-WebRequest -Uri 'http://www.accuraterip.com/driveoffsets.htm' `
                                       -TimeoutSec $TimeoutSec -UseBasicParsing
-            $rows = [regex]::Matches($resp.Content,
-                '<tr[^>]*>\s*<td[^>]*>(?<name>[^<]+)</td>\s*<td[^>]*>(?<off>-?\d+)</td>',
-                'IgnoreCase')
+            # The AccurateRip page wraps every cell in a
+            # <font face="Arial" size="2"> tag and bullet-prefixes
+            # drive names with '- '. setup/Install-DriveOffsetCache.ps1
+            # uses the same pattern when seeding the cache.
+            $rowPattern = '<td[^>]*>\s*(?:<font[^>]*>)?\s*(?<name>[^<]+?)\s*(?:</font>)?\s*</td>\s*' +
+                          '<td[^>]*>\s*(?:<font[^>]*>)?\s*(?<off>[+\-]?\d+)\s*(?:</font>)?\s*</td>'
+            $rows = [regex]::Matches($resp.Content, $rowPattern, 'IgnoreCase')
             foreach ($m in $rows) {
                 $name = $m.Groups['name'].Value.Trim()
+                if ($name -match '^\s*-\s+(.*)$') { $name = $Matches[1].Trim() }
                 if ($DriveName -like "*$name*") {
                     return [int]$m.Groups['off'].Value
                 }

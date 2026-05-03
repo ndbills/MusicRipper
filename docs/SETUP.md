@@ -7,7 +7,13 @@ Parents get the (much shorter) `PARENTS-QUICKSTART.md` once Phase 7 lands.
 
 - Windows 10 1809+ or Windows 11.
 - An optical drive (internal SATA or external USB).
-- An internet connection (for winget + MusicBrainz lookups).
+- An internet connection. Required at install time for:
+  - `winget` to download CUETools / Xiph.FLAC / Picard / WireGuard.
+  - The one-time AccurateRip drive-offset list fetch (the list is
+    proprietary and not redistributable, so we download it fresh on
+    your machine into `data/driveoffsets.cached.json`).
+  And at runtime for MusicBrainz / Cover Art Archive / iTunes / Deezer
+  metadata lookups.
 
 ## 1. Clone the repo
 

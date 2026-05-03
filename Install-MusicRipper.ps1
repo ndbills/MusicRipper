@@ -17,10 +17,20 @@
 
     Setup chain (each step is idempotent; failures abort with a clear
     message):
-      1. setup\Install-Dependencies.ps1   (winget: PS7, CUETools, Xiph.FLAC,
-                                           Picard, WireGuard)
-      2. setup\Install-Shortcut.ps1       (Desktop "Rip a CD" shortcut)
-      3. Final notice: "open the shortcut to finish first-run config in
+      1. setup\Install-Dependencies.ps1     (winget: PS7, CUETools, Xiph.FLAC,
+                                             Picard, WireGuard)
+      2. setup\Install-DriveOffsetCache.ps1 (one-time live fetch of the
+                                             AccurateRip drive-offset list
+                                             into data/driveoffsets.cached.json;
+                                             we do not redistribute the list,
+                                             so it is downloaded fresh on
+                                             the user's machine. WARN-and-
+                                             continue on network failure --
+                                             the runtime path scrapes the
+                                             live page anyway.)
+      3. setup\Install-Shortcut.ps1         (Desktop "Rip a CD" shortcut +
+                                             in-repo Uninstall + Start Menu)
+      4. Final notice: "open the shortcut to finish first-run config in
          the WPF settings editor (Phase 6.6)."
 
     What this script intentionally does NOT do:
@@ -245,6 +255,16 @@ try {
     } else {
         Write-Step 'Skipping dependency install (-SkipDependencies).'
     }
+
+    # Prime the AccurateRip drive-offset cache with a one-time live
+    # fetch from accuraterip.com. Idempotent (no-op if the cache is
+    # already present); WARN-and-continue on network failure so the
+    # installer never aborts here -- the runtime fallback path
+    # scrapes live anyway. We do NOT redistribute this list per
+    # AccurateRip's licence; it's downloaded fresh on the user's
+    # machine.
+    Invoke-SetupStep -ScriptPath (Join-Path $repoRoot 'setup\Install-DriveOffsetCache.ps1') `
+                     -Description 'Priming AccurateRip drive-offset cache (one-time fetch)'
 
     if (-not $SkipShortcut) {
         Invoke-SetupStep -ScriptPath (Join-Path $repoRoot 'setup\Install-Shortcut.ps1') `
