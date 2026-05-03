@@ -2,6 +2,11 @@
 
 ![MusicRipper — Secure CD ripping for a bit-perfect FLAC library](assets/musicripper-hero.png)
 
+> **Disclaimer.** MusicRipper is not affiliated with or endorsed by Plex,
+> MusicBrainz, the CUETools project, the WireGuard project, Apple, Deezer,
+> or Illustrate (AccurateRip / dBpoweramp). Trademarks belong to their
+> respective owners.
+
 A Windows + PowerShell 7 tool that rips Audio CDs to FLAC for a family
 music-digitization project. Click "Rip a CD," confirm the auto-detected
 metadata, walk away, and end up with a clean, AccurateRip-verified FLAC
@@ -154,3 +159,15 @@ Invoke-Pester ./tests
 ```
 
 Pester 5+ is required (`Install-Module Pester -MinimumVersion 5.0`).
+
+## License
+
+MusicRipper is released under the MIT License. See [LICENSE](LICENSE) for
+the full text.
+
+## Acknowledgements
+
+MusicRipper is built on top of, and gratefully acknowledges, a number of
+third-party tools and services. See [NOTICE.md](NOTICE.md) for the full
+list (and [docs/THIRD-PARTY.md](docs/THIRD-PARTY.md) for a structured
+table view).
