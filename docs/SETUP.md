@@ -44,10 +44,18 @@ get working is in tabs:
 | Tab            | What you set                                                                                                  |
 | -------------- | ------------------------------------------------------------------------------------------------------------- |
 | **General**    | Library root (Browse...), MusicBrainz contact email, **Register drive...** button (with progress bar).        |
-| **Metadata**   | Order of metadata providers (MusicBrainz / CTDB / GnuDB).                                                     |
-| **Cover Art**  | Order of cover-art providers (CoverArtArchive / etc.).                                                        |
+| **Metadata**   | Order of metadata providers (MusicBrainz / CTDB / GnuDB / Deezer†).                                           |
+| **Cover Art**  | Order of cover-art providers (CoverArtArchive / iTunesSearch / Deezer†).                                      |
 | **Sync**       | Sync targets (OneDrive / SynologyNAS), OneDrive folder (Browse...), NAS UNC + DPAPI credential **Set...**, retention rule. |
 | **WireGuard**  | `.conf` file picker + **Install / register tunnel...** button (one UAC prompt). Auto-toggle + keep-alive.     |
+
+> † **Deezer is non-commercial only** per their
+> [developer ToU](https://developers.deezer.com/termsofuse) (Section IV,
+> *"strictly private use within a family scope"*). Fine for the family
+> music-digitization use case MusicRipper is designed for; **uncheck the
+> Deezer providers** if you're repurposing the tool for paid / commercial
+> work. MB, CTDB, GnuDB, CoverArtArchive, and iTunesSearch have no such
+> restriction.
 
 **Click Save** to write `%LOCALAPPDATA%\MusicRipper\config.json` and
 continue. **Cancel** exits cleanly.

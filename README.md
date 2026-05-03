@@ -171,3 +171,14 @@ MusicRipper is built on top of, and gratefully acknowledges, a number of
 third-party tools and services. See [NOTICE.md](NOTICE.md) for the full
 list (and [docs/THIRD-PARTY.md](docs/THIRD-PARTY.md) for a structured
 table view).
+
+> **Deezer usage is non-commercial only.** The Deezer API provider is enabled by
+> default for cover-art and text-search fallback. Per
+> [Deezer's developer terms of use](https://developers.deezer.com/termsofuse)
+> (Section IV), use of Deezer Content is *"strictly limited for a non-commercial
+> purpose...within a family scope."* That maps cleanly onto MusicRipper's stated
+> mission, but if you're repurposing this tool for paid work (DJ catalogs,
+> commercial archives, etc.) **disable the Deezer providers** in your config
+> (`Settings -> Metadata` and `Settings -> Cover Art` tabs, or remove `"Deezer"`
+> from `MetadataProviders` / `CoverArtProviders` in `config.json`). MusicBrainz,
+> Cover Art Archive, and iTunes Search remain available without that limitation.

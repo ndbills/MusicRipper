@@ -354,3 +354,30 @@ Fix: re-run `./setup/New-RipperConfig.ps1` -- it pops a folder picker
 seeded at the registered OneDrive root so you can navigate to (or
 create) the right subfolder. Then re-run
 `./src/tools/Sync-PendingAlbums.ps1`.
+
+
+### "Can I use MusicRipper with Deezer for paid / commercial work?"
+
+Short answer: **no -- disable the Deezer providers first.**
+
+Deezer's
+[developer terms of use](https://developers.deezer.com/termsofuse)
+(Section IV, "Non-commercial use") restrict use of Deezer Content to
+*"a strictly private use within a family scope"* -- the family
+music-digitization use case MusicRipper is explicitly designed for.
+Repurposing it for paid work (DJ catalogs, commercial archives,
+music-licensing prep, etc.) is **outside** that scope and out of
+compliance.
+
+Fix: open `MusicRipper - Settings`, go to the **Metadata** and
+**Cover Art** tabs, and uncheck **Deezer** in both lists. Or edit
+`%LOCALAPPDATA%\MusicRipper\config.json` and remove the string
+`"Deezer"` from both `MetadataProviders` and `CoverArtProviders`.
+
+MusicBrainz, CTDB, GnuDB, CoverArtArchive, and iTunes Search remain
+available without that limitation. (iTunes Search has its own Apple
+attribution clause -- already satisfied by the project's
+`NOTICE.md`.)
+
+See `docs/THIRD-PARTY.md` and `docs/DECISIONS.md` D-030 for the
+investigation behind this caveat.
