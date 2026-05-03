@@ -119,7 +119,11 @@ status), see [docs/THIRD-PARTY.md](docs/THIRD-PARTY.md).
   private use within a family scope"* and is **non-commercial only**.
 - **How we use it:** Text-search fallback for album metadata
   (`/search/album`, `/album/{id}`) and cover-art (`cover_xl`,
-  `cover_big`). Public unauthenticated read endpoints. See
+  `cover_big`). Public unauthenticated read endpoints. Per-process
+  throttle of 25 ms between API calls (~40 req/sec, well under
+  Deezer's 50 req/sec/IP soft cap); CDN image downloads are not
+  API calls and are not throttled. User-Agent identifies as
+  `MusicRipper/<version> ( <contactAddress> )`. See
   `docs/THIRD-PARTY.md` for the compliance investigation summary
   and `docs/DECISIONS.md` D-030 for the decision rationale.
 - **Bundled:** No (network service).

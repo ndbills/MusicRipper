@@ -22,13 +22,50 @@
 .NOTES
     No API key needed for the public search/album endpoints.
     Reference: https://developers.deezer.com/api/album
+
+    Per-process throttle: minimum 25 ms gap between API calls
+    (~40 req/sec, comfortably below Deezer's documented 50 req/sec/IP
+    soft cap). Invisible at one-rip-at-a-time cadence; defensive against
+    a future batch-tag use case. See `docs/DECISIONS.md` D-030.
+
+    User-Agent: identifies as `MusicRipper/<version> ( <contactAddress> )`
+    when the orchestrator passes a contact string, else plain
+    `MusicRipper/<version>`. Deezer's ToU does not require an
+    identifying UA (vs MusicBrainz which does), but it's good
+    citizenship -- parallel to MB / CTDB / GnuDB.
 #>
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
+
+# Per-process throttle state for Deezer text-search calls. UTC ticks
+# of the last request issued through Wait-RipperDeezerSearchThrottle.
+$script:LastDeezerSearchRequestTicks = 0L
+
+function Wait-RipperDeezerSearchThrottle {
+<#
+.SYNOPSIS
+    Sleep until at least 25 ms have elapsed since the previous Deezer
+    text-search API call from this process (~40 req/sec, well under
+    Deezer's 50 req/sec/IP soft cap).
+
+.DESCRIPTION
+    Internal helper. See file-level .NOTES + D-030 for rationale.
+#>
+    [CmdletBinding()] param()
+    $minIntervalTicks = [TimeSpan]::FromMilliseconds(25).Ticks
+    $now = [DateTime]::UtcNow.Ticks
+    $elapsed = $now - $script:LastDeezerSearchRequestTicks
+    if ($script:LastDeezerSearchRequestTicks -gt 0 -and $elapsed -lt $minIntervalTicks) {
+        $sleepMs = [int][math]::Ceiling(([double]($minIntervalTicks - $elapsed)) / [TimeSpan]::TicksPerMillisecond)
+        Start-Sleep -Milliseconds $sleepMs
+    }
+    $script:LastDeezerSearchRequestTicks = [DateTime]::UtcNow.Ticks
+}
 
 function ConvertFrom-DeezerAlbumDetail {
 <#
@@ -175,6 +212,12 @@ function Invoke-DeezerTextSearchProvider {
     Test seam — scriptblock invoked as `& $sb -Url <url>` instead of
     Invoke-RestMethod. Production callers omit this.
 
+.PARAMETER ContactAddress
+    Optional. The user's MusicBrainz contact address (cfg.contactAddress)
+    -- email or URL. Threaded into the User-Agent header so Deezer can
+    attribute traffic to MusicRipper. Defaults to empty (UA falls back
+    to plain `MusicRipper/<version>`).
+
 .EXAMPLE
     PS> Invoke-DeezerTextSearchProvider -Artist 'Pink Floyd' -Album 'The Wall'
 #>
@@ -186,7 +229,8 @@ function Invoke-DeezerTextSearchProvider {
         [int]$Year,
         [int]$Limit       = 10,
         [int]$DetailLimit = 5,
-        [scriptblock]$InvokeWebRequest
+        [scriptblock]$InvokeWebRequest,
+        [string]$ContactAddress = ''
     )
 
     if ([string]::IsNullOrWhiteSpace($Artist) -and [string]::IsNullOrWhiteSpace($Album)) {
@@ -207,13 +251,25 @@ function Invoke-DeezerTextSearchProvider {
     $term = [System.Uri]::EscapeDataString($q)
     $searchUrl = "https://api.deezer.com/search/album?q=$term&limit=$Limit"
 
+    # Identifying UA so Deezer can attribute MusicRipper traffic.
+    # Falls back to plain version when no contact address is supplied.
+    $ua = if ([string]::IsNullOrWhiteSpace($ContactAddress)) {
+        "MusicRipper/$(Get-RipperVersion)"
+    } else {
+        "MusicRipper/$(Get-RipperVersion) ( $ContactAddress )"
+    }
+
+    # Throttle real HTTP calls. When a test seam is supplied, skip
+    # the sleep so the suite doesn't drag.
+    $useTestSeam = [bool]$InvokeWebRequest
     $invoke = if ($InvokeWebRequest) { $InvokeWebRequest } else {
-        { param($Url) Invoke-RestMethod -Uri $Url -TimeoutSec 30 -UseBasicParsing }
+        { param($Url) Invoke-RestMethod -Uri $Url -TimeoutSec 30 -UseBasicParsing -Headers @{ 'User-Agent' = $ua } }.GetNewClosure()
     }
 
     Write-RipperLog INFO 'Deezer' "Text search: '$Artist' / '$Album'"
 
     try {
+        if (-not $useTestSeam) { Wait-RipperDeezerSearchThrottle }
         $searchResp = & $invoke -Url $searchUrl
     } catch {
         $msg = "Deezer search failed: $($_.Exception.Message)"
@@ -240,6 +296,7 @@ function Invoke-DeezerTextSearchProvider {
         if (-not $h.PSObject.Properties['id'] -or -not $h.id) { continue }
         $detailUrl = "https://api.deezer.com/album/$($h.id)"
         try {
+            if (-not $useTestSeam) { Wait-RipperDeezerSearchThrottle }
             $detail = & $invoke -Url $detailUrl
             ConvertFrom-DeezerAlbumDetail -Response $detail
         } catch {

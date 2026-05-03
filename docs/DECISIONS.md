@@ -2104,11 +2104,18 @@ and resists static fetch).
 **Followups parked (not in this round):**
   - Set an identifying `User-Agent` on Deezer requests (parallel to
     MB / CTDB / GnuDB). Pure good-citizenship; no compliance gain.
+    **Done in B3 follow-up commit** -- both Deezer providers now send
+    `MusicRipper/<version> ( <contactAddress> )` (or plain version-
+    only when no contact configured).
   - Surface the non-commercial caveat in user-facing docs (README /
     SETUP / TROUBLESHOOTING) so a future user with a commercial use
     case understands they should disable the Deezer provider.
+    **Done in B3 follow-up commit.**
   - Honor 50 req/sec/IP with an explicit throttle if a future
     feature (e.g. batch re-tag) changes call patterns.
+    **Done in B3 follow-up commit** -- 25 ms gap (~40 req/sec) on
+    both Deezer providers, parallel to D-029's iTunes pattern.
+    Test-seam aware: skipped when `-InvokeWebRequest` is supplied.
 
 **Why no code changes this round:** the spec is explicit ("Do not
 change code, config, or NOTICE wording for Deezer in this round,

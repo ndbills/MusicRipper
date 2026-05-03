@@ -19,7 +19,7 @@ note at the bottom of this file.
 | Cover Art Archive | API v1 (per-release `front-1200`) | Per-image rights vary | Front-cover image fetch keyed on MB Release MBID; written into local FLAC files only | No (network service) | <https://coverartarchive.org/> |
 | AccurateRip drive offset list | Live-fetched at install time | © Illustrate (Spoon); proprietary; not redistributable | One-time install fetch from `accuraterip.com/driveoffsets.htm` → cached at `data/driveoffsets.cached.json` for runtime use; cache file is gitignored | No | <https://accuraterip.com/driveoffsets.htm> |
 | iTunes Search API | Public endpoint (no version) | Per [Apple Search API ToS](https://performance-partners.apple.com/search-api) | Text-search album metadata + hi-res cover-art. Per-process 1500 ms throttle (~40 req/min) between API calls; CDN downloads unthrottled. See D-029. Attribution: *"Album metadata provided in part by the iTunes Search API, © Apple Inc."* | No (network service) | <https://performance-partners.apple.com/search-api> |
-| Deezer API | Public endpoint (no version) | Per [Deezer API ToU](https://developers.deezer.com/termsofuse) (French law, non-commercial / family-scope only) | Text-search album metadata (`/search/album`, `/album/{id}`) + cover-art (`cover_xl`/`cover_big`). Public unauthenticated read tier. See investigation block below + D-030. | No (network service) | <https://developers.deezer.com/api> |
+| Deezer API | Public endpoint (no version) | Per [Deezer API ToU](https://developers.deezer.com/termsofuse) (French law, non-commercial / family-scope only) | Text-search album metadata (`/search/album`, `/album/{id}`) + cover-art (`cover_xl`/`cover_big`). Public unauthenticated read tier. Per-process 25 ms throttle (~40 req/sec) between API calls; CDN downloads unthrottled. UA identifies as `MusicRipper/<version> ( <contactAddress> )`. See investigation block below + D-030. | No (network service) | <https://developers.deezer.com/api> |
 
 ---
 
@@ -48,8 +48,8 @@ note at the bottom of this file.
 
 ### Recommended follow-ups (not in this round)
 
-1. **Set an identifying `User-Agent` on Deezer requests** so Deezer can attribute traffic to MusicRipper rather than seeing anonymous PowerShell defaults. Parallel to what we already do for MB / CTDB / GnuDB. Pure good-citizenship.
-2. **Surface the non-commercial caveat** in user-facing docs (README / SETUP / TROUBLESHOOTING) so a future user with a commercial use case understands they should disable the Deezer provider in their config.
-3. **Honor the 50 req/sec/IP figure** with an explicit throttle. Current code relies on "not a concern at one-rip-per-disc cadence" which is true, but a future feature (e.g. batch re-tag of an existing library) would change the math. No urgency.
+1. **Set an identifying `User-Agent` on Deezer requests** so Deezer can attribute traffic to MusicRipper rather than seeing anonymous PowerShell defaults. Parallel to what we already do for MB / CTDB / GnuDB. Pure good-citizenship. **Status: implemented in B3 follow-up** -- both Deezer providers now send `MusicRipper/<version> ( <contactAddress> )` (or plain version-only when no contact configured).
+2. **Surface the non-commercial caveat** in user-facing docs (README / SETUP / TROUBLESHOOTING) so a future user with a commercial use case understands they should disable the Deezer provider in their config. **Status: implemented in B3 follow-up.**
+3. **Honor the 50 req/sec/IP figure** with an explicit throttle. **Status: implemented in B3 follow-up** -- 25 ms gap (~40 req/sec) on both providers, gated past the test seam so the suite doesn't drag.
 
-No code changes were made in this investigation round per the release-prep brief; see D-030 for the decision rationale.
+See D-030 for the decision rationale.

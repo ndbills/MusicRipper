@@ -219,7 +219,18 @@ function Search-RipperMetadataByText {
                 Invoke-ItunesSearchTextSearchProvider -Artist $Artist -Album $Album -Year $Year
             }
             'Deezer' {
-                Invoke-DeezerTextSearchProvider -Artist $Artist -Album $Album -Year $Year
+                # Pull contactAddress from cfg so Deezer can attribute
+                # traffic to MusicRipper. Plain version-only UA when
+                # config is unreadable.
+                $contact = ''
+                try {
+                    Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1') -Force
+                    $cfgLocal = Import-RipperConfig
+                    if ($cfgLocal.PSObject.Properties['contactAddress'] -and $cfgLocal.contactAddress) {
+                        $contact = [string]$cfgLocal.contactAddress
+                    }
+                } catch { }
+                Invoke-DeezerTextSearchProvider -Artist $Artist -Album $Album -Year $Year -ContactAddress $contact
             }
             'GnuDb' {
                 # Pull contactAddress from cfg so GnuDB's hello= identifies us
