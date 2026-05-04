@@ -35,12 +35,49 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Print PowerShell + OS version
         run: |
           $PSVersionTable | Format-List
           [System.Environment]::OSVersion | Format-List
+
+      - name: Install runtime deps (CUETools + Xiph.FLAC) via winget
+        # Several tests probe the real binaries we ship out to:
+        #   - Get-CueToolsPath / Initialize-CueToolsAssemblies need the
+        #     CUETools .NET DLLs (CUETools.CDImage / .Ripper / .Ripper.SCSI).
+        #   - Move-FromReviewQueue + Update-AlbumTags shell out to
+        #     metaflac.exe via Get-MetaflacPath.
+        # Locally these come from the user's `setup/Install-Dependencies.ps1`
+        # winget run; on a fresh windows-latest runner they aren't there
+        # and the suite drops 10 tests as RuntimeException 'CUETools/
+        # metaflac not found'. Install them up-front so CI exercises the
+        # same code paths a real user hits.
+        #
+        # SilentlyContinue + accept-* flags keep the step quiet on the
+        # 'package already installed' / 'no upgrade available' paths
+        # winget surfaces as non-zero exit codes in some cases.
+        run: |
+          Write-Host 'Installing CUETools (gchudov.CUETools)...'
+          winget install --id gchudov.CUETools --silent `
+              --accept-package-agreements --accept-source-agreements `
+              --disable-interactivity
+          Write-Host 'Installing Xiph.FLAC...'
+          winget install --id Xiph.FLAC --silent `
+              --accept-package-agreements --accept-source-agreements `
+              --disable-interactivity
+          # winget surfaces -1978335189 (0x8A150049 ALREADY_INSTALLED)
+          # as a non-zero $LASTEXITCODE; treat it as success.
+          if ($LASTEXITCODE -and $LASTEXITCODE -ne -1978335189) {
+              throw "winget exited with code $LASTEXITCODE."
+          }
+          $LASTEXITCODE = 0
+          # Sanity-check that the binaries are actually on disk where the
+          # source code expects them.
+          Get-ChildItem 'C:\Users\*\AppData\Local\Microsoft\WinGet\Packages\gchudov.CUETools_*' -ErrorAction SilentlyContinue |
+              Select-Object FullName | Format-Table -AutoSize
+          Get-Command metaflac.exe -ErrorAction SilentlyContinue |
+              Format-Table Name, Source
 
       - name: Install Pester 5.x
         run: |
@@ -74,7 +111,7 @@ jobs:
         # Run even when Pester fails so the artifact is available for
         # post-mortem on a red CI run.
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: pester-test-results
           path: testResults.xml
