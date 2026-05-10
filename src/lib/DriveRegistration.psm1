@@ -93,11 +93,136 @@ function Get-RipperOpticalDrives {
     return $rows
 }
 
+function Find-RipperAccurateRipEntry {
+<#
+.SYNOPSIS
+    Look up a drive in the AccurateRip table; return @{ Offset; MatchedName;
+    Source } on hit, $null on miss. The detail-rich form of
+    Find-RipperAccurateRipOffset (which delegates here for the int
+    return path).
+
+.DESCRIPTION
+    Same lookup semantics as Find-RipperAccurateRipOffset (normalize +
+    longest-match across live page and bundled cache). The richer
+    return surface lets callers log WHICH AccurateRip row matched the
+    Win32_CDROMDrive name -- useful for the install-time drive
+    registration log entry, where seeing the AR-side spelling is the
+    fastest way to confirm the right physical drive was identified.
+
+    Result keys:
+      Offset      -- [int] sample offset.
+      MatchedName -- [string] the raw AR-table name (before normalization)
+                     so the log line shows the contributor's original
+                     spelling, e.g. "TSSTcorp - DVD+-RW TS-H653H".
+      Source      -- 'Live' or 'Cache' depending on which provider hit.
+
+.PARAMETER DriveName
+    Win32_CDROMDrive.Name (vendor + model).
+
+.PARAMETER CachedListPath
+    Absolute path to data/driveoffsets.cached.json.
+
+.PARAMETER TimeoutSec
+    HTTP timeout for the live AccurateRip page request. Default 10s.
+
+.PARAMETER SkipLive
+    If set, skip the live page and use only the bundled cache (tests
+    + fast-retry path).
+#>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [string]$DriveName,
+        [Parameter(Mandatory)] [string]$CachedListPath,
+        [int]$TimeoutSec = 10,
+        [switch]$SkipLive
+    )
+
+    # Phase 6.4.3: normalize both sides before matching so we tolerate
+    # the spacing/punctuation differences between Windows' Win32_CDROMDrive
+    # and the crowdsourced AccurateRip entries (real-world miss with the
+    # TSSTcorp drive on the parents-PC install). Among multiple matches
+    # we pick the LONGEST normalized AR key, which prefers the most
+    # specific entry (e.g. "ASUS DRW-24F1ST" beats "ASUS DRW" if both
+    # are present).
+    $driveKey = ConvertTo-RipperDriveNameKey -Name $DriveName
+    if ([string]::IsNullOrWhiteSpace($driveKey)) { return $null }
+
+    # Local helper: scan a sequence of @{ Name; Offset } candidates,
+    # return @{ Offset; MatchedName } whose normalized name is the
+    # longest substring of $driveKey, or $null if none match.
+    $bestMatch = {
+        param([object[]]$Candidates)
+        $bestKeyLen = -1
+        $best       = $null
+        foreach ($c in $Candidates) {
+            $entryKey = ConvertTo-RipperDriveNameKey -Name $c.Name
+            # Skip empties and ultra-short keys; the latter can over-
+            # match (e.g. a 3-char vendor token would substring into
+            # everything). 4 chars matches the install-time scraper's
+            # row-sanity threshold.
+            if ($entryKey.Length -lt 4) { continue }
+            if ($driveKey.Contains($entryKey) -and $entryKey.Length -gt $bestKeyLen) {
+                $bestKeyLen = $entryKey.Length
+                $best = @{ Offset = [int]$c.Offset; MatchedName = [string]$c.Name }
+            }
+        }
+        return $best
+    }
+
+    if (-not $SkipLive) {
+        try {
+            $resp = Invoke-WebRequest -Uri 'http://www.accuraterip.com/driveoffsets.htm' `
+                                      -TimeoutSec $TimeoutSec -UseBasicParsing
+            # The AccurateRip page wraps every cell in a
+            # <font face="Arial" size="2"> tag and bullet-prefixes
+            # drive names with '- '. setup/Install-DriveOffsetCache.ps1
+            # uses the same pattern when seeding the cache.
+            $rowPattern = '<td[^>]*>\s*(?:<font[^>]*>)?\s*(?<name>[^<]+?)\s*(?:</font>)?\s*</td>\s*' +
+                          '<td[^>]*>\s*(?:<font[^>]*>)?\s*(?<off>[+\-]?\d+)\s*(?:</font>)?\s*</td>'
+            $rows = [regex]::Matches($resp.Content, $rowPattern, 'IgnoreCase')
+            $liveCandidates = foreach ($m in $rows) {
+                $name = $m.Groups['name'].Value.Trim()
+                if ($name -match '^\s*-\s+(.*)$') { $name = $Matches[1].Trim() }
+                [pscustomobject]@{ Name = $name; Offset = [int]$m.Groups['off'].Value }
+            }
+            $liveHit = & $bestMatch -Candidates @($liveCandidates)
+            if ($null -ne $liveHit) {
+                $liveHit['Source'] = 'Live'
+                return $liveHit
+            }
+        } catch {
+            # Fall through to cache on any failure (network blip,
+            # page reformat, DNS, etc.). Caller decides how loud.
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $CachedListPath)) {
+        return $null
+    }
+    $cache = Get-Content -LiteralPath $CachedListPath -Raw | ConvertFrom-Json
+    $cacheCandidates = foreach ($entry in $cache.drives) {
+        [pscustomobject]@{ Name = [string]$entry.match; Offset = [int]$entry.offset }
+    }
+    $cacheHit = & $bestMatch -Candidates @($cacheCandidates)
+    if ($null -ne $cacheHit) {
+        $cacheHit['Source'] = 'Cache'
+        return $cacheHit
+    }
+    return $null
+}
+
 function Find-RipperAccurateRipOffset {
 <#
 .SYNOPSIS
     Return the AccurateRip read offset (in samples) for a drive name, or
     $null if no match in either the live page or the cache.
+
+.DESCRIPTION
+    Thin shim over Find-RipperAccurateRipEntry that returns just the
+    offset. Preserved for callers (and tests) that only need the int.
+    Use Find-RipperAccurateRipEntry directly when you also want the
+    matched AR-table name (e.g. for logging).
 
 .PARAMETER DriveName
     The Win32_CDROMDrive.Name string (vendor + model).
@@ -121,71 +246,13 @@ function Find-RipperAccurateRipOffset {
         [int]$TimeoutSec = 10,
         [switch]$SkipLive
     )
-
-    # Phase 6.4.3: normalize both sides before matching so we tolerate
-    # the spacing/punctuation differences between Windows' Win32_CDROMDrive
-    # and the crowdsourced AccurateRip entries (e.g. real-world miss
-    # documented in the comment block on ConvertTo-RipperDriveNameKey).
-    # Among multiple matches we pick the LONGEST normalized AR key,
-    # which prefers the most specific entry (e.g. "ASUS DRW-24F1ST"
-    # beats a generic "ASUS DRW" if both are present).
-    $driveKey = ConvertTo-RipperDriveNameKey -Name $DriveName
-    if ([string]::IsNullOrWhiteSpace($driveKey)) { return $null }
-
-    # Local helper: scan a sequence of @{ Name; Offset } candidates,
-    # return the offset whose normalized name is the longest substring
-    # of $driveKey, or $null if none match.
-    $bestMatch = {
-        param([object[]]$Candidates)
-        $bestKeyLen = -1
-        $bestOffset = $null
-        foreach ($c in $Candidates) {
-            $entryKey = ConvertTo-RipperDriveNameKey -Name $c.Name
-            # Skip empties and ultra-short keys; the latter can over-
-            # match (e.g. a 3-char vendor token would substring into
-            # everything). 4 chars matches the install-time scraper's
-            # row-sanity threshold.
-            if ($entryKey.Length -lt 4) { continue }
-            if ($driveKey.Contains($entryKey) -and $entryKey.Length -gt $bestKeyLen) {
-                $bestKeyLen = $entryKey.Length
-                $bestOffset = [int]$c.Offset
-            }
-        }
-        return $bestOffset
-    }
-
-    if (-not $SkipLive) {
-        try {
-            $resp = Invoke-WebRequest -Uri 'http://www.accuraterip.com/driveoffsets.htm' `
-                                      -TimeoutSec $TimeoutSec -UseBasicParsing
-            # The AccurateRip page wraps every cell in a
-            # <font face="Arial" size="2"> tag and bullet-prefixes
-            # drive names with '- '. setup/Install-DriveOffsetCache.ps1
-            # uses the same pattern when seeding the cache.
-            $rowPattern = '<td[^>]*>\s*(?:<font[^>]*>)?\s*(?<name>[^<]+?)\s*(?:</font>)?\s*</td>\s*' +
-                          '<td[^>]*>\s*(?:<font[^>]*>)?\s*(?<off>[+\-]?\d+)\s*(?:</font>)?\s*</td>'
-            $rows = [regex]::Matches($resp.Content, $rowPattern, 'IgnoreCase')
-            $liveCandidates = foreach ($m in $rows) {
-                $name = $m.Groups['name'].Value.Trim()
-                if ($name -match '^\s*-\s+(.*)$') { $name = $Matches[1].Trim() }
-                [pscustomobject]@{ Name = $name; Offset = [int]$m.Groups['off'].Value }
-            }
-            $liveHit = & $bestMatch -Candidates @($liveCandidates)
-            if ($null -ne $liveHit) { return $liveHit }
-        } catch {
-            # Fall through to cache on any failure (network blip,
-            # page reformat, DNS, etc.). Caller decides how loud.
-        }
-    }
-
-    if (-not (Test-Path -LiteralPath $CachedListPath)) {
-        return $null
-    }
-    $cache = Get-Content -LiteralPath $CachedListPath -Raw | ConvertFrom-Json
-    $cacheCandidates = foreach ($entry in $cache.drives) {
-        [pscustomobject]@{ Name = [string]$entry.match; Offset = [int]$entry.offset }
-    }
-    return (& $bestMatch -Candidates @($cacheCandidates))
+    $entry = Find-RipperAccurateRipEntry `
+                -DriveName      $DriveName `
+                -CachedListPath $CachedListPath `
+                -TimeoutSec     $TimeoutSec `
+                -SkipLive:$SkipLive
+    if ($null -eq $entry) { return $null }
+    return [int]$entry.Offset
 }
 
-Export-ModuleMember -Function Get-RipperOpticalDrives, Find-RipperAccurateRipOffset, ConvertTo-RipperDriveNameKey
+Export-ModuleMember -Function Get-RipperOpticalDrives, Find-RipperAccurateRipOffset, Find-RipperAccurateRipEntry, ConvertTo-RipperDriveNameKey

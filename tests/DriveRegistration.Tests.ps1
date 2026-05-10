@@ -189,3 +189,67 @@ Describe 'Find-RipperAccurateRipOffset (Phase 6.4.3 normalization)' {
         $r | Should -BeNullOrEmpty
     }
 }
+
+Describe 'Find-RipperAccurateRipEntry (Phase 6.4.4 rich result)' {
+
+    BeforeAll {
+        $script:richCache = Join-Path $TestDrive 'driveoffsets.rich.json'
+        @{
+            _comment       = 'Phase 6.4.4 fixture'
+            _schemaVersion = 1
+            drives = @(
+                @{ match = 'TSSTcorp - DVD+-RW TS-H653H'; offset = 6 }
+                @{ match = 'PIONEER';                     offset = 999 }
+                @{ match = 'PIONEER BD-RW BDR-209';       offset = 6 }
+            )
+        } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:richCache
+    }
+
+    It 'returns Offset + MatchedName + Source on a cache hit' {
+        $r = Find-RipperAccurateRipEntry `
+                -DriveName 'TSSTcorp DVD+-RW TS-H653H' `
+                -CachedListPath $script:richCache `
+                -SkipLive
+        $r          | Should -Not -BeNullOrEmpty
+        $r.Offset   | Should -Be 6
+        # MatchedName must be the RAW AR-table form (preserves
+        # contributor spelling) so log lines are useful for support.
+        $r.MatchedName | Should -Be 'TSSTcorp - DVD+-RW TS-H653H'
+        $r.Source   | Should -Be 'Cache'
+    }
+
+    It 'reports MatchedName for the longest-key winner, not the first match' {
+        $r = Find-RipperAccurateRipEntry `
+                -DriveName 'PIONEER BD-RW BDR-209M (1.41)' `
+                -CachedListPath $script:richCache `
+                -SkipLive
+        $r.Offset      | Should -Be 6
+        $r.MatchedName | Should -Be 'PIONEER BD-RW BDR-209'
+    }
+
+    It 'returns $null on a miss' {
+        $r = Find-RipperAccurateRipEntry `
+                -DriveName 'ACME 9000 (no such drive)' `
+                -CachedListPath $script:richCache `
+                -SkipLive
+        $r | Should -BeNullOrEmpty
+    }
+
+    It 'tags Source=Live when the live page hits before falling through to cache' {
+        $html = @'
+<html><body><table>
+<tr><td>SOMETHING-XYZ</td><td>99</td></tr>
+<tr><td>ASUS DRW-24</td><td>42</td></tr>
+</table></body></html>
+'@
+        Mock -ModuleName DriveRegistration Invoke-WebRequest {
+            [pscustomobject]@{ Content = $html }
+        }
+        $r = Find-RipperAccurateRipEntry `
+                -DriveName 'ASUS DRW-24F1ST' `
+                -CachedListPath $script:richCache
+        $r.Offset      | Should -Be 42
+        $r.MatchedName | Should -Be 'ASUS DRW-24'
+        $r.Source      | Should -Be 'Live'
+    }
+}

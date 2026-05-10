@@ -281,6 +281,88 @@ function Invoke-RipperConfigCheckboxRebuild {
 }
 
 
+function Get-RipperConfigChanges {
+<#
+.SYNOPSIS
+    Phase 6.4.4: compute a list of human-readable per-field change
+    descriptions between two config snapshots. Used by the WPF Save
+    handler to log what actually changed.
+
+.DESCRIPTION
+    Iterates the union of property names on $Before and $After and
+    returns one string per field whose value differs. Arrays are
+    compared element-by-element after stringification (the order
+    matters for SyncTargets / MetadataProviders / CoverArtProviders).
+    null vs empty-string is treated as no-change; both are "no value
+    set." Null-to-array-or-vice-versa is reported. Returns an empty
+    array when nothing changed.
+
+    NOT a generic deep-diff: only top-level NoteProperty fields are
+    walked, which is exactly what the WPF dialog mutates. Matches
+    the field set persisted by Save-RipperConfig.
+
+.PARAMETER Before
+    The pre-edit snapshot (clone via `$cfg | ConvertTo-Json -Depth 10
+    | ConvertFrom-Json` at dialog open time).
+
+.PARAMETER After
+    The post-edit snapshot (the live $cfg after $applyToCfg).
+#>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)] $Before,
+        [Parameter(Mandatory)] $After
+    )
+
+    $changes = New-Object System.Collections.Generic.List[string]
+    $names = New-Object System.Collections.Generic.HashSet[string]
+    foreach ($p in $Before.PSObject.Properties) { [void]$names.Add($p.Name) }
+    foreach ($p in $After.PSObject.Properties)  { [void]$names.Add($p.Name) }
+
+    foreach ($name in ($names | Sort-Object)) {
+        # Read property values WITHOUT routing through an if-expression:
+        # PowerShell's pipeline unrolls single-element arrays returned
+        # by an if-expression, which would silently turn @('MusicBrainz')
+        # into the bare string 'MusicBrainz' and then "$bIsArr" below
+        # would be false. Two-step assignment (init to $null, set
+        # via .Value if the property exists) preserves the original
+        # shape because the assignment is a simple expression, not a
+        # pipeline.
+        $bRaw = $null
+        $aRaw = $null
+        $bProp = $Before.PSObject.Properties[$name]
+        $aProp = $After.PSObject.Properties[$name]
+        if ($bProp) { $bRaw = $bProp.Value }
+        if ($aProp) { $aRaw = $aProp.Value }
+
+        # Normalize "no value" so null <-> '' isn't reported as a change.
+        $bIsEmpty = ($null -eq $bRaw) -or ($bRaw -is [string] -and [string]::IsNullOrEmpty($bRaw))
+        $aIsEmpty = ($null -eq $aRaw) -or ($aRaw -is [string] -and [string]::IsNullOrEmpty($aRaw))
+        if ($bIsEmpty -and $aIsEmpty) { continue }
+
+        # Arrays: stringify with a stable join so order changes are detected.
+        $bIsArr = $bRaw -is [System.Collections.IEnumerable] -and -not ($bRaw -is [string])
+        $aIsArr = $aRaw -is [System.Collections.IEnumerable] -and -not ($aRaw -is [string])
+        if ($bIsArr -or $aIsArr) {
+            $bStr = if ($bIsArr) { '[' + (@($bRaw) -join ', ') + ']' } elseif ($bIsEmpty) { '<unset>' } else { [string]$bRaw }
+            $aStr = if ($aIsArr) { '[' + (@($aRaw) -join ', ') + ']' } elseif ($aIsEmpty) { '<unset>' } else { [string]$aRaw }
+            if ($bStr -ne $aStr) { $changes.Add("${name}: $bStr -> $aStr") }
+            continue
+        }
+
+        # Scalars (string / int / bool). Compare via -ne after string cast.
+        $bStr = if ($bIsEmpty) { '<unset>' } else { [string]$bRaw }
+        $aStr = if ($aIsEmpty) { '<unset>' } else { [string]$aRaw }
+        if ($bStr -ne $aStr) {
+            $changes.Add("${name}: $bStr -> $aStr")
+        }
+    }
+
+    return [string[]]@($changes)
+}
+
+
 function Show-RipperConfigDialog {
 <#
 .SYNOPSIS
@@ -664,6 +746,14 @@ function Show-RipperConfigDialog {
     $okBtn         = $window.FindName('OkButton')
     $cancelBtn     = $window.FindName('CancelButton')
 
+    # ---- pre-edit snapshot (Phase 6.4.4) --------------------------
+    # Clone the config BEFORE any UI seeding mutates it, so the Save
+    # handler can diff the post-edit state against this baseline and
+    # log only the fields that actually changed. Round-trip through
+    # JSON gives us a deep, decoupled copy without dragging in a
+    # System.Management.Automation.PSObject reference graph.
+    $cfgBefore = $cfg | ConvertTo-Json -Depth 10 | ConvertFrom-Json
+
     # ---- seed values from $cfg ------------------------------------
     $libText.Text       = if ($cfg.LibraryRoot)            { [string]$cfg.LibraryRoot } else { '' }
     $contactText.Text   = if ($cfg.PSObject.Properties['contactAddress'] -and $cfg.contactAddress) { [string]$cfg.contactAddress } else { '' }
@@ -748,6 +838,10 @@ function Show-RipperConfigDialog {
             $cfg.DriveLetter = $picked.Drive
             $cfg.DriveOffset = $picked.Offset
             $driveInfo.Text  = "Drive: $($picked.Drive)   |   AccurateRip offset: $($picked.Offset)   (saved on Save)"
+            # Phase 6.4.4: log the staged change. The actual persist
+            # happens in the Save handler below; this just records
+            # what the user picked while the dialog was open.
+            Write-RipperLog INFO 'Show-RipperConfigDialog' "Drive registration staged: drive=$($picked.Drive), offset=$($picked.Offset). (Will persist on Save.)"
         }
     }.GetNewClosure())
 
@@ -1006,6 +1100,25 @@ function Show-RipperConfigDialog {
                 Save-RipperConfig -Config $cfg -Path $ConfigPath
             } else {
                 Save-RipperConfig -Config $cfg
+            }
+            # Phase 6.4.4: log per-field changes vs the pre-edit
+            # snapshot so a support diagnostic can see exactly what
+            # changed in this Save (and we don't accidentally hide
+            # a misconfiguration behind a chatty UI).
+            try {
+                $changes = Get-RipperConfigChanges -Before $cfgBefore -After $cfg
+                if ($changes.Count -eq 0) {
+                    Write-RipperLog INFO 'Show-RipperConfigDialog' 'Config saved (no field changes vs pre-edit snapshot).'
+                } else {
+                    Write-RipperLog INFO 'Show-RipperConfigDialog' "Config saved with $($changes.Count) change(s):"
+                    foreach ($line in $changes) {
+                        Write-RipperLog INFO 'Show-RipperConfigDialog' "  - $line"
+                    }
+                }
+            } catch {
+                # Diff is best-effort; never let a logging hiccup
+                # rollback a successful save.
+                Write-RipperLog WARN 'Show-RipperConfigDialog' "Config diff log failed (save itself succeeded): $($_.Exception.Message)"
             }
             $resultBox.Value = $cfg
             # F-6: nudge the user that this is a save-and-restart
