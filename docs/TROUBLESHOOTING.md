@@ -87,6 +87,58 @@ or the rate limit kicked in. Tool retries on the next disc; the
 current disc still rips (Phase 5+) but goes to `_ReviewQueue/` with
 placeholder tags.
 
+## Ripping (Phase 4+)
+
+### "This CD drive cannot rip audio CDs" / "ILLEGAL MODE FOR THIS TRACK"
+Phase 6.4.6 diagnostic. Symptom: the disc is identified, metadata
+loads, the confirm dialog appears, but the rip fails immediately with
+a parent-friendly fatal-error dialog naming the drive and saying
+*"This CD drive cannot rip audio CDs."* The per-disc log shows one of:
+
+```
+Rip failed: Exception calling "Read" with "2" argument(s): "Error reading CD: illegal request: ILLEGAL MODE FOR THIS TRACK"
+Rip failed: ... "failed to autodetect read command
+  BEh, 10h, , 16 blocks at a time: ILLEGAL MODE FOR THIS TRACK
+  BEh, F8h, , 16 blocks at a time: ILLEGAL MODE FOR THIS TRACK
+  D8h, 10h, , 16 blocks at a time: INVALID COMMAND OPERATION CODE
+  ..."
+```
+
+Meaning: the drive can read the disc's table-of-contents (so
+metadata works) and Windows Media Player can play it (cooked-PCM
+playback path), but every raw-audio SCSI READ CD command MusicRipper
+needs is rejected by the drive's firmware. The drive does not
+implement Digital Audio Extraction (DAE) at the SCSI level. There is
+no firmware update for these older drives that fixes this; **the only
+fix is a different drive.**
+
+**Known-bad drives** (DAE not implemented; cannot rip):
+- TSSTcorp TS-H65x family (`TSSTcorp DVD+-RW TS-H653H`, etc.) -- OEM
+  tray drives shipped with HP / Dell / Compaq desktops circa
+  2008-2010. Some firmware revisions work; many don't.
+- Most pre-2010 OEM tray drives that came pre-installed in desktops
+  rather than sold as retail products.
+
+**Known-good drives** (any of these will work, all support AccurateRip):
+- ASUS SDRW-08U9M-U (~$25, USB-C, current production)
+- ASUS BW-12B1ST (Blu-ray, internal SATA)
+- LG GP65NB60 (~$22, USB-A, very popular)
+- Pioneer BDR-XD08TS (~$80, BD-capable)
+
+After plugging in the new drive, open **MusicRipper - Settings** ->
+**General** -> **Register drive...** and pick the new drive. The
+old drive can stay where it is -- it's still useful for DVDs and
+data CDs.
+
+(Power user note: if you're confident your specific drive should
+support DAE and you'd rather investigate than replace, the per-disc
+log captures the drive name AND firmware revision so you can search
+the cdrtools / CUETools forums for your specific model + firmware
+combination. A pre-Phase-6.4.6 backlog item -- F-7 in
+`docs/DECISIONS.md` -- explores using a different ripping engine
+[Windows IMAPI2] as a fallback for these drives, but it's not
+implemented.)
+
 ## Tagging & library files (Phase 5)
 
 ### Why does Phase 5 "re-tag" files that already have tags?

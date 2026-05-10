@@ -248,6 +248,10 @@ function Invoke-RipperRip {
     # Encoders we open during the rip — tracked so cancel/cleanup can
     # Delete() any in-progress encoder safely.
     $encoders = [System.Collections.Generic.List[object]]::new()
+    # Phase 6.4.6: pre-init so the catch block can safely reference it
+    # even if the inner try fails before $driveFirmware is assigned
+    # below (StrictMode 3 throws on uninitialized-variable reads).
+    $driveFirmware = ''
 
     try {
         try {
@@ -267,7 +271,11 @@ function Invoke-RipperRip {
         if ($blockSize -le 0) { $blockSize = 27 }   # CUETools default
 
         $totalSamples = [int64]$reader.Length
-        Write-RipperLog INFO 'Invoke-Rip' "Drive open. ARName='$($reader.ARName)' Length=$totalSamples samples ($([int]($totalSamples / 44100))s) Block=$blockSize sectors."
+        # Phase 6.4.6: capture FirmwareRevision so the rip log carries
+        # enough drive identity to triangulate hardware-specific failures.
+        $driveFirmware = Get-RipperDriveFirmware -DriveLetter $driveChar
+        $fwLog = if ($driveFirmware) { " Firmware='$driveFirmware'" } else { '' }
+        Write-RipperLog INFO 'Invoke-Rip' "Drive open. ARName='$($reader.ARName)'$fwLog Length=$totalSamples samples ($([int]($totalSamples / 44100))s) Block=$blockSize sectors."
 
         # --- Init AR + CTDB -------------------------------------------------
         $proxy = [System.Net.WebRequest]::GetSystemWebProxy()
@@ -626,11 +634,29 @@ function Invoke-RipperRip {
     }
     catch {
         # Hard failure mid-rip: clean up encoders + folder, then rethrow.
-        Write-RipperLog ERROR 'Invoke-Rip' "Rip failed: $($_.Exception.Message)"
+        # Phase 6.4.6: when the failure matches the known
+        # "drive cannot do raw audio reads" signature, rewrite the
+        # exception text into a parent-friendly explanation that names
+        # the drive + firmware and points at TROUBLESHOOTING.md. The
+        # raw SCSI message stays embedded at the tail so support
+        # diagnostics still have it.
+        $rawMsg = $_.Exception.Message
+        Write-RipperLog ERROR 'Invoke-Rip' "Rip failed: $rawMsg"
         foreach ($e in $encoders) {
             try { $e.Delete() | Out-Null } catch { }
         }
         try { Remove-Item -LiteralPath $outDir -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+
+        $arName  = ''
+        try { $arName = [string]$reader.ARName } catch { }
+        $friendly = ConvertTo-RipperFriendlyRipError `
+                        -ExceptionMessage $rawMsg `
+                        -DriveName        $arName `
+                        -FirmwareRevision $driveFirmware
+        if ($friendly) {
+            Write-RipperLog ERROR 'Invoke-Rip' "Drive incompatibility detected; surfacing parent-friendly message."
+            throw $friendly
+        }
         throw
     }
     finally {
@@ -728,4 +754,135 @@ function _BuildRipLogText {
         $sw.WriteLine('AccurateRip / CTDB sections skipped (offline mode).')
     }
     $sw.ToString()
+}
+
+function ConvertTo-RipperFriendlyRipError {
+<#
+.SYNOPSIS
+    Phase 6.4.6: rewrite a low-level CUETools / SCSI rip exception
+    message into a parent-friendly explanation when the failure
+    pattern matches a known "drive cannot do raw audio reads"
+    signature. Returns the rewritten message on hit, $null on
+    no-match (caller rethrows the original).
+
+.DESCRIPTION
+    Real-world hit: the TSSTcorp TS-H653H tray drive (~2008-2010
+    OEM, shipped in many HP/Dell desktops) opens fine, contacts
+    AccurateRip + CTDB fine, but rejects every raw-audio READ CD
+    SCSI command CUETools probes:
+
+      BEh, 10h: ILLEGAL MODE FOR THIS TRACK
+      BEh, F8h: ILLEGAL MODE FOR THIS TRACK
+      D8h, 10h: INVALID COMMAND OPERATION CODE  (Plextor legacy)
+
+    -> "failed to autodetect read command".
+
+    The drive's firmware just doesn't implement raw-audio Digital
+    Audio Extraction (DAE), even though Windows Media Player can
+    play the disc through cooked-PCM playback. There is no fix in
+    MusicRipper -- the user needs a different drive. The friendly
+    message says so.
+
+    We match on substring rather than exception type because
+    CUETools wraps the SCSI error in a generic
+    System.Exception (no specific class to catch). Both error
+    forms (the autodetect summary AND the plain "Error reading
+    CD: illegal request: ILLEGAL MODE FOR THIS TRACK" that fires
+    once autodetect succeeds-then-fails on the first real read)
+    are matched.
+
+.PARAMETER ExceptionMessage
+    The exception message captured at the rip-loop catch.
+
+.PARAMETER DriveName
+    Win32_CDROMDrive.Name (vendor + model). Surfaced in the message
+    so the parent / support diagnostic knows which drive misbehaved.
+
+.PARAMETER FirmwareRevision
+    Win32_CDROMDrive.FirmwareRevision. Optional; included in the
+    message when present. Some drive families have known-bad firmware
+    revisions, so the field is worth surfacing.
+#>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyString()] [string]$ExceptionMessage,
+        [Parameter(Mandatory)] [AllowEmptyString()] [string]$DriveName,
+        [string]$FirmwareRevision = ''
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ExceptionMessage)) { return $null }
+
+    $isIncompatible =
+        $ExceptionMessage -match 'ILLEGAL\s+MODE\s+FOR\s+THIS\s+TRACK' -or
+        $ExceptionMessage -match 'failed\s+to\s+autodetect\s+read\s+command'
+    if (-not $isIncompatible) { return $null }
+
+    $driveLabel = if ([string]::IsNullOrWhiteSpace($DriveName)) {
+        '<unknown drive>'
+    } else {
+        $DriveName.Trim()
+    }
+    $fwLabel = if ([string]::IsNullOrWhiteSpace($FirmwareRevision)) {
+        ''
+    } else {
+        " (firmware $($FirmwareRevision.Trim()))"
+    }
+
+    $msg = @(
+        "This CD drive cannot rip audio CDs.",
+        "",
+        "Drive: $driveLabel$fwLabel",
+        "",
+        "The drive opened and the disc was identified, but every raw-audio",
+        "read command MusicRipper tried was rejected by the drive's firmware",
+        "(SCSI 'ILLEGAL MODE FOR THIS TRACK'). This is a hardware limitation",
+        "of this drive model -- some older OEM tray drives (notably the",
+        "TSSTcorp TS-H65x family) don't implement Digital Audio Extraction.",
+        "Windows Media Player can still PLAY the disc, but it uses a",
+        "different (cooked-PCM) path that isn't suitable for archival",
+        "rips.",
+        "",
+        "Recommended fix: use a different CD drive. A modern external USB",
+        "CD drive (`$20-25 from any electronics store) will work. Look for",
+        "ASUS, LG, or Pioneer; avoid older OEM tray drives.",
+        "",
+        "See docs/TROUBLESHOOTING.md ('CD drive cannot rip audio CDs') for",
+        "details and a known-good model list.",
+        "",
+        "(Underlying error: $($ExceptionMessage.Trim()))"
+    ) -join [Environment]::NewLine
+
+    return $msg
+}
+
+function Get-RipperDriveFirmware {
+<#
+.SYNOPSIS
+    Phase 6.4.6: best-effort lookup of Win32_CDROMDrive.FirmwareRevision
+    for a single drive letter. Returns '' on any failure (caller treats
+    empty as "unknown").
+
+.PARAMETER DriveLetter
+    'D' or 'D:' or 'D:\' -- any common form. Matched against the trailing
+    letter only.
+#>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)] [string]$DriveLetter)
+    try {
+        $letter = ($DriveLetter -replace '[^A-Za-z]', '')
+        if (-not $letter) { return '' }
+        $letter = $letter.Substring(0,1).ToUpperInvariant()
+        $cim = Get-CimInstance -ClassName Win32_CDROMDrive -ErrorAction Stop |
+               Where-Object { ([string]$_.Drive).ToUpperInvariant().StartsWith($letter) } |
+               Select-Object -First 1
+        if (-not $cim) { return '' }
+        if ($cim.PSObject.Properties['FirmwareRevision'] -and $cim.FirmwareRevision) {
+            return [string]$cim.FirmwareRevision
+        }
+        return ''
+    } catch {
+        return ''
+    }
 }
