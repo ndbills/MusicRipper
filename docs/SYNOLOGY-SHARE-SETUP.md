@@ -92,6 +92,28 @@ ripping a stack and want to skip the per-disc handshake (~2-3s);
 the first sync's start pins the tunnel for the rest of the
 session, and it comes down at exit.
 
+#### Direct-first NAS sync (Phase 6.4.2)
+
+When `cfg.PreferDirectNasConnection = $true` (default), the steps
+above are preceded by a fast TCP/445 reachability probe against the
+share's server:
+
+- **Probe succeeds** (you're on the home LAN, the NAS answers
+  directly): the tunnel is NOT brought up; robocopy goes over the
+  LAN. The per-disc log records *"NAS reachable on LAN; skipping
+  WireGuard tunnel acquire"*.
+- **Probe fails** (timeout / DNS error / refused -- you're remote,
+  or the LAN can't reach the NAS): MusicRipper falls back to the
+  WireGuard acquire path above. The per-disc log records *"NAS not
+  reachable directly; falling back to WireGuard tunnel"*.
+
+The probe is bounded at 2 seconds and never throws -- worst case
+it adds a small delay before falling back to the existing WG
+behaviour. Toggle off in **Settings → WireGuard → "Prefer direct
+(LAN) connection"** if you want the tunnel to always be used (e.g.
+you don't trust the LAN path or the LAN exposes the share over a
+slower link).
+
 When MusicRipper exits (last `Stop-RipperLog`), the bottom-of-
 script teardown drops any session-scoped keep-alive ref and then
 defensively `Stop-Service`'s the tunnel if it's still Running --

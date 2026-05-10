@@ -48,6 +48,15 @@ exactly as before.
 Phase 6.4 reuses the `SynologyNAS` target unchanged over WireGuard
 (setup-doc addition only).
 
+Phase 6.4.2 adds **direct-first NAS sync**: when WireGuard auto-toggle
+is configured, MusicRipper probes the share's server on TCP/445
+(~2s timeout) before each sync. If the share answers directly (you're
+on the home LAN), the tunnel is NOT brought up and robocopy goes over
+the LAN; if the probe fails, MusicRipper falls back to bringing the
+tunnel up. Controlled by `cfg.PreferDirectNasConnection` (default
+`$true`) -- toggle off in Settings → WireGuard if you want the tunnel
+to always be used. See [DECISIONS.md D-031](DECISIONS.md).
+
 ### Retention modes
 
 | Mode                          | Behaviour                                                                                                                                         |

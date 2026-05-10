@@ -551,6 +551,10 @@ function Show-RipperConfigDialog {
                       Margin="0,0,0,8"
                       ToolTip="When off (default), the tunnel comes up only for the duration of each individual sync. When on, the first sync pins it for the rest of the session and it's torn down at exit."/>
 
+            <CheckBox x:Name="WgPreferDirectCheck" Content="Prefer direct (LAN) connection — only use tunnel when NAS is unreachable"
+                      Margin="0,0,0,8"
+                      ToolTip="When on (default), MusicRipper probes the NAS share on TCP/445 (~2s timeout) before each sync. If the share answers directly (you're on the home LAN), the tunnel stays down. If the probe fails (timeout, DNS, refused), MusicRipper falls back to bringing the tunnel up. Turn off to always use the tunnel when WireGuardAutoToggle is on."/>
+
           </StackPanel>
         </ScrollViewer>
       </TabItem>
@@ -644,6 +648,7 @@ function Show-RipperConfigDialog {
     $wgStatusText  = $window.FindName('WgStatusText')
     $wgAutoCheck   = $window.FindName('WgAutoCheck')
     $wgKeepCheck   = $window.FindName('WgKeepAliveCheck')
+    $wgPreferDirectCheck = $window.FindName('WgPreferDirectCheck')
 
     $valText       = $window.FindName('ValidationText')
     $okBtn         = $window.FindName('OkButton')
@@ -661,6 +666,9 @@ function Show-RipperConfigDialog {
     $wgTunnelText.Text  = if ($cfg.WireGuardTunnelName)    { [string]$cfg.WireGuardTunnelName } else { '' }
     $wgAutoCheck.IsChecked = [bool]$cfg.WireGuardAutoToggle
     $wgKeepCheck.IsChecked = [bool]$cfg.WireGuardKeepAliveBetweenDiscs
+    # Forward-compat: older configs may not have PreferDirectNasConnection;
+    # treat missing as the default (true).
+    $wgPreferDirectCheck.IsChecked = if ($cfg.PSObject.Properties['PreferDirectNasConnection']) { [bool]$cfg.PreferDirectNasConnection } else { $true }
 
     foreach ($it in $retentionCb.Items) {
         if ([string]$it.Tag -eq [string]$cfg.LocalRetention) {
@@ -867,6 +875,7 @@ function Show-RipperConfigDialog {
         $cfg.WireGuardTunnelName          = $(if ($wgTunnelText.Text.Trim()) { $wgTunnelText.Text.Trim() } else { $null })
         $cfg.WireGuardAutoToggle          = [bool]$wgAutoCheck.IsChecked
         $cfg.WireGuardKeepAliveBetweenDiscs = [bool]$wgKeepCheck.IsChecked
+        $cfg.PreferDirectNasConnection    = [bool]$wgPreferDirectCheck.IsChecked
 
         $sel = $retentionCb.SelectedItem
         if ($sel) { $cfg.LocalRetention = [string]$sel.Tag }
@@ -920,7 +929,7 @@ function Show-RipperConfigDialog {
     foreach ($tb in @($libText, $contactText, $oneDriveText, $synUncText, $wgTunnelText)) {
         $tb.Add_TextChanged({ & $refreshOk }.GetNewClosure())
     }
-    foreach ($cb in @($ejectCheck, $contCheck, $retryCheck, $synRqCheck, $wgAutoCheck, $wgKeepCheck)) {
+    foreach ($cb in @($ejectCheck, $contCheck, $retryCheck, $synRqCheck, $wgAutoCheck, $wgKeepCheck, $wgPreferDirectCheck)) {
         $cb.Add_Checked(  { & $refreshOk }.GetNewClosure())
         $cb.Add_Unchecked({ & $refreshOk }.GetNewClosure())
     }

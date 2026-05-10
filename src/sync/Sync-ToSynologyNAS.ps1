@@ -135,6 +135,70 @@ function Get-RipperSynologyShareRoot {
 }
 
 
+function Test-RipperSynologyDirectReachable {
+<#
+.SYNOPSIS
+    Phase 6.4.2: probe whether the configured NAS share's server
+    answers on TCP/445 directly (i.e. without going through the
+    WireGuard tunnel). Used to gate the WireGuard auto-toggle so the
+    parent's home LAN syncs don't pay the tunnel-handshake cost.
+
+.DESCRIPTION
+    Extracts the server hostname from the supplied UNC (the first
+    segment after the leading `\\`) and runs a single PS7
+    `Test-Connection -TcpPort 445 -TimeoutSeconds <n>` probe.
+
+    Returns:
+      $true  -- server answered on TCP/445 within the timeout.
+      $false -- non-UNC input, DNS failure, connection refused,
+                timeout, or any other error. NEVER throws -- the rip
+                pipeline must not crash because a probe blew up.
+
+    Bounded latency: the worst case is roughly TimeoutSeconds, so the
+    default of 2s keeps the rip pipeline responsive even when the
+    parent is on a flaky network or DNS is slow.
+
+.PARAMETER Unc
+    The configured NAS UNC path (e.g. `\\nas\music`). Local-folder
+    inputs (used by tests) return $false -- the WG path doesn't apply
+    to those anyway.
+
+.PARAMETER TimeoutSeconds
+    Per-probe timeout. Default 2 seconds.
+#>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)] [string]$Unc,
+        [int]$TimeoutSeconds = 2
+    )
+    if (-not (Test-RipperUncPath -Path $Unc)) { return $false }
+    $shareRoot = Get-RipperSynologyShareRoot -Path $Unc
+    if (-not $shareRoot) { return $false }
+    # \\<server>\<share> -> <server>. NB: avoid the variable name $host;
+    # PowerShell reserves $Host as an automatic variable referencing the
+    # current host environment.
+    $server = $shareRoot.TrimStart('\').Split('\', 2)[0]
+    if ([string]::IsNullOrWhiteSpace($server)) { return $false }
+    try {
+        # PS7 cross-platform syntax: -TargetName + -TcpPort + -TimeoutSeconds
+        # + -Quiet returns a plain bool. Wrap in [bool] in case the cmdlet
+        # ever returns something pipeable.
+        return [bool](Test-Connection `
+            -TargetName     $server `
+            -TcpPort        445 `
+            -TimeoutSeconds $TimeoutSeconds `
+            -Quiet `
+            -ErrorAction    Stop)
+    } catch {
+        # DNS failure / refused / timeout / cmdlet-not-available all
+        # collapse to "not directly reachable" so the caller falls back
+        # to the existing WireGuard acquire path.
+        return $false
+    }
+}
+
+
 function Invoke-RipperSyncToSynologyNAS {
 <#
 .SYNOPSIS
@@ -202,6 +266,29 @@ function Invoke-RipperSyncToSynologyNAS {
              [bool](Get-Command -Name Add-RipperVpnTunnelRef -ErrorAction SilentlyContinue)
     if ($autoToggle -and -not [string]::IsNullOrWhiteSpace($wgName) -and -not $useWg) {
         Write-RipperLog WARN 'SynologyNAS' "WireGuardAutoToggle is true but src/lib/Wireguard.psm1 is not loaded. Continuing without auto-toggle; the share must already be reachable."
+    }
+
+    # Phase 6.4.2: direct-first NAS sync. When the WireGuard auto-toggle
+    # would otherwise fire AND PreferDirectNasConnection is true (the
+    # default), probe the NAS on TCP/445 to see if it's reachable on
+    # the LAN before bringing the tunnel up. This keeps the tunnel
+    # closed when the parent is at home and saves the ~2-3s handshake
+    # per disc; it also means the tunnel is only used when actually
+    # needed (i.e. the parent is somewhere else). The probe is bounded
+    # at 2s so the rip pipeline stays responsive on flaky networks,
+    # and any failure (DNS, refused, timeout) falls through to the
+    # existing WG acquire path -- the feature is safe by construction.
+    $preferDirect = $true
+    if ($Config.PSObject.Properties['PreferDirectNasConnection']) {
+        $preferDirect = [bool]$Config.PreferDirectNasConnection
+    }
+    if ($useWg -and $preferDirect) {
+        if (Test-RipperSynologyDirectReachable -Unc $unc) {
+            Write-RipperLog INFO 'SynologyNAS' "NAS share '$unc' is reachable directly on TCP/445; skipping WireGuard tunnel acquire."
+            $useWg = $false
+        } else {
+            Write-RipperLog INFO 'SynologyNAS' "NAS share '$unc' is not reachable directly on TCP/445; falling back to WireGuard tunnel '$wgName'."
+        }
     }
 
     # Pre-flight 2: stored credential available if requested?
