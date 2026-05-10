@@ -397,7 +397,24 @@ function Invoke-RipperSyncToSynologyNAS {
         # is what we want -- it surfaces "NAS off" / "wrong password"
         # before robocopy spends 30s timing out.
         if (-not (Test-Path -LiteralPath $unc)) {
-            $diag = "SynologyUnc '$unc' is not reachable. Check the NAS is on, the share exists, and the configured credentials are correct."
+            # Disambiguate "host down" vs "host up but auth missing".
+            # A common parent-friendly miss is configuring SynologyUnc
+            # against a share that requires authentication, but never
+            # opening Settings -> Sync -> Set Synology credential. The
+            # raw "not reachable" message sends the user looking at
+            # the wrong thing (NAS power, network) when the server is
+            # actually right there waiting for credentials.
+            #
+            # Heuristic: if it's a UNC path, the server answers on
+            # TCP/445, and we have no stored credential, the share
+            # almost certainly rejected the connection at the SMB
+            # auth step. Point the user at Settings instead. The
+            # extra ~2s probe only runs on the failure path.
+            if ($isUnc -and -not $needsCred -and (Test-RipperSynologyDirectReachable -Unc $unc)) {
+                $diag = "NAS server is reachable on TCP/445 but the share '$unc' could not be opened. The most likely cause is that the share requires authentication and no credential is configured. Open Settings -> Sync -> 'Set Synology credential...' to save your NAS username/password, then retry."
+            } else {
+                $diag = "SynologyUnc '$unc' is not reachable. Check the NAS is on, the share exists, and the configured credentials are correct."
+            }
             Write-RipperLog WARN 'SynologyNAS' "Pre-flight failed: $diag"
             return @{
                 Target='SynologyNAS'; Status='Failed'; BytesCopied=0

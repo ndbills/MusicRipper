@@ -130,6 +130,53 @@ Describe 'Invoke-RipperSyncToSynologyNAS (pre-flight)' {
         $r.Status     | Should -Be 'Failed'
         $r.Diagnostic | Should -Match 'credentials.clixml'
     }
+
+    It "produces a 'credential is missing' diagnostic when the UNC server is reachable but Test-Path on the share fails AND HasSynologyCredential=false" {
+        # Most common parent-friendly miss: SynologyUnc points at a NAS
+        # that requires authentication, but no credential is configured.
+        # The raw "not reachable" message sends the parent looking at
+        # the wrong thing (NAS power, network) when the server is
+        # actually right there waiting for credentials.
+        $lib = New-Lib
+        $alb = New-FakeAlbum $lib 'A' 'B'
+
+        # Spoof: Test-RipperSynologyDirectReachable says yes (TCP/445
+        # would have answered), but Test-Path on the UNC says no
+        # (the SMB session was rejected at auth).
+        Mock Test-RipperSynologyDirectReachable { $true }
+        Mock Test-Path { $false } -ParameterFilter { $LiteralPath -eq '\\nas\music' }
+
+        $cfg = [pscustomobject]@{
+            SynologyUnc           = '\\nas\music'
+            HasSynologyCredential = $false
+        }
+        $r = Invoke-RipperSyncToSynologyNAS -AlbumPath $alb -LibraryRoot $lib -Config $cfg
+
+        $r.Status     | Should -Be 'Failed'
+        $r.Diagnostic | Should -Match 'authentication'
+        $r.Diagnostic | Should -Match 'Set Synology credential'
+    }
+
+    It 'falls back to the generic "not reachable" diagnostic when TCP/445 is also unreachable' {
+        $lib = New-Lib
+        $alb = New-FakeAlbum $lib 'A' 'B'
+
+        # Both probes say the share is gone -- this should NOT trip the
+        # credential-missing hint; the user really does need to look at
+        # the NAS / network.
+        Mock Test-RipperSynologyDirectReachable { $false }
+        Mock Test-Path { $false } -ParameterFilter { $LiteralPath -eq '\\nas\music' }
+
+        $cfg = [pscustomobject]@{
+            SynologyUnc           = '\\nas\music'
+            HasSynologyCredential = $false
+        }
+        $r = Invoke-RipperSyncToSynologyNAS -AlbumPath $alb -LibraryRoot $lib -Config $cfg
+
+        $r.Status     | Should -Be 'Failed'
+        $r.Diagnostic | Should -Match 'not reachable'
+        $r.Diagnostic | Should -Not -Match 'authentication'
+    }
 }
 
 Describe 'Invoke-RipperSyncToSynologyNAS (integration via robocopy, no SMB mount)' {

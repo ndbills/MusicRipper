@@ -111,6 +111,16 @@ function Test-RipperConfigEditorComplete {
     if ($st -contains 'SynologyNAS') {
         $unc = $Config.SynologyUnc
         if (-not $unc -or ([string]$unc).Trim().Length -eq 0) { return $false }
+        # And requires a stored DPAPI credential. The NAS share almost
+        # always rejects ambient-session creds (different account on
+        # different machines, or no cached login at all), and the most
+        # common parent-hand-off failure mode is "sync fails because
+        # nobody clicked Set... after entering the UNC path."
+        $hasCred = $false
+        if ($Config.PSObject.Properties['HasSynologyCredential']) {
+            $hasCred = [bool]$Config.HasSynologyCredential
+        }
+        if (-not $hasCred) { return $false }
     }
 
     # MusicBrainz contact address is required in both modes -- MB / CTDB /
@@ -831,6 +841,12 @@ function Show-RipperConfigDialog {
     & $refreshWgStatus
 
     # ---- Credential buttons ---------------------------------------
+    # `$refreshOk` is defined further down -- closures wired here can't
+    # see it (locals captured by .GetNewClosure() are snapshotted at
+    # define time, not click time). Hashtable-wrapper trick: declare
+    # an empty box now, fill it in once $refreshOk exists, deref via
+    # $refreshBox.Run inside the closure.
+    $refreshBox = @{ Run = $null }
     $credSet.Add_Click({
         try {
             $c = Show-RipperCredentialDialog `
@@ -841,6 +857,9 @@ function Show-RipperConfigDialog {
                 Save-RipperCredential -Credential $c
                 $cfg.HasSynologyCredential = $true
                 $credStatus.Text = "Credential: stored (DPAPI)"
+                # Re-evaluate Save eligibility -- the cross-field rule
+                # for SynologyNAS now depends on this flag.
+                if ($refreshBox.Run) { & $refreshBox.Run }
             }
         } catch {
             [System.Windows.MessageBox]::Show("Failed to save credential: $($_.Exception.Message)", 'MusicRipper', 'OK', 'Error') | Out-Null
@@ -855,6 +874,11 @@ function Show-RipperConfigDialog {
             }
             $cfg.HasSynologyCredential = $false
             $credStatus.Text = "Credential: none stored"
+            # Re-evaluate Save eligibility -- clearing the credential
+            # while SynologyNAS is still selected as a sync target now
+            # disables Save until the user either re-saves or unchecks
+            # the target.
+            if ($refreshBox.Run) { & $refreshBox.Run }
         } catch {
             [System.Windows.MessageBox]::Show("Failed to clear credential: $($_.Exception.Message)", 'MusicRipper', 'OK', 'Error') | Out-Null
         }
@@ -903,6 +927,10 @@ function Show-RipperConfigDialog {
             if (@($cfg.SyncTargets) -contains 'SynologyNAS' -and
                 (-not $cfg.SynologyUnc -or
                  ([string]$cfg.SynologyUnc).Trim().Length -eq 0))             { $missing.Add('Synology UNC path (required by the SynologyNAS sync target)') }
+            if (@($cfg.SyncTargets) -contains 'SynologyNAS' -and
+                $cfg.SynologyUnc -and
+                ([string]$cfg.SynologyUnc).Trim().Length -gt 0 -and
+                -not [bool]$cfg.HasSynologyCredential)                        { $missing.Add("Synology credential (click 'Set...' next to the UNC path)") }
             $valText.Text = "Required: " + ($missing -join '; ')
         } else {
             $bits = New-Object System.Collections.Generic.List[string]
@@ -921,9 +949,21 @@ function Show-RipperConfigDialog {
                  ([string]$cfg.SynologyUnc).Trim().Length -eq 0)) {
                 $bits.Add('SynologyNAS sync target is enabled -- enter the NAS UNC path.')
             }
+            if (@($cfg.SyncTargets) -contains 'SynologyNAS' -and
+                $cfg.SynologyUnc -and
+                ([string]$cfg.SynologyUnc).Trim().Length -gt 0 -and
+                -not [bool]$cfg.HasSynologyCredential) {
+                $bits.Add("SynologyNAS sync target is enabled -- click 'Set...' under 'NAS credential' to save your NAS username/password.")
+            }
             $valText.Text = ($bits -join ' ')
         }
     }
+
+    # Now that $refreshOk is defined, hand it to the early-wired
+    # credential-button closures via the hashtable wrapper declared
+    # above (they couldn't capture $refreshOk directly because their
+    # .GetNewClosure() ran before the variable existed).
+    $refreshBox.Run = $refreshOk
 
     # Wire change events so OK enables/disables live.
     foreach ($tb in @($libText, $contactText, $oneDriveText, $synUncText, $wgTunnelText)) {
