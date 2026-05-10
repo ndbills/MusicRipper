@@ -72,11 +72,18 @@ function Get-RipperOpticalDrives {
 <#
 .SYNOPSIS
     Return all optical drives on this machine as an array of objects with
-    Drive (e.g. 'D:') and Name (vendor + model) properties.
+    Drive (e.g. 'D:'), Name (vendor + model), and FirmwareRevision
+    properties.
 .DESCRIPTION
     Thin wrapper around Get-CimInstance Win32_CDROMDrive. Sorted by Drive
     so UI listings are stable across runs. Always returns an array
     (possibly empty).
+
+    Phase 6.4.6: FirmwareRevision was added so the rip log captures
+    enough drive identity to triangulate hardware-specific issues
+    (e.g. the TS-H653H "ILLEGAL MODE FOR THIS TRACK" failure surfaces
+    on some firmware revisions but not others). Always [string]; '' when
+    Win32 doesn't expose it.
 #>
     [CmdletBinding()]
     [OutputType([object[]])]
@@ -85,9 +92,14 @@ function Get-RipperOpticalDrives {
     $rows = @(Get-CimInstance -ClassName Win32_CDROMDrive |
               Sort-Object Drive |
               ForEach-Object {
+                  $fw = ''
+                  if ($_.PSObject.Properties['FirmwareRevision'] -and $_.FirmwareRevision) {
+                      $fw = [string]$_.FirmwareRevision
+                  }
                   [pscustomobject]@{
-                      Drive = [string]$_.Drive
-                      Name  = [string]$_.Name
+                      Drive            = [string]$_.Drive
+                      Name             = [string]$_.Name
+                      FirmwareRevision = $fw
                   }
               })
     return $rows

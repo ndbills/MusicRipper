@@ -1438,6 +1438,127 @@ passed end-to-end: clean launch from Settings shortcut, foreground
 steal works, Save toast fires, change persists across re-open, no
 interference observed when launched alongside a running main app.
 
+---
+
+## F-7 -- IMAPI2 fallback rip engine for SCSI-incompatible drives *(deferred / parked)*
+
+**Status:** Backlog. Not implemented.
+**Date scoped:** 2026-05-10 (after parents'-PC TS-H653H install).
+
+### Problem
+A class of older OEM tray drives -- the TSSTcorp TS-H65x family is
+the canonical example, surfaced on the parents' install -- can read
+the disc TOC fine, can be played by Windows Media Player, but reject
+every raw-audio SCSI READ CD command CUETools probes:
+
+```
+BEh, 10h: ILLEGAL MODE FOR THIS TRACK
+BEh, F8h: ILLEGAL MODE FOR THIS TRACK
+D8h, 10h: INVALID COMMAND OPERATION CODE
+```
+
+The drive's firmware just doesn't implement Digital Audio Extraction
+at the SCSI level, even though Windows can play CDs through it via a
+different (cooked-PCM) path. There's no firmware fix for these
+drives.
+
+Phase 6.4.6 ships a parent-friendly fatal error that names the drive
++ firmware and tells the user to use a different drive. F-7 explores
+whether MusicRipper could *also* rip these drives via a different
+engine.
+
+### Why it matters
+Parents who already have a desktop with one of these drives
+pre-installed don't necessarily want to buy a new drive. A working
+fallback would mean "any Windows machine that can play CDs in WMP can
+rip CDs in MusicRipper" -- much closer to the parent-friendly goal.
+
+### Options considered
+1. **Force-set CDDriveReader to a less-strict SCSI mode (e.g. mode
+   bits CUETools doesn't try by default).** Likely produces audio
+   the drive WILL return, but with no C2 error pointers, possibly
+   re-sampled through the drive's analog path, and the CUETools API
+   doesn't expose this cleanly without patching the DLL. **Rejected**
+   -- bypasses every promise of bit-perfect verified output.
+2. **Shell out to `cdparanoia` (libcdio Windows port).** Different
+   SCSI probing strategy; gold-standard fault tolerance; bit-perfect.
+   But: ~10MB binary not on winget, no signed installer, would be a
+   non-trivial new external dependency. **Reasonable as opt-in.**
+3. **Use Windows IMAPI2 (built into Windows since Vista, COM, no
+   install).** This is the same API surface WMP uses. Documented
+   raw-PCM CD-DA read support; fewer correction primitives than
+   CUETools (no C2 pointers); bit-perfect when it works. **The most
+   interesting fallback** -- no new dependency, broadest reach.
+
+### IMAPI2 design sketch (option 3, the prototype-able one)
+- New `src/core/Invoke-Rip-Imapi2.ps1` parallel to `Invoke-Rip.ps1`,
+  same `Invoke-RipperRipImapi2` signature, same sample-boundary +
+  encoder layout (so the post-process pipeline doesn't care which
+  engine wrote the FLACs).
+- COM via `New-Object -ComObject 'IMAPI2.MsftDiscMaster2'` ->
+  `MsftDiscRecorder2.InitializeDiscRecorder($drivePath)` ->
+  `MsftDiscFormat2RawCD` for raw-PCM block reads. Estimated
+  150-250 lines of PowerShell + a few P/Invokes for the bits the
+  COM surface doesn't reach cleanly.
+- Trigger: when the existing CUETools rip path fails with the
+  Phase-6.4.6 "incompatible drive" signature, automatically retry
+  with the IMAPI2 engine. Log line: `RipEngine=IMAPI2 (CUETools-
+  incompatible drive)` -- AND keep the existing fatal-error friendly
+  message as the FINAL fallback if IMAPI2 also fails.
+- AccurateRip + CTDB verification runs after the rip regardless of
+  engine. A drive that produces bad bytes would surface as
+  `Suspect` and route to `_ReviewQueue/` -- same safety net as a
+  marginal CUETools rip.
+- Config knob: `cfg.EnableImapi2Fallback` (default `$true`). Off
+  preserves today's behaviour exactly (parent-friendly fatal
+  error, no automatic retry).
+
+### Tradeoffs / risks
+- **No C2 error pointers** -- IMAPI2 doesn't surface them. AR + CTDB
+  verification still happens, but a marginal disc on IMAPI2 might
+  produce more `_ReviewQueue/` routings than the same disc would on
+  CUETools. The safety net catches it; the user just gets more
+  review work.
+- **Bit-perfect is documented, not exhaustively tested** -- the
+  IMAPI2 raw-CD-DA surface is documented but underused in OSS code,
+  so we'd need a real-disc validation pass against AccurateRip on
+  multiple drives before trusting the engine.
+- **PowerShell COM ergonomics** are awkward; `Marshal.ReleaseComObject`
+  discipline, COM threading model, `[System.Runtime.InteropServices]`
+  P/Invoke for the parts COM doesn't expose. Estimated ~1 day of
+  prototype + ~1 day of validation across two test drives.
+- **Windows-only by definition.** Already true for the project, but
+  worth flagging.
+
+### Re-entry checklist
+1. Spike: 1-disc end-to-end IMAPI2 rip on the broken TS-H653H + a
+   known-good drive (ASUS BW-12B1ST). Confirm both produce
+   AccurateRip-matching bytes.
+2. If spike passes: full implementation per the design sketch above,
+   gated behind `cfg.EnableImapi2Fallback` default-true. New tests
+   for the engine selection logic + the post-failure retry path.
+3. If spike fails (drive still won't return audio, or bytes don't
+   match AR): document the dead-end here, leave the parent-friendly
+   error in place, recommend cdparanoia (option 2) as the
+   power-user escape hatch.
+4. Either way, update `docs/TROUBLESHOOTING.md` "CD drive cannot
+   rip audio CDs" section to reference whatever shipped (if
+   anything).
+
+### Why deferred
+Real users hit this rarely (any post-2015 retail drive works), the
+parent-friendly fatal error is a perfectly fine answer for now, and
+the IMAPI2 prototype + validation is non-trivial. Re-pick when a
+specific user asks for it OR when we have multiple finicky-drive
+test machines available.
+
+**Cross-references:** D-001 (CUETools as the chosen engine -- F-7
+would add a *secondary* engine, not replace), D-006
+(`_ReviewQueue/` is the safety net for any rip whose bytes don't
+verify, regardless of engine).
+
+---
+
 ## D-019 -- Wire user-driven Send to Review through the rip pipeline (Phase 5.9)
 
 **Status:** Implemented (Phase 5.9).
