@@ -44,6 +44,10 @@ Set-StrictMode -Version 3.0
 # here so the dialog can also be sourced standalone for repro/test.
 $libRoot = Join-Path $PSScriptRoot '..\lib'
 Import-Module (Join-Path $libRoot 'DriveRegistration.psd1') -Force
+# Logging is also imported by the parent runspace; load defensively
+# so the dispatcher-tick log lines below never throw if the dialog
+# is sourced standalone (Phase 6.4.4).
+Import-Module (Join-Path $libRoot 'Logging.psd1') -Force
 
 function Show-RipperRegisterDriveDialog {
 <#
@@ -241,9 +245,13 @@ function Show-RipperRegisterDriveDialog {
             $ErrorActionPreference = 'Stop'
             try {
                 Import-Module (Join-Path $repoRoot 'src\lib\DriveRegistration.psd1') -Force
-                $offset = Find-RipperAccurateRipOffset -DriveName $driveName `
-                                                       -CachedListPath $cachedListPath
-                $shared.Result = $offset
+                # Phase 6.4.4: rich entry (Offset + MatchedName + Source)
+                # so the parent runspace can log WHICH AccurateRip row
+                # matched the Windows drive name. Helps confirm the
+                # right physical drive was identified.
+                $shared.Result = Find-RipperAccurateRipEntry `
+                                    -DriveName      $driveName `
+                                    -CachedListPath $cachedListPath
                 $shared.Phase  = 'done'
             } catch {
                 $shared.Error = $_.Exception.Message
@@ -266,13 +274,16 @@ function Show-RipperRegisterDriveDialog {
             $driveCombo.IsEnabled    = $true
             $okBtn.IsEnabled         = $true
             if ($null -ne $shared.Result) {
-                $offsetText.Text       = [string]$shared.Result
-                $statusText.Text       = "Found offset $($shared.Result) for '$($shared.DriveName)'."
+                $entry = $shared.Result
+                $offsetText.Text = [string]$entry.Offset
+                $statusText.Text = "Found offset $($entry.Offset) for '$($shared.DriveName)' (matched AccurateRip entry: '$($entry.MatchedName)', source: $($entry.Source))."
                 $statusText.Foreground = '#070'
+                Write-RipperLog INFO 'Show-RegisterDriveDialog' "AR lookup HIT for drive '$($shared.DriveName)': offset=$($entry.Offset), matched='$($entry.MatchedName)', source=$($entry.Source)."
             } else {
                 $statusText.Text       = "No AccurateRip offset found for '$($shared.DriveName)'. Enter the value manually if you know it, or leave 0 (rips will still work but AR verification will be unreliable)."
                 $statusText.Foreground = '#a60'
                 if (-not $offsetText.Text) { $offsetText.Text = '0' }
+                Write-RipperLog INFO 'Show-RegisterDriveDialog' "AR lookup MISS for drive '$($shared.DriveName)': no normalized substring match in live page or cache."
             }
             $shared.Phase = 'idle'
         }
@@ -284,6 +295,7 @@ function Show-RipperRegisterDriveDialog {
             $okBtn.IsEnabled         = $true
             $statusText.Text         = "Lookup failed: $($shared.Error)"
             $statusText.Foreground   = '#a00'
+            Write-RipperLog WARN 'Show-RegisterDriveDialog' "AR lookup ERROR for drive '$($shared.DriveName)': $($shared.Error)"
             $shared.Phase = 'idle'
         }
     }.GetNewClosure())
@@ -311,6 +323,10 @@ function Show-RipperRegisterDriveDialog {
             Drive  = [string]$driveObj.Drive
             Offset = [int]$offsetRaw
         }
+        # Phase 6.4.4: log the registration outcome with the actual
+        # Windows-reported drive name so a later support diagnostic
+        # can confirm exactly which physical drive was registered.
+        Write-RipperLog INFO 'Show-RegisterDriveDialog' "Drive registration confirmed by user: drive=$([string]$driveObj.Drive), name='$([string]$driveObj.Name)', offset=$([int]$offsetRaw)."
         $window.DialogResult = $true
         $window.Close()
     }.GetNewClosure())

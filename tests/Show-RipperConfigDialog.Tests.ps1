@@ -218,3 +218,79 @@ Describe 'Get-RipperOrderedCheckboxState' {
         @($r.Name) | Should -Be @('A','B')
     }
 }
+
+Describe 'Get-RipperConfigChanges (Phase 6.4.4)' {
+
+    It 'returns an empty list when nothing changed' {
+        $a = [pscustomobject]@{ LibraryRoot = 'C:\Music'; ContinuousMode = $true }
+        $b = [pscustomobject]@{ LibraryRoot = 'C:\Music'; ContinuousMode = $true }
+        @(Get-RipperConfigChanges -Before $a -After $b).Count | Should -Be 0
+    }
+
+    It 'reports a single scalar change with old then new format' {
+        $a = [pscustomobject]@{ LibraryRoot = 'C:\Music' }
+        $b = [pscustomobject]@{ LibraryRoot = 'D:\Music' }
+        $r = @(Get-RipperConfigChanges -Before $a -After $b)
+        $r.Count | Should -Be 1
+        $r[0]    | Should -Match '^LibraryRoot: C:\\Music -> D:\\Music$'
+    }
+
+    It 'reports bool changes' {
+        $a = [pscustomobject]@{ EjectAfterRip = $true; ContinuousMode = $true }
+        $b = [pscustomobject]@{ EjectAfterRip = $false; ContinuousMode = $true }
+        $r = @(Get-RipperConfigChanges -Before $a -After $b)
+        $r.Count | Should -Be 1
+        $r[0]    | Should -Be 'EjectAfterRip: True -> False'
+    }
+
+    It 'treats $null and empty-string as the same "no value"' {
+        # User opens Settings, focuses an empty field, blurs it; we
+        # don't want to log "OneDriveSyncTargetRoot:  -> " as a change.
+        $a = [pscustomobject]@{ OneDriveSyncTargetRoot = $null }
+        $b = [pscustomobject]@{ OneDriveSyncTargetRoot = '' }
+        @(Get-RipperConfigChanges -Before $a -After $b).Count | Should -Be 0
+    }
+
+    It 'reports an unset to set scalar transition' {
+        $a = [pscustomobject]@{ SynologyUnc = $null }
+        $b = [pscustomobject]@{ SynologyUnc = '\\nas\music' }
+        $r = @(Get-RipperConfigChanges -Before $a -After $b)
+        $r.Count | Should -Be 1
+        $r[0]    | Should -Be 'SynologyUnc: <unset> -> \\nas\music'
+    }
+
+    It 'reports an array reorder as a change (order matters for SyncTargets)' {
+        $a = [pscustomobject]@{ SyncTargets = @('Stub','OneDrive') }
+        $b = [pscustomobject]@{ SyncTargets = @('OneDrive','Stub') }
+        $r = @(Get-RipperConfigChanges -Before $a -After $b)
+        $r.Count | Should -Be 1
+        $r[0]    | Should -Be 'SyncTargets: [Stub, OneDrive] -> [OneDrive, Stub]'
+    }
+
+    It 'reports added and removed array elements' {
+        $a = [pscustomobject]@{ MetadataProviders = @('MusicBrainz') }
+        $b = [pscustomobject]@{ MetadataProviders = @('MusicBrainz','GnuDb') }
+        $r = @(Get-RipperConfigChanges -Before $a -After $b)
+        $r.Count | Should -Be 1
+        $r[0]    | Should -Be 'MetadataProviders: [MusicBrainz] -> [MusicBrainz, GnuDb]'
+    }
+
+    It 'reports a field added on After but missing on Before as unset to value' {
+        # Forward-compat: a config schema bump may add new fields.
+        $a = [pscustomobject]@{ LibraryRoot = 'C:\Music' }
+        $b = [pscustomobject]@{ LibraryRoot = 'C:\Music'; PreferDirectNasConnection = $true }
+        $r = @(Get-RipperConfigChanges -Before $a -After $b)
+        $r.Count | Should -Be 1
+        $r[0]    | Should -Be 'PreferDirectNasConnection: <unset> -> True'
+    }
+
+    It 'reports multiple changes sorted by field name (deterministic log)' {
+        $a = [pscustomobject]@{ LibraryRoot = 'C:\A'; SynologyUnc = $null }
+        $b = [pscustomobject]@{ LibraryRoot = 'C:\B'; SynologyUnc = '\\nas\music' }
+        $r = @(Get-RipperConfigChanges -Before $a -After $b)
+        $r.Count | Should -Be 2
+        # Sort-Object is stable + alphabetical, so 'LibraryRoot' < 'SynologyUnc'.
+        $r[0] | Should -Match '^LibraryRoot:'
+        $r[1] | Should -Match '^SynologyUnc:'
+    }
+}
