@@ -17,23 +17,32 @@ BeforeAll {
         _comment       = 'test fixture'
         _schemaVersion = 1
         drives = @(
-            @{ match = 'PIONEER BD-RW   BDR-209'; offset = 6 }
-            @{ match = 'ASUS DRW-24';              offset = 6 }
-            @{ match = 'LITE-ON DVDRW SOHW-';      offset = 12 }
+            # Phase 6.4.5: realistic AR table forms -- full model strings,
+            # matching what AccurateRip actually publishes. The matcher
+            # uses token-aligned strict equality so prefix-only entries
+            # like 'ASUS DRW-24' would no longer hit 'ASUS DRW-24F1ST'
+            # (and that's correct -- AR doesn't store prefix stubs).
+            @{ match = 'PIONEER BD-RW BDR-209M';   offset = 6 }
+            @{ match = 'ASUS DRW-24F1ST';          offset = 6 }
+            @{ match = 'LITE-ON DVDRW SOHW-1693S'; offset = 12 }
         )
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:fixtureCache
 }
 
 Describe 'Find-RipperAccurateRipOffset (cache only)' {
-    It 'returns the offset for an exact substring match' {
+    It 'returns the offset for an exact token-aligned match' {
         $r = Find-RipperAccurateRipOffset -DriveName 'ASUS DRW-24F1ST' `
                                           -CachedListPath $script:fixtureCache `
                                           -SkipLive
         $r | Should -Be 6
     }
 
-    It 'matches against the longer Pioneer prefix' {
-        $r = Find-RipperAccurateRipOffset -DriveName 'PIONEER BD-RW   BDR-209M (1.41)' `
+    It 'matches when AR tokens are a contiguous prefix of the Windows-reported name (e.g. trailing "ATA Device")' {
+        # Win32_CDROMDrive.Name often appends 'ATA Device' / 'USB Device'
+        # that AR doesn't include. Token-aligned matching lets the AR
+        # entry's token sequence appear anywhere as a contiguous run
+        # inside the drive token list.
+        $r = Find-RipperAccurateRipOffset -DriveName 'PIONEER BD-RW BDR-209M ATA Device' `
                                           -CachedListPath $script:fixtureCache `
                                           -SkipLive
         $r | Should -Be 6
@@ -66,7 +75,7 @@ Describe 'Find-RipperAccurateRipOffset (live + fallback)' {
         $html = @'
 <html><body><table>
 <tr><td>SOMETHING-XYZ</td><td>99</td></tr>
-<tr><td>ASUS DRW-24</td><td>42</td></tr>
+<tr><td>ASUS DRW-24F1ST</td><td>42</td></tr>
 </table></body></html>
 '@
         Mock -ModuleName DriveRegistration Invoke-WebRequest {
@@ -134,19 +143,21 @@ Describe 'Find-RipperAccurateRipOffset (Phase 6.4.3 normalization)' {
     BeforeAll {
         $script:tssCache = Join-Path $TestDrive 'driveoffsets.tsst.json'
         @{
-            _comment       = 'Phase 6.4.3 regression fixture'
+            _comment       = 'Phase 6.4.3 + 6.4.5 regression fixture'
             _schemaVersion = 1
             drives = @(
                 # AR's actual stored form for the parents-PC drive
                 # (extra ' - ' separator after the vendor) -- this MUST
                 # match the Windows form 'TSSTcorp DVD+-RW TS-H653H'.
                 @{ match = 'TSSTcorp - DVD+-RW TS-H653H';  offset = 6 }
-                # Two entries that share a prefix; the longer one must
-                # win when the Windows name contains both.
+                # Vendor-only row + a full-model row that BOTH match a
+                # Pioneer drive name; the most-specific (more tokens)
+                # wins on tiebreak.
                 @{ match = 'PIONEER';                      offset = 999 }
-                @{ match = 'PIONEER BD-RW BDR-209';        offset = 6   }
-                # Ultra-short noise key the lookup must skip even
-                # though it would substring into everything.
+                @{ match = 'PIONEER BD-RW BDR-209M';       offset = 6   }
+                # Ultra-short noise key. Under Phase 6.4.5 token-aligned
+                # matching this can't accidentally match a real drive
+                # because token equality is strict ('a' != 'asus').
                 @{ match = 'A';                            offset = 42  }
             )
         } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:tssCache
@@ -158,7 +169,7 @@ Describe 'Find-RipperAccurateRipOffset (Phase 6.4.3 normalization)' {
         # but AR stores
         #   "TSSTcorp - DVD+-RW TS-H653H".
         # The pre-Phase-6.4.3 substring match returned $null for this
-        # pair; the normalized key match returns the offset.
+        # pair; the normalized + token-aligned match returns the offset.
         $r = Find-RipperAccurateRipOffset `
                 -DriveName 'TSSTcorp DVD+-RW TS-H653H' `
                 -CachedListPath $script:tssCache `
@@ -166,22 +177,23 @@ Describe 'Find-RipperAccurateRipOffset (Phase 6.4.3 normalization)' {
         $r | Should -Be 6
     }
 
-    It 'prefers the longest matching cache entry (most-specific wins)' {
-        # Both 'PIONEER' (offset 999) and 'PIONEER BD-RW BDR-209'
-        # (offset 6) substring into the Windows name. The longer
-        # entry must win or a generic vendor row would shadow the
-        # specific model.
+    It 'prefers the cache entry with more matching tokens (most-specific wins)' {
+        # Both 'PIONEER' (1 token, offset 999) and 'PIONEER BD-RW BDR-209M'
+        # (4 tokens, offset 6) match the drive's token sequence. The
+        # longer (more-specific) entry must win or a generic vendor row
+        # would shadow the specific model.
         $r = Find-RipperAccurateRipOffset `
-                -DriveName 'PIONEER BD-RW BDR-209M (1.41)' `
+                -DriveName 'PIONEER BD-RW BDR-209M ATA Device' `
                 -CachedListPath $script:tssCache `
                 -SkipLive
         $r | Should -Be 6
     }
 
-    It 'ignores ultra-short cache keys that would over-match (length < 4)' {
-        # The 'A' fixture row is a stand-in for any ultra-short
-        # noise that snuck into the cache; without the length guard
-        # it would match every drive name with a letter A in it.
+    It 'rejects single-character noise keys (token equality is strict)' {
+        # The 'A' fixture row would have substring-matched any drive
+        # name with a letter A under the pre-Phase-6.4.5 rule. Token
+        # equality requires 'a' to be one of the drive's whole tokens,
+        # which it never is for vendor names like 'asus' / 'no' / etc.
         $r = Find-RipperAccurateRipOffset `
                 -DriveName 'no such known drive zzz' `
                 -CachedListPath $script:tssCache `
@@ -195,12 +207,12 @@ Describe 'Find-RipperAccurateRipEntry (Phase 6.4.4 rich result)' {
     BeforeAll {
         $script:richCache = Join-Path $TestDrive 'driveoffsets.rich.json'
         @{
-            _comment       = 'Phase 6.4.4 fixture'
+            _comment       = 'Phase 6.4.4 fixture (updated for 6.4.5 token matching)'
             _schemaVersion = 1
             drives = @(
                 @{ match = 'TSSTcorp - DVD+-RW TS-H653H'; offset = 6 }
                 @{ match = 'PIONEER';                     offset = 999 }
-                @{ match = 'PIONEER BD-RW BDR-209';       offset = 6 }
+                @{ match = 'PIONEER BD-RW BDR-209M';      offset = 6 }
             )
         } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:richCache
     }
@@ -218,13 +230,13 @@ Describe 'Find-RipperAccurateRipEntry (Phase 6.4.4 rich result)' {
         $r.Source   | Should -Be 'Cache'
     }
 
-    It 'reports MatchedName for the longest-key winner, not the first match' {
+    It 'reports MatchedName for the most-specific winner, not the vendor-only entry' {
         $r = Find-RipperAccurateRipEntry `
-                -DriveName 'PIONEER BD-RW BDR-209M (1.41)' `
+                -DriveName 'PIONEER BD-RW BDR-209M ATA Device' `
                 -CachedListPath $script:richCache `
                 -SkipLive
         $r.Offset      | Should -Be 6
-        $r.MatchedName | Should -Be 'PIONEER BD-RW BDR-209'
+        $r.MatchedName | Should -Be 'PIONEER BD-RW BDR-209M'
     }
 
     It 'returns $null on a miss' {
@@ -239,7 +251,7 @@ Describe 'Find-RipperAccurateRipEntry (Phase 6.4.4 rich result)' {
         $html = @'
 <html><body><table>
 <tr><td>SOMETHING-XYZ</td><td>99</td></tr>
-<tr><td>ASUS DRW-24</td><td>42</td></tr>
+<tr><td>ASUS DRW-24F1ST</td><td>42</td></tr>
 </table></body></html>
 '@
         Mock -ModuleName DriveRegistration Invoke-WebRequest {
@@ -249,7 +261,69 @@ Describe 'Find-RipperAccurateRipEntry (Phase 6.4.4 rich result)' {
                 -DriveName 'ASUS DRW-24F1ST' `
                 -CachedListPath $script:richCache
         $r.Offset      | Should -Be 42
-        $r.MatchedName | Should -Be 'ASUS DRW-24'
+        $r.MatchedName | Should -Be 'ASUS DRW-24F1ST'
         $r.Source      | Should -Be 'Live'
+    }
+}
+
+Describe 'Find-RipperAccurateRipEntry (Phase 6.4.5 token-aligned matching)' {
+
+    BeforeAll {
+        # Real-world AR-table shape that surfaced the bug: there are
+        # TWO ASUS BW-12B1ST rows -- one for the actual drive ('ASUS -
+        # BW-12B1ST') and one for a firmware variant ('ASUS - BW-12B1ST a').
+        # Under the pre-6.4.5 raw-substring rule both matched the
+        # Windows-reported 'ASUS BW-12B1ST ATA Device' (the variant's
+        # trailing 'a' aligned with the leading 'a' in 'ata' purely by
+        # accident), and longest-key-wins picked the variant. Token
+        # equality rejects the variant cleanly because 'a' != 'ata'.
+        $script:bwCache = Join-Path $TestDrive 'driveoffsets.bw.json'
+        @{
+            _comment       = 'Phase 6.4.5 BW-12B1ST regression fixture'
+            _schemaVersion = 1
+            drives = @(
+                @{ match = 'ASUS - BW-12B1ST';   offset = 6 }
+                @{ match = 'ASUS - BW-12B1ST a'; offset = 42 }
+            )
+        } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:bwCache
+    }
+
+    It 'picks the actual drive (BW-12B1ST), not the variant (BW-12B1ST a), for a real ASUS drive (regression)' {
+        $r = Find-RipperAccurateRipEntry `
+                -DriveName 'ASUS BW-12B1ST ATA Device' `
+                -CachedListPath $script:bwCache `
+                -SkipLive
+        $r          | Should -Not -BeNullOrEmpty
+        $r.Offset   | Should -Be 6
+        $r.MatchedName | Should -Be 'ASUS - BW-12B1ST'
+    }
+
+    It 'still picks the variant when the variant entry is the actual drive (does not under-match)' {
+        # If a parent owns the BW-12B1ST 'a' variant AND Windows happens
+        # to report it that way (rare but possible firmware quirk), the
+        # variant entry must still be matchable. Demonstrates the rule
+        # is symmetric -- token equality both ways.
+        $r = Find-RipperAccurateRipEntry `
+                -DriveName 'ASUS BW-12B1ST a' `
+                -CachedListPath $script:bwCache `
+                -SkipLive
+        $r          | Should -Not -BeNullOrEmpty
+        $r.Offset   | Should -Be 42
+        $r.MatchedName | Should -Be 'ASUS - BW-12B1ST a'
+    }
+
+    It 'rejects an AR entry whose extra trailing token does not appear in the drive name' {
+        # Direct unit test of the token-alignment rule. The AR row
+        # 'ASUS BW-12B1ST a' is 4 tokens; the drive is 4 tokens but
+        # token 3 is 'foo', not 'a' -- no match.
+        $script:misCache = Join-Path $TestDrive 'driveoffsets.mismatch.json'
+        @{ _comment='mismatch fixture'; _schemaVersion=1; drives=@(
+            @{ match='ASUS - BW-12B1ST a'; offset=42 }
+        ) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:misCache
+        $r = Find-RipperAccurateRipEntry `
+                -DriveName 'ASUS BW-12B1ST foo' `
+                -CachedListPath $script:misCache `
+                -SkipLive
+        $r | Should -BeNullOrEmpty
     }
 }
