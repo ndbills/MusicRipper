@@ -5,7 +5,7 @@
     Author            = 'MusicRipper'
     Description       = 'Optical-drive enumeration + AccurateRip offset lookup helpers.'
     PowerShellVersion = '7.0'
-    FunctionsToExport = @('Get-RipperOpticalDrives', 'Find-RipperAccurateRipOffset')
+    FunctionsToExport = @('Get-RipperOpticalDrives', 'Find-RipperAccurateRipOffset', 'ConvertTo-RipperDriveNameKey')
     CmdletsToExport   = @()
     AliasesToExport   = @()
     VariablesToExport = @()
