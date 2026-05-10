@@ -408,6 +408,19 @@ if ($syn) {
     }
 }
 
+# Phase 6.4.2: prefer direct (LAN) connection to the NAS when the share
+# is reachable on TCP/445; only acquire the tunnel as a fallback.
+# Default Y. Only meaningful when the NAS share is configured AND
+# WireGuardAutoToggle is on -- but persist either way so the value is
+# stable across config rebuilds.
+$defaultPreferDirect = if ($existing -and $existing.PSObject.Properties['PreferDirectNasConnection']) { [bool]$existing.PreferDirectNasConnection } else { $true }
+if ($syn -and $wgTunnelName -and $wgAutoToggle) {
+    $preferDirectStr = Read-WithDefault -Prompt 'PreferDirectNasConnection (Y/N — try LAN first, fall back to WireGuard)' -Default ([string][bool]$defaultPreferDirect)
+    $preferDirectNasConnection = ($preferDirectStr -match '^\s*[YyTt1]')
+} else {
+    $preferDirectNasConnection = $defaultPreferDirect
+}
+
 # --- Provider chains (Phase 5.2) ------------------------------------------
 # Free-form comma-separated lists so the user can reorder, drop, or add
 # providers we ship later without this script needing to grow a menu.
@@ -531,6 +544,7 @@ $cfg.LocalRetention        = $localRetention
 $cfg.RetryPendingSyncOnStartup = $retryPendingSyncOnStartup
 $cfg.WireGuardTunnelName       = $wgTunnelName
 $cfg.WireGuardAutoToggle       = $wgAutoToggle
+$cfg.PreferDirectNasConnection = $preferDirectNasConnection
 
 # Carry over drive info if Register-Drive ran first.
 if ($existing) {

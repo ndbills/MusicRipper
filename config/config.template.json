@@ -54,5 +54,8 @@
   "WireGuardAutoToggle": true,
 
   "//WireGuardKeepAliveBetweenDiscs": "Phase 6.4.1: false (default) = each NAS sync brings the tunnel up just for the duration of that sync (one robocopy invocation), so a 30-disc rip session bounces it 30 times. true = the first sync's start pins the tunnel up for the rest of the session and it's torn down at exit. Set to true if the ~2-3s WG re-handshake per disc adds up for your workflow; leave false if you want the tunnel open as briefly as possible.",
-  "WireGuardKeepAliveBetweenDiscs": false
+  "WireGuardKeepAliveBetweenDiscs": false,
+
+  "//PreferDirectNasConnection": "Phase 6.4.2: true (default) = when WireGuardAutoToggle is on, the SynologyNAS sync target probes the share's server on TCP/445 (~2s timeout) before acquiring the tunnel. If the NAS answers directly (you're on the home LAN), the tunnel stays down and robocopy goes over LAN. If the probe times out or DNS fails, we fall back to bringing the tunnel up. false = always acquire the tunnel when WireGuardAutoToggle is on, regardless of LAN reachability (use if you don't trust the LAN path or the LAN exposes the share over a slower link).",
+  "PreferDirectNasConnection": true
 }

@@ -130,6 +130,53 @@ Describe 'Invoke-RipperSyncToSynologyNAS (pre-flight)' {
         $r.Status     | Should -Be 'Failed'
         $r.Diagnostic | Should -Match 'credentials.clixml'
     }
+
+    It "produces a 'credential is missing' diagnostic when the UNC server is reachable but Test-Path on the share fails AND HasSynologyCredential=false" {
+        # Most common parent-friendly miss: SynologyUnc points at a NAS
+        # that requires authentication, but no credential is configured.
+        # The raw "not reachable" message sends the parent looking at
+        # the wrong thing (NAS power, network) when the server is
+        # actually right there waiting for credentials.
+        $lib = New-Lib
+        $alb = New-FakeAlbum $lib 'A' 'B'
+
+        # Spoof: Test-RipperSynologyDirectReachable says yes (TCP/445
+        # would have answered), but Test-Path on the UNC says no
+        # (the SMB session was rejected at auth).
+        Mock Test-RipperSynologyDirectReachable { $true }
+        Mock Test-Path { $false } -ParameterFilter { $LiteralPath -eq '\\nas\music' }
+
+        $cfg = [pscustomobject]@{
+            SynologyUnc           = '\\nas\music'
+            HasSynologyCredential = $false
+        }
+        $r = Invoke-RipperSyncToSynologyNAS -AlbumPath $alb -LibraryRoot $lib -Config $cfg
+
+        $r.Status     | Should -Be 'Failed'
+        $r.Diagnostic | Should -Match 'authentication'
+        $r.Diagnostic | Should -Match 'Set Synology credential'
+    }
+
+    It 'falls back to the generic "not reachable" diagnostic when TCP/445 is also unreachable' {
+        $lib = New-Lib
+        $alb = New-FakeAlbum $lib 'A' 'B'
+
+        # Both probes say the share is gone -- this should NOT trip the
+        # credential-missing hint; the user really does need to look at
+        # the NAS / network.
+        Mock Test-RipperSynologyDirectReachable { $false }
+        Mock Test-Path { $false } -ParameterFilter { $LiteralPath -eq '\\nas\music' }
+
+        $cfg = [pscustomobject]@{
+            SynologyUnc           = '\\nas\music'
+            HasSynologyCredential = $false
+        }
+        $r = Invoke-RipperSyncToSynologyNAS -AlbumPath $alb -LibraryRoot $lib -Config $cfg
+
+        $r.Status     | Should -Be 'Failed'
+        $r.Diagnostic | Should -Match 'not reachable'
+        $r.Diagnostic | Should -Not -Match 'authentication'
+    }
 }
 
 Describe 'Invoke-RipperSyncToSynologyNAS (integration via robocopy, no SMB mount)' {
@@ -162,6 +209,143 @@ Describe 'Invoke-RipperSyncToSynologyNAS (integration via robocopy, no SMB mount
 
         $r.Status      | Should -Be 'OK'
         $r.BytesCopied | Should -Be 0
+    }
+}
+
+Describe 'Test-RipperSynologyDirectReachable (Phase 6.4.2)' {
+
+    It 'returns $false for a non-UNC path without throwing or probing' {
+        # If the implementation accidentally hit Test-Connection on a
+        # local path, this would throw or hang -- the early-return on
+        # Test-RipperUncPath avoids both.
+        Test-RipperSynologyDirectReachable -Unc 'C:\foo\bar' | Should -BeFalse
+    }
+
+    It 'returns $false for an empty / malformed UNC' {
+        Test-RipperSynologyDirectReachable -Unc '\\nas' | Should -BeFalse
+    }
+
+    It 'returns $false (does not throw) when the host is unreachable' {
+        # Use a guaranteed-unroutable hostname so DNS / TCP fails fast.
+        # If this test ever blocks for >5s, the timeout knob is broken.
+        $r = Test-RipperSynologyDirectReachable `
+            -Unc            '\\musicripper-test-host-does-not-exist.invalid\share' `
+            -TimeoutSeconds 1
+        $r | Should -BeFalse
+    }
+}
+
+Describe 'Invoke-RipperSyncToSynologyNAS (Phase 6.4.2 direct-first WG gate)' {
+
+    # Tests for the direct-first reachability gate. We mock the WG ref
+    # helpers + the reachability probe so we exercise the gate logic
+    # without needing a real WireGuard service or NAS. We use a local
+    # folder as the "share" so the SMB-mount path is skipped (same
+    # idiom as the integration tests above). NB: this Describe runs
+    # BEFORE the SMB-mount-path Describe below specifically because the
+    # latter creates a `function global:robocopy { ... }` per It -- if
+    # those tests crash mid-flight the stub leaks into subsequent
+    # Describes and the real robocopy never runs.
+
+    It 'skips Add-RipperVpnTunnelRef when the share is reachable directly' {
+        $lib   = New-Lib
+        $alb   = New-FakeAlbum $lib 'Foo' 'Bar'
+        $share = New-Lib
+
+        Mock Test-RipperSynologyDirectReachable { $true }
+        Mock Add-RipperVpnTunnelRef             { $true }
+        Mock Remove-RipperVpnTunnelRef          { $true }
+        Mock Enable-RipperVpnTunnelSessionKeepAlive { $true }
+
+        $cfg = [pscustomobject]@{
+            SynologyUnc                    = $share
+            HasSynologyCredential          = $false
+            WireGuardAutoToggle            = $true
+            WireGuardTunnelName            = 'home-wg'
+            WireGuardKeepAliveBetweenDiscs = $false
+            PreferDirectNasConnection      = $true
+        }
+        $r = Invoke-RipperSyncToSynologyNAS -AlbumPath $alb -LibraryRoot $lib -Config $cfg
+
+        $r.Status | Should -Be 'OK'
+        Should -Invoke Test-RipperSynologyDirectReachable -Times 1 -Exactly
+        Should -Invoke Add-RipperVpnTunnelRef             -Times 0 -Exactly
+        Should -Invoke Remove-RipperVpnTunnelRef          -Times 0 -Exactly
+    }
+
+    It 'falls back to Add-RipperVpnTunnelRef when the share is NOT reachable directly' {
+        $lib   = New-Lib
+        $alb   = New-FakeAlbum $lib 'Foo' 'Bar'
+        $share = New-Lib
+
+        Mock Test-RipperSynologyDirectReachable { $false }
+        Mock Add-RipperVpnTunnelRef             { $true }
+        Mock Remove-RipperVpnTunnelRef          { $true }
+        Mock Enable-RipperVpnTunnelSessionKeepAlive { $true }
+
+        $cfg = [pscustomobject]@{
+            SynologyUnc                    = $share
+            HasSynologyCredential          = $false
+            WireGuardAutoToggle            = $true
+            WireGuardTunnelName            = 'home-wg'
+            WireGuardKeepAliveBetweenDiscs = $false
+            PreferDirectNasConnection      = $true
+        }
+        $r = Invoke-RipperSyncToSynologyNAS -AlbumPath $alb -LibraryRoot $lib -Config $cfg
+
+        $r.Status | Should -Be 'OK'
+        Should -Invoke Test-RipperSynologyDirectReachable -Times 1 -Exactly
+        Should -Invoke Add-RipperVpnTunnelRef             -Times 1 -Exactly
+        Should -Invoke Remove-RipperVpnTunnelRef          -Times 1 -Exactly
+    }
+
+    It 'does NOT probe (and acquires the tunnel) when PreferDirectNasConnection is false' {
+        $lib   = New-Lib
+        $alb   = New-FakeAlbum $lib 'Foo' 'Bar'
+        $share = New-Lib
+
+        Mock Test-RipperSynologyDirectReachable { $true }   # would say "skip" if asked
+        Mock Add-RipperVpnTunnelRef             { $true }
+        Mock Remove-RipperVpnTunnelRef          { $true }
+        Mock Enable-RipperVpnTunnelSessionKeepAlive { $true }
+
+        $cfg = [pscustomobject]@{
+            SynologyUnc                    = $share
+            HasSynologyCredential          = $false
+            WireGuardAutoToggle            = $true
+            WireGuardTunnelName            = 'home-wg'
+            WireGuardKeepAliveBetweenDiscs = $false
+            PreferDirectNasConnection      = $false
+        }
+        $r = Invoke-RipperSyncToSynologyNAS -AlbumPath $alb -LibraryRoot $lib -Config $cfg
+
+        $r.Status | Should -Be 'OK'
+        Should -Invoke Test-RipperSynologyDirectReachable -Times 0 -Exactly
+        Should -Invoke Add-RipperVpnTunnelRef             -Times 1 -Exactly
+        Should -Invoke Remove-RipperVpnTunnelRef          -Times 1 -Exactly
+    }
+
+    It 'does NOT probe when WireGuardAutoToggle is off (probe is irrelevant)' {
+        $lib   = New-Lib
+        $alb   = New-FakeAlbum $lib 'Foo' 'Bar'
+        $share = New-Lib
+
+        Mock Test-RipperSynologyDirectReachable { $true }
+        Mock Add-RipperVpnTunnelRef             { $true }
+        Mock Remove-RipperVpnTunnelRef          { $true }
+
+        $cfg = [pscustomobject]@{
+            SynologyUnc               = $share
+            HasSynologyCredential     = $false
+            WireGuardAutoToggle       = $false
+            WireGuardTunnelName       = 'home-wg'
+            PreferDirectNasConnection = $true
+        }
+        $r = Invoke-RipperSyncToSynologyNAS -AlbumPath $alb -LibraryRoot $lib -Config $cfg
+
+        $r.Status | Should -Be 'OK'
+        Should -Invoke Test-RipperSynologyDirectReachable -Times 0 -Exactly
+        Should -Invoke Add-RipperVpnTunnelRef             -Times 0 -Exactly
     }
 }
 

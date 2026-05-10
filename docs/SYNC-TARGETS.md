@@ -43,10 +43,19 @@ exactly as before.
 | ---------- | ----------------------------------------------------------------------- |
 | `Stub`     | Writes a marker file under `.musicripper\stub-sync\<rel>\.synced`. Honours `cfg.StubSyncFail = true` for failure-path testing. Use it to dry-run the framework before configuring a real target. |
 | `OneDrive` | Phase 6.2: copies the album folder via `robocopy` into `cfg.OneDriveSyncTargetRoot` (a folder inside the user's OneDrive). Files appear in the OneDrive client's pending list and upload in the background. Pre-flight checks: OneDrive client installed (registry), target root exists. See [DECISIONS.md D-023](DECISIONS.md) for the robocopy switch rationale. |
-| `SynologyNAS` | Phase 6.3: copies the album folder via `robocopy` onto `cfg.SynologyUnc` (typically a Synology DSM Shared Folder, but any UNC server works). When `cfg.HasSynologyCredential = $true`, the share root is mounted via `New-SmbMapping` for the duration of each album sync using a DPAPI-protected `PSCredential` from `credentials.clixml`; otherwise the sync uses ambient session credentials. Adds robocopy `/Z` (restartable) + `/R:5 /W:10` to weather flaky home networks. Pre-flight checks: `SynologyUnc` set, credential decrypts (when required), share reachable. See [DECISIONS.md D-024](DECISIONS.md) for the auth model rationale. |
+| `SynologyNAS` | Phase 6.3: copies the album folder via `robocopy` onto `cfg.SynologyUnc` (typically a Synology DSM Shared Folder, but any UNC server works). When `cfg.HasSynologyCredential = $true`, the share root is mounted via `New-SmbMapping` for the duration of each album sync using a DPAPI-protected `PSCredential` from `credentials.clixml`; otherwise the sync uses ambient session credentials. Adds robocopy `/Z` (restartable) + `/R:5 /W:10` to weather flaky home networks. Pre-flight checks: `SynologyUnc` set, credential decrypts (when required), share reachable. The Settings editor refuses to Save when `SynologyNAS` is in `SyncTargets` but no credential is stored -- the parent-friendly failure mode is "can't save" rather than "saves but every sync fails with a misleading `not reachable` message." See [DECISIONS.md D-024](DECISIONS.md) for the auth model rationale. |
 
 Phase 6.4 reuses the `SynologyNAS` target unchanged over WireGuard
 (setup-doc addition only).
+
+Phase 6.4.2 adds **direct-first NAS sync**: when WireGuard auto-toggle
+is configured, MusicRipper probes the share's server on TCP/445
+(~2s timeout) before each sync. If the share answers directly (you're
+on the home LAN), the tunnel is NOT brought up and robocopy goes over
+the LAN; if the probe fails, MusicRipper falls back to bringing the
+tunnel up. Controlled by `cfg.PreferDirectNasConnection` (default
+`$true`) -- toggle off in Settings → WireGuard if you want the tunnel
+to always be used. See [DECISIONS.md D-031](DECISIONS.md).
 
 ### Retention modes
 

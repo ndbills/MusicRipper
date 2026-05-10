@@ -239,9 +239,21 @@ function New-RipperConfigObject {
         # session and it's torn down on exit -- saves ~2-3s of
         # re-handshake per disc at the cost of holding the VPN open
         # the whole time.
+        #
+        # `PreferDirectNasConnection` (Phase 6.4.2): when true (default)
+        # AND the WireGuard auto-toggle is otherwise eligible to fire,
+        # the SynologyNAS sync target probes the configured share's
+        # server on TCP/445 (~2s timeout) before deciding to acquire
+        # the tunnel. If the NAS answers directly (i.e. the parent is
+        # on the home LAN), the tunnel is NOT brought up and robocopy
+        # uses the LAN path. If the probe times out or DNS fails, we
+        # fall back to the existing WireGuard acquire path. Set false
+        # to force the tunnel always (e.g. you don't trust the LAN
+        # path or the LAN exposes the share over a slower link).
         WireGuardTunnelName             = $null
         WireGuardAutoToggle             = $true
         WireGuardKeepAliveBetweenDiscs  = $false
+        PreferDirectNasConnection       = $true
     }
 }
 

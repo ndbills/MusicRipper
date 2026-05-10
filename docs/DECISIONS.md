@@ -2122,3 +2122,214 @@ change code, config, or NOTICE wording for Deezer in this round,
 regardless of the finding"). The caveat surfacing is a doc change
 only, which the spec does want.
 
+
+## D-031 -- Direct-first NAS sync: probe LAN, fall back to WireGuard (Phase 6.4.2)
+
+**Date:** 2026-05-09
+**Phase:** 6.4.2
+**Status:** Implemented.
+
+### Problem
+After D-026 (WireGuard auto-toggle for the NAS sync) the SynologyNAS
+sync target *always* acquires the tunnel ref before touching the share
+when `WireGuardAutoToggle=true` and a tunnel name is configured. That's
+the right behaviour when the parent is at a friend's house ripping
+into the family NAS at home, but it's wasteful when the parent is
+sitting on the home LAN -- the share is already reachable directly,
+yet we pay the WG handshake (~2-3s per disc) and route the SMB traffic
+through the tunnel for no reason. User asked: *"is there a way to use
+the SynologyNAS sync in two different ways? I would like to be able to
+check if the share already exists locally (without the wireguard vpn
+running), and if it does, use that direct connection, otherwise use
+the VPN to connect."*
+
+### Decision
+Add a fast TCP/445 reachability probe to `Invoke-RipperSyncToSynologyNAS`,
+gated by a new config knob `PreferDirectNasConnection` (default `$true`).
+When the WireGuard auto-toggle would otherwise fire AND the probe
+returns true, skip the tunnel acquire and let robocopy go over the
+LAN. When the probe fails (DNS error, connection refused, timeout),
+fall back to the existing WG acquire path.
+
+The probe is bounded at **2 seconds** so the rip pipeline stays
+responsive on flaky networks, and any failure in the probe itself
+collapses to "not directly reachable" -- the feature is safe by
+construction (it can never make a sync that previously worked stop
+working; worst case it adds 2s before falling back).
+
+### Why same UNC for both routes (vs. separate `SynologyLanUnc`)
+Most home-lab WireGuard setups route the NAS subnet through the
+tunnel, so `\\nas\music` (or `\\10.0.0.5\music`) works the same on
+both sides -- the tunnel is just an L3 path. A second config field
+would be dead weight for that majority case, and the helper is
+trivially extendable to take a second `-LanUnc` parameter if a real
+user ever needs it. Parked as a future amendment.
+
+### Why TCP/445 probe (vs. ICMP ping or SMB-level test)
+- ICMP is widely blocked on consumer routers / NAS appliances; a
+  ping-fails outcome doesn't actually mean the share is unreachable.
+- TCP/445 is exactly the port robocopy is about to use. If it
+  answers, the share is reachable; if it doesn't, robocopy will
+  fail too. Single-RTT + fast.
+- PS7's `Test-Connection -TcpPort 445 -TimeoutSeconds N -Quiet`
+  returns a plain bool with sub-second false-paths for refused
+  connections and bounded timeout for true black-holes.
+- Authenticating an SMB-level test would need credentials and would
+  add 100s of ms of negotiation; we don't need that signal.
+
+### Why default ON (with an opt-out)
+- The common case is "rips at home"; default ON is the parent-friendly
+  behaviour. The opt-out exists for users who don't trust the LAN
+  path (e.g. the LAN exposes the share over a slower link, or they
+  want all NAS traffic encrypted regardless).
+- The opt-out persists in config (`PreferDirectNasConnection`) and
+  surfaces as a checkbox in the WireGuard tab of the WPF Settings
+  dialog. Default-true matches the WireGuard tab's tone (most knobs
+  there are "do the smart thing automatically").
+
+### Failure semantics (D-022 contract preserved)
+- Probe succeeds + LAN robocopy succeeds: tunnel never starts.
+- Probe succeeds + LAN robocopy fails (e.g. share permissions changed):
+  the existing post-mount Test-Path / robocopy exit-code mapper
+  surfaces the failure as today. We do NOT auto-retry over WG --
+  the failure mode is the same as a pre-D-031 LAN-only setup, and
+  retrying obscures the real cause.
+- Probe fails (DNS error / refused / timeout / cmdlet missing):
+  feature collapses to a no-op log line and the existing WG acquire
+  path runs unchanged.
+- `Test-RipperSynologyDirectReachable` itself NEVER throws. Any
+  exception in the probe is caught and returned as `$false` so the
+  rip pipeline can never crash because of the probe.
+
+### What this is NOT
+- Not a per-rip override; the choice is per-config.
+- Not a separate "always-tunnel" knob in the per-disc dialog.
+- Not a parallel probe-and-acquire; sequential is simpler and 2s
+  is cheap relative to a rip.
+- Not tunable via config (the 2s timeout is hardcoded). Bump later
+  if real users hit issues; the WPF dialog is already big enough.
+
+### DNS gotcha (no-op for some users)
+If a user's `SynologyUnc` uses a hostname that only resolves via the
+VPN's DNS, the LAN probe will instantly fail (DNS error) and the WG
+acquire path runs as before. Net effect: feature is a no-op for that
+user, costing one ~50ms failed lookup per sync. They can leave the
+checkbox at default; nothing breaks. Not worth surfacing in the
+tooltip.
+
+### Files changed
+- `src/sync/Sync-ToSynologyNAS.ps1` -- new helper
+  `Test-RipperSynologyDirectReachable -Unc -TimeoutSeconds`; gate in
+  `Invoke-RipperSyncToSynologyNAS` between the `$useWg` calc and the
+  cred preflight. INFO log line on both branches so the per-disc log
+  explains why the WG branch was/wasn't taken.
+- `src/lib/Config.psm1` -- `PreferDirectNasConnection = $true`
+  default in the WireGuard cluster + comment block update.
+- `config/config.template.json` -- new doc + field.
+- `setup/New-RipperConfig.ps1` -- CLI-fallback `Read-WithDefault`
+  prompt when both NAS + WG auto-toggle are configured; persisted in
+  the trailing `$cfg.PreferDirectNasConnection = ...` assignment.
+- `src/ui/Show-RipperConfigDialog.ps1` -- `<CheckBox x:Name="WgPreferDirectCheck"/>`
+  in the WireGuard tab; seed from config (default `$true` for forward-
+  compat with old config files); persist on Save.
+- `tests/Sync-ToSynologyNAS.Tests.ps1` -- two new Describes (Phase
+  6.4.2 helper + direct-first WG gate, +7 tests). Helper tests cover
+  non-UNC + bad-host (no throw, returns `$false`); gate tests mock
+  the probe + WG ref helpers and assert acquire-count for the four
+  combinations of (probe result × PreferDirect × AutoToggle).
+- **NB:** the new Describes intentionally sit BEFORE the existing
+  SMB-mount-path Describe in `Sync-ToSynologyNAS.Tests.ps1`. The
+  SMB-mount tests use `function global:robocopy { ... }` per `It`
+  with cleanup in `finally`, and despite the cleanup the global
+  function shadow + Pester's mock-scope housekeeping leak into
+  subsequent Describes in ways that make real `robocopy` calls
+  return spurious exit 16. Documented in
+  `/memories/powershell.md` for the next person.
+
+**Pester:** 532/0/1 green (was 525/0/1; +7 new tests).
+
+**Cross-references:** D-022 (sync framework), D-024 (NAS target),
+D-026 (WireGuard auto-toggle baseline this builds on),
+D-026 amendment / Phase 6.4.1 (refcounted lifecycle that makes the
+gate trivial to insert).
+
+### Amendment (Phase 6.4.2 follow-on) -- credential-required validator + clearer "auth missing" diagnostic
+
+**Date:** 2026-05-09
+**Status:** Implemented.
+
+**Trigger.** Manual verification of D-031 surfaced a different, pre-
+existing parent-friendly miss: a SynologyNAS sync target was
+configured (UNC path filled in via the Settings dialog) but
+`HasSynologyCredential` was `$false`. TCP/445 succeeded against the
+NAS, but `Test-Path` on the share returned `$false` because the
+share rejected ambient session credentials at the SMB auth step.
+The pre-existing Pre-flight #3 message *"SynologyUnc '...' is not
+reachable. Check the NAS is on, the share exists, and the
+configured credentials are correct"* sent the user looking at
+network/power when the actual problem was right there in Settings.
+
+**Two changes.**
+
+1. **`Sync-ToSynologyNAS.ps1` Pre-flight #3** disambiguates "host
+   down" from "host up but auth missing." When `Test-Path` on the
+   share fails, it re-runs the TCP/445 probe; if the server answers
+   AND `HasSynologyCredential = $false` AND the input is a UNC, the
+   diagnostic now reads *"NAS server is reachable on TCP/445 but
+   the share '...' could not be opened. The most likely cause is
+   that the share requires authentication and no credential is
+   configured. Open Settings -> Sync -> 'Set Synology credential...'
+   to save your NAS username/password, then retry."* The extra ~2s
+   probe runs only on the failure path so a working sync pays no
+   latency cost. Other failure modes (TCP/445 also down, or
+   `HasSynologyCredential = $true` but Test-Path failing) keep the
+   generic "not reachable" message.
+
+2. **`Test-RipperConfigEditorComplete`** now treats
+   `HasSynologyCredential = $true` as required when `SynologyNAS` is
+   in `SyncTargets`, mirroring the existing UNC-required rule. The
+   Save button disables (with a clear missing-field message in both
+   first-run and edit modes) until the user clicks **Set...** under
+   *NAS credential*. The CredSet/CredClear button handlers now call
+   `refreshOk` so the Save state updates live as soon as the user
+   stores or clears the credential.
+
+   **Closure-ordering subtlety.** The cred buttons are wired BEFORE
+   `$refreshOk` is defined (its scope position is fixed by the
+   validation block layout). `.GetNewClosure()` snapshots locals at
+   define time, so a direct `& $refreshOk` would invoke `$null`.
+   Verified empirically, then used the established hashtable-wrapper
+   idiom (`$refreshBox = @{ Run = $null }`, populated post-
+   `$refreshOk`-definition; closures call `if ($refreshBox.Run) {
+   & $refreshBox.Run }`). Same pattern as the existing `$resultBox`
+   in this file (Phase 6.6.D); covered in `/memories/powershell.md`.
+
+**Failure-mode net result.** Pre-amendment, a parent who configured
+the NAS share but forgot the credential silently saved a config
+that would fail every sync with a misleading message. Post-
+amendment, the Save button refuses to commit such a config in the
+first place; if a config in that state already exists on disk
+(legacy / hand-edited), the next sync attempt produces a diagnostic
+that points directly at the fix.
+
+**Files changed.**
+- `src/sync/Sync-ToSynologyNAS.ps1` -- Pre-flight #3 conditional
+  hint when TCP/445 succeeds + cred missing.
+- `src/ui/Show-RipperConfigDialog.ps1` -- validator extra rule;
+  `$refreshBox` hashtable wrapper; CredSet/CredClear closures call
+  back into `refreshOk`; missing-fields messages mention 'Set...'
+  in both first-run and edit modes.
+- `tests/Sync-ToSynologyNAS.Tests.ps1` -- 2 new tests covering the
+  hint message vs. the generic message.
+- `tests/Show-RipperConfigDialog.Tests.ps1` -- 2 new tests covering
+  the credential-required rule (first-run + edit modes); existing
+  test helper `New-MinimalCfg` gained a `-HasSynologyCredential`
+  param.
+- `docs/TROUBLESHOOTING.md` -- new section explaining the new
+  diagnostic + the Settings-blocks-Save invariant.
+- `docs/SYNC-TARGETS.md` -- inline note about the validator rule.
+
+**Pester:** 536/0/1 green (was 532/0/1; +4 new tests).
+
+
+

@@ -22,7 +22,8 @@ BeforeAll {
         param(
             [string]$LibraryRoot                = 'C:\Music',
             [string]$ContactAddress             = 'me@example.com',
-            [string[]]$SyncTargets              = @('Stub')
+            [string[]]$SyncTargets              = @('Stub'),
+            [bool]$HasSynologyCredential        = $false
         )
         [pscustomobject]@{
             LibraryRoot             = $LibraryRoot
@@ -30,6 +31,7 @@ BeforeAll {
             SyncTargets             = $SyncTargets
             OneDriveSyncTargetRoot  = $null
             SynologyUnc             = $null
+            HasSynologyCredential   = $HasSynologyCredential
         }
     }
 }
@@ -127,12 +129,18 @@ Describe 'Test-RipperConfigEditorComplete' {
             $cfg = New-MinimalCfg -SyncTargets @('SynologyNAS')
             (Test-RipperConfigEditorComplete -Config $cfg) | Should -BeFalse
         }
-        It 'non-FirstRun: accepts SynologyNAS checked when UNC is set' {
+        It 'non-FirstRun: rejects SynologyNAS checked + UNC set but no stored credential' {
             $cfg = New-MinimalCfg -SyncTargets @('SynologyNAS')
+            $cfg.SynologyUnc = '\\nas\music'
+            $cfg.HasSynologyCredential = $false
+            (Test-RipperConfigEditorComplete -Config $cfg) | Should -BeFalse
+        }
+        It 'non-FirstRun: accepts SynologyNAS checked when UNC is set AND credential is stored' {
+            $cfg = New-MinimalCfg -SyncTargets @('SynologyNAS') -HasSynologyCredential $true
             $cfg.SynologyUnc = '\\nas\music'
             (Test-RipperConfigEditorComplete -Config $cfg) | Should -BeTrue
         }
-        It 'non-FirstRun: ignores SynologyUnc when SynologyNAS is not in SyncTargets' {
+        It 'non-FirstRun: ignores SynologyUnc and credential when SynologyNAS is not in SyncTargets' {
             $cfg = New-MinimalCfg -SyncTargets @('Stub')
             (Test-RipperConfigEditorComplete -Config $cfg) | Should -BeTrue
         }
@@ -140,8 +148,13 @@ Describe 'Test-RipperConfigEditorComplete' {
             $cfg = New-MinimalCfg -SyncTargets @('SynologyNAS')
             (Test-RipperConfigEditorComplete -Config $cfg -FirstRun) | Should -BeFalse
         }
-        It 'FirstRun: accepts SynologyNAS checked when UNC is set' {
+        It 'FirstRun: rejects SynologyNAS checked + UNC set but no credential' {
             $cfg = New-MinimalCfg -SyncTargets @('SynologyNAS')
+            $cfg.SynologyUnc = '\\nas\music'
+            (Test-RipperConfigEditorComplete -Config $cfg -FirstRun) | Should -BeFalse
+        }
+        It 'FirstRun: accepts SynologyNAS checked when UNC is set AND credential is stored' {
+            $cfg = New-MinimalCfg -SyncTargets @('SynologyNAS') -HasSynologyCredential $true
             $cfg.SynologyUnc = '\\nas\music'
             (Test-RipperConfigEditorComplete -Config $cfg -FirstRun) | Should -BeTrue
         }
