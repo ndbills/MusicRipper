@@ -117,7 +117,7 @@ $drives = @($drives)
 # Match the existing on-disk schema -- DO NOT change field names without
 # updating Find-RipperAccurateRipOffset to match.
 $payload = [pscustomobject]@{
-    '_comment'       = 'Cached fallback list of common optical drive AccurateRip read offsets. Used by setup/Register-Drive.ps1 (and src/ui/Show-RegisterDriveDialog.ps1) when the AccurateRip database is unreachable. Source: http://www.accuraterip.com/driveoffsets.htm. Match is by case-insensitive substring of the Win32_CDROMDrive.Name field. Offsets are in samples; positive means the drive reads ahead.'
+    '_comment'       = 'Cached fallback list of common optical drive AccurateRip read offsets. Used by setup/Register-Drive.ps1 (and src/ui/Show-RegisterDriveDialog.ps1) when the AccurateRip database is unreachable. Source: http://www.accuraterip.com/driveoffsets.htm. Phase 6.4.5 match rule: each name is normalized (lowercase + non-alphanumeric runs collapsed to one space) and split into tokens; an entry matches a Win32_CDROMDrive.Name when the entry tokens appear as a contiguous subsequence with strict per-token equality (most-specific entry wins on tie). Offsets are in samples; positive means the drive reads ahead.'
     '_schemaVersion' = 1
     '_fetchedFrom'   = $liveUrl
     '_fetchedAt'     = (Get-Date).ToUniversalTime().ToString('o')

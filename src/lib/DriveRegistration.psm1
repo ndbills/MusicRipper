@@ -141,29 +141,67 @@ function Find-RipperAccurateRipEntry {
     # Phase 6.4.3: normalize both sides before matching so we tolerate
     # the spacing/punctuation differences between Windows' Win32_CDROMDrive
     # and the crowdsourced AccurateRip entries (real-world miss with the
-    # TSSTcorp drive on the parents-PC install). Among multiple matches
-    # we pick the LONGEST normalized AR key, which prefers the most
-    # specific entry (e.g. "ASUS DRW-24F1ST" beats "ASUS DRW" if both
-    # are present).
+    # TSSTcorp drive on the parents-PC install).
+    #
+    # Phase 6.4.5: token-aligned strict equality (was raw-substring +
+    # longest-key tiebreak). The earlier rule had a real-world false
+    # positive: Windows reports 'ASUS BW-12B1ST ATA Device', AR has
+    # both 'ASUS - BW-12B1ST' (the actual drive) and 'ASUS - BW-12B1ST a'
+    # (a firmware variant). After normalization both are substrings of
+    # the Windows key, AND the variant's normalized key is longer
+    # ('asus bw 12b1st a' vs 'asus bw 12b1st') because the trailing 'a'
+    # incidentally aligns with the 'a' in 'ata'. Character-level
+    # matching has no notion of word boundaries, so longest-wins picked
+    # the wrong row.
+    #
+    # New rule: split each normalized key on whitespace into tokens,
+    # then match only if the AR token list appears as a CONTIGUOUS
+    # SUBSEQUENCE of the drive token list with strict per-token
+    # equality. Tiebreak by token count (most-specific wins). The
+    # 'asus bw 12b1st a' variant is now rejected because the drive's
+    # 4th token is 'ata', not 'a'.
     $driveKey = ConvertTo-RipperDriveNameKey -Name $DriveName
     if ([string]::IsNullOrWhiteSpace($driveKey)) { return $null }
+    $driveTokens = $driveKey.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)
+    if ($driveTokens.Count -eq 0) { return $null }
 
     # Local helper: scan a sequence of @{ Name; Offset } candidates,
-    # return @{ Offset; MatchedName } whose normalized name is the
-    # longest substring of $driveKey, or $null if none match.
+    # return @{ Offset; MatchedName } for the candidate whose token
+    # list is the longest contiguous subsequence of $driveTokens, or
+    # $null if none match.
     $bestMatch = {
         param([object[]]$Candidates)
-        $bestKeyLen = -1
-        $best       = $null
+        $bestTokenCount = -1
+        $best           = $null
         foreach ($c in $Candidates) {
             $entryKey = ConvertTo-RipperDriveNameKey -Name $c.Name
-            # Skip empties and ultra-short keys; the latter can over-
-            # match (e.g. a 3-char vendor token would substring into
-            # everything). 4 chars matches the install-time scraper's
-            # row-sanity threshold.
-            if ($entryKey.Length -lt 4) { continue }
-            if ($driveKey.Contains($entryKey) -and $entryKey.Length -gt $bestKeyLen) {
-                $bestKeyLen = $entryKey.Length
+            if ([string]::IsNullOrWhiteSpace($entryKey)) { continue }
+            $entryTokens = $entryKey.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)
+            if ($entryTokens.Count -eq 0) { continue }
+            # Empty AR-key => can't match; single-character tokens are
+            # legitimate model digits (e.g. 'a' suffix in some real
+            # entries) so we don't reject by min-length anymore --
+            # token equality is itself strict enough that a stray
+            # short token can't substring into a vendor name.
+
+            # Sliding-window search for the entry-token sequence inside
+            # the drive-token sequence. Token equality is exact (already
+            # normalized to lowercase + alphanumeric runs).
+            $matched = $false
+            $maxStart = $driveTokens.Count - $entryTokens.Count
+            for ($i = 0; $i -le $maxStart; $i++) {
+                $allEq = $true
+                for ($j = 0; $j -lt $entryTokens.Count; $j++) {
+                    if ($driveTokens[$i + $j] -ne $entryTokens[$j]) {
+                        $allEq = $false
+                        break
+                    }
+                }
+                if ($allEq) { $matched = $true; break }
+            }
+            if (-not $matched) { continue }
+            if ($entryTokens.Count -gt $bestTokenCount) {
+                $bestTokenCount = $entryTokens.Count
                 $best = @{ Offset = [int]$c.Offset; MatchedName = [string]$c.Name }
             }
         }
