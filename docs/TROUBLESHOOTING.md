@@ -335,6 +335,31 @@ interrupted before the retention call. Every retention decision
 records a non-null value with `Action`, `Reason`, `AppliedAt`. See
 `docs/SYNC-TARGETS.md` for the full Action table.
 
+### "SynologyNAS sync reports: NAS server is reachable on TCP/445 but the share could not be opened"
+Phase 6.4.2 diagnostic. Symptom: `sync-state.json` shows
+`SynologyNAS: Failed` with a `Diagnostic` along the lines of:
+
+> NAS server is reachable on TCP/445 but the share '\\<host>\<share>' could not be opened. The most likely cause is that the share requires authentication and no credential is configured. Open Settings -> Sync -> 'Set Synology credential...' to save your NAS username/password, then retry.
+
+Meaning: the NAS itself is up and answering on the SMB port, but
+the share rejected the connection at the auth step. Most home NAS
+shares (Synology DSM, TrueNAS, etc.) require a username/password
+and do *not* accept anonymous SMB.
+
+Fix: open **MusicRipper - Settings** -> **Sync** tab -> click
+**Set...** under *NAS credential*, enter your NAS username +
+password, Save. The credential is stored as a DPAPI-protected
+`PSCredential` at `%LOCALAPPDATA%\MusicRipper\credentials.clixml`
+(only the user account that saved it can decrypt it). Then re-run
+`./src/tools/Sync-PendingAlbums.ps1` -- or just relaunch
+`MusicRipper - Rip a CD` and the Phase-6.5 startup retry dialog
+will catch up automatically.
+
+Note: the WPF Settings editor refuses to Save when `SynologyNAS` is
+in SyncTargets but no credential is stored, so the failure mode
+above can only happen if you enabled the target via the CLI setup
+before Phase 6.4.2, or by hand-editing `config.json`.
+
 ### "OneDrive sync target reports Failed: OneDrive client is not installed"
 Phase 6.2 detects the OneDrive client by reading
 `HKCU\Software\Microsoft\OneDrive\UserFolder` (set on first sign-in)

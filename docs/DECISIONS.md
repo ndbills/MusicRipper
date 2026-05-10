@@ -2253,4 +2253,83 @@ D-026 (WireGuard auto-toggle baseline this builds on),
 D-026 amendment / Phase 6.4.1 (refcounted lifecycle that makes the
 gate trivial to insert).
 
+### Amendment (Phase 6.4.2 follow-on) -- credential-required validator + clearer "auth missing" diagnostic
+
+**Date:** 2026-05-09
+**Status:** Implemented.
+
+**Trigger.** Manual verification of D-031 surfaced a different, pre-
+existing parent-friendly miss: a SynologyNAS sync target was
+configured (UNC path filled in via the Settings dialog) but
+`HasSynologyCredential` was `$false`. TCP/445 succeeded against the
+NAS, but `Test-Path` on the share returned `$false` because the
+share rejected ambient session credentials at the SMB auth step.
+The pre-existing Pre-flight #3 message *"SynologyUnc '...' is not
+reachable. Check the NAS is on, the share exists, and the
+configured credentials are correct"* sent the user looking at
+network/power when the actual problem was right there in Settings.
+
+**Two changes.**
+
+1. **`Sync-ToSynologyNAS.ps1` Pre-flight #3** disambiguates "host
+   down" from "host up but auth missing." When `Test-Path` on the
+   share fails, it re-runs the TCP/445 probe; if the server answers
+   AND `HasSynologyCredential = $false` AND the input is a UNC, the
+   diagnostic now reads *"NAS server is reachable on TCP/445 but
+   the share '...' could not be opened. The most likely cause is
+   that the share requires authentication and no credential is
+   configured. Open Settings -> Sync -> 'Set Synology credential...'
+   to save your NAS username/password, then retry."* The extra ~2s
+   probe runs only on the failure path so a working sync pays no
+   latency cost. Other failure modes (TCP/445 also down, or
+   `HasSynologyCredential = $true` but Test-Path failing) keep the
+   generic "not reachable" message.
+
+2. **`Test-RipperConfigEditorComplete`** now treats
+   `HasSynologyCredential = $true` as required when `SynologyNAS` is
+   in `SyncTargets`, mirroring the existing UNC-required rule. The
+   Save button disables (with a clear missing-field message in both
+   first-run and edit modes) until the user clicks **Set...** under
+   *NAS credential*. The CredSet/CredClear button handlers now call
+   `refreshOk` so the Save state updates live as soon as the user
+   stores or clears the credential.
+
+   **Closure-ordering subtlety.** The cred buttons are wired BEFORE
+   `$refreshOk` is defined (its scope position is fixed by the
+   validation block layout). `.GetNewClosure()` snapshots locals at
+   define time, so a direct `& $refreshOk` would invoke `$null`.
+   Verified empirically, then used the established hashtable-wrapper
+   idiom (`$refreshBox = @{ Run = $null }`, populated post-
+   `$refreshOk`-definition; closures call `if ($refreshBox.Run) {
+   & $refreshBox.Run }`). Same pattern as the existing `$resultBox`
+   in this file (Phase 6.6.D); covered in `/memories/powershell.md`.
+
+**Failure-mode net result.** Pre-amendment, a parent who configured
+the NAS share but forgot the credential silently saved a config
+that would fail every sync with a misleading message. Post-
+amendment, the Save button refuses to commit such a config in the
+first place; if a config in that state already exists on disk
+(legacy / hand-edited), the next sync attempt produces a diagnostic
+that points directly at the fix.
+
+**Files changed.**
+- `src/sync/Sync-ToSynologyNAS.ps1` -- Pre-flight #3 conditional
+  hint when TCP/445 succeeds + cred missing.
+- `src/ui/Show-RipperConfigDialog.ps1` -- validator extra rule;
+  `$refreshBox` hashtable wrapper; CredSet/CredClear closures call
+  back into `refreshOk`; missing-fields messages mention 'Set...'
+  in both first-run and edit modes.
+- `tests/Sync-ToSynologyNAS.Tests.ps1` -- 2 new tests covering the
+  hint message vs. the generic message.
+- `tests/Show-RipperConfigDialog.Tests.ps1` -- 2 new tests covering
+  the credential-required rule (first-run + edit modes); existing
+  test helper `New-MinimalCfg` gained a `-HasSynologyCredential`
+  param.
+- `docs/TROUBLESHOOTING.md` -- new section explaining the new
+  diagnostic + the Settings-blocks-Save invariant.
+- `docs/SYNC-TARGETS.md` -- inline note about the validator rule.
+
+**Pester:** 536/0/1 green (was 532/0/1; +4 new tests).
+
+
 
