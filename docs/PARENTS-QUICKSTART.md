@@ -132,6 +132,34 @@ CD; the changes just queue up for the next time you launch the app.
 
 ---
 
+## Step 6 — Updating MusicRipper
+
+Every now and then your engineer ships a new version with bug fixes
+or new features. To get it:
+
+1. Open the Start Menu (or press the Windows key) and type
+   **MusicRipper - Update**. Click the result.
+2. A small window appears that says *"Checking for updates..."*. Wait
+   a few seconds.
+3. One of three things will happen:
+   - **"You're up to date."** — Click **OK**. Nothing to do.
+   - **"Update available: vX.Y"** — A panel shows what's new. Click
+     **Update now**. The window will say *"Downloading"*,
+     *"Extracting"*, *"Installing new files"*, then
+     *"Update complete!"*. Click **OK**.
+   - **"Couldn't check for updates"** — Usually means the internet
+     is down or GitHub had a hiccup. Click **Retry** in a minute, or
+     **Cancel** and try later.
+
+That's it. The next time you click **Rip a CD**, you're on the new
+version. Your library, your settings, and your saved NAS password are
+all left alone — only the program files get refreshed.
+
+If anything goes wrong (very rare), the previous version is kept on
+disk as a backup so your engineer can roll back manually.
+
+---
+
 ## Where do my CDs end up?
 
 Inside the **library folder** you picked during first-run setup,
