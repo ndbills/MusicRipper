@@ -2453,4 +2453,175 @@ that points directly at the fix.
 **Pester:** 536/0/1 green (was 532/0/1; +4 new tests).
 
 
+## D-032 -- Self-update via GitHub Releases + clickable shortcut (Phase 8)
+
+**Date:** 2026-05-11.
+**Phase:** 8.
+**Status:** Implemented.
+
+### Problem
+Parents installed by extracting a "Code -> Download ZIP" from
+GitHub. There is no `git pull`, no winget package, and no built-in
+update mechanism. Every fix or feature shipped post-install would
+otherwise require either (a) the engineer driving over with a USB
+stick, or (b) walking the parent through a multi-step
+zip/extract/copy procedure over the phone -- both of which violate
+the project's stated parent-friendly UX. The user explicitly asked
+for "click-of-a-button update" and was emphatic about removing
+manual steps.
+
+### Decision
+Ship a **MusicRipper - Update** Start Menu shortcut that opens a
+WPF dialog. The dialog queries the GitHub Releases API for the
+latest tag, compares it to the local version, and (if newer)
+downloads + applies the source zip with a stage-and-atomic-rename
+strategy. Re-runs the setup chain post-apply so any new winget
+dependencies install cleanly.
+
+### Why a clickable shortcut (vs auto-check on launch / push from engineer / scheduled task)
+- **Clickable shortcut:** parent decides when, no background
+  network calls, failures surface immediately, no need to handle
+  "what if it auto-updates mid-rip" because the parent isn't going
+  to click Update during a rip. Matched the user's literal phrasing.
+  Picked.
+- **Auto-check on launch:** silent and zero-friction, but every
+  Start-Ripper would talk to GitHub even when the parent doesn't
+  want to update. Adds chatter and a "don't update if rip running"
+  guard. Deferred to v2 (could ship as a launch-time toast that
+  *links to* the Update shortcut without auto-applying).
+- **Push from engineer:** would require remote execution back to the
+  parent's machine. We have a WireGuard tunnel for the NAS but
+  it's not always up; using it as a remote-shell channel is
+  out-of-scope for what's basically "make a button work." Rejected.
+- **Scheduled task:** invisible to the parent; if it failed we'd
+  never know. Combine with notify-on-failure and you've reinvented
+  the auto-check-on-launch toast. Rejected for v1.
+
+### Why GitHub Releases API + main-branch fallback
+- **Releases API** = the engineer cuts `gh release create vX.Y` per
+  intentional release; the parent gets the curated tag with notes
+  shown in the dialog. This matches the same release-discipline
+  conventions software projects already use.
+- **Main-branch fallback** (HEAD of main, no tag) = if the engineer
+  hasn't cut Releases yet, the updater still works on day 1 by
+  downloading `archive/refs/heads/main.zip`. Compare logic treats
+  the synthetic version `'main-latest'` as `NewerAvailable`
+  (string-compare path) so the parent can always click Update.
+- Anonymous (60 req/hour limit; well under one-click usage). Public
+  repo means no auth.
+
+### Why stage + atomic rename (vs robocopy-overwrite-in-place)
+The rename gives an atomic 'old vs new' boundary. Sequence:
+1. Download zip to `%TEMP%\musicripper-update-<guid>\source.zip`.
+2. `Expand-Archive` into `extracted/`.
+3. Validate the extracted layout has exactly one top-level child
+   that contains `Install-MusicRipper.ps1` + `src\Start-Ripper.ps1`
+   (so a malformed download can't apply over the live install).
+4. Snapshot user-generated files (currently just
+   `data\driveoffsets.cached.json`).
+5. **Rename** live install -> `<install>-old-<yyyyMMdd-HHmmss>`.
+6. **Move** the extracted child into the live install path.
+7. Restore snapshotted user files.
+8. Re-run Install-Dependencies + Install-Shortcut (idempotent).
+9. Prune backups, keeping the most recent 2.
+
+If step 6 (move) fails, the rollback is "rename `-old-*` back to
+live" -- a known-good single-step recovery. Robocopy-overwrite
+would mix the two versions on every failure mode and we'd have no
+clean rollback. The 80 lines of orchestration are worth the
+guaranteed recoverability.
+
+### Why "leave orphan files" (vs `/MIR`-style purge)
+A new release that drops a stale file (renamed module, deleted
+asset) leaves the old file in place after an update. Harmless 99%
+of the time -- PowerShell module loads are explicit so an orphan
+`.psm1` doesn't get loaded. If a future release ever introduces a
+"this file MUST be deleted" need, ship a small `cleanup.json` IN
+the release listing paths to delete; the updater walks it
+post-extract. Keeps the common case simple.
+
+### Why "no concurrent-rip lockfile" (changed from the original plan)
+Originally planned a lockfile in `Start-Ripper.ps1` (write on
+launch, remove on exit) that the updater would refuse to run while
+present. After re-thinking: the rip touches the LIBRARY (FLAC
+encoders + post-process), not the install. PowerShell loads modules
+into memory at script start, so an in-flight rip that survives an
+install dir rename keeps working off its in-memory module copies.
+Lockfile would add complexity for a non-issue. Dropped.
+
+### Why "no auto-launch after success"
+Per the F-6 precedent ("Settings saved. New settings will apply the
+next time MusicRipper runs"). The updater closes after success with
+a toast saying so. Auto-launching would surprise a parent who only
+wanted to update without ripping a disc.
+
+### Backup retention: keep last 2
+Predictable disk usage (~50 MB per backup), recovery for the
+immediate-prior version is always available, and one-further-back
+covers "the new version was bad and the parent already updated
+again before noticing." Auto-prune the rest after each successful
+update.
+
+### Failure semantics
+- **Network error checking for updates:** dialog shows "Couldn't
+  check (no internet?)" with Retry + Cancel. No state changed.
+- **Download/extract fails:** install untouched (no backup created
+  yet). Dialog shows "Update failed: <reason>" with OK.
+- **Apply fails mid-move:** rollback runs automatically (rename
+  `-old-*` back). Dialog shows "Live install was rolled back to
+  the previous version."
+- **Setup chain fails post-apply:** the new files ARE in place;
+  only Install-Dependencies (winget) had a hiccup. Logged as WARN,
+  apply still reports success. Parent re-runs the Update shortcut
+  later or runs `setup\Install-Dependencies.ps1` manually.
+
+### Files
+NEW:
+- `src/lib/Updater.psm1` + `Updater.psd1` -- pure helpers:
+  `Get-RipperLatestRelease`, `Compare-RipperVersion`,
+  `Get-RipperInstallRoot`, `Save-RipperUpdateBackup`,
+  `Invoke-RipperUpdateApply`, `Remove-RipperOldUpdateBackups`.
+- `src/ui/Show-UpdateDialog.ps1` -- WPF (3-state machine) +
+  worker runspaces for check + apply.
+- `src/tools/Update-MusicRipper.ps1` -- shortcut entry point;
+  same self-minimize-host shape as F-6's `Show-RipperConfig.ps1`.
+- `tests/Updater.Tests.ps1` -- 21 tests covering the version
+  comparator, install-root discovery, GitHub API mock with both
+  success + 404 fallback paths, the apply orchestrator against
+  real synthetic install trees under `$TestDrive`, and the
+  backup-prune retention rule.
+
+MODIFIED:
+- `setup/Install-StartMenuShortcuts.ps1` -- adds the Update
+  shortcut block.
+- `Uninstall-MusicRipper.ps1` -- removes the new shortcut on
+  uninstall.
+- `docs/SETUP.md` -- new "Cutting a release" section for the
+  engineer.
+- `docs/PARENTS-QUICKSTART.md` -- new "Step 6 -- Updating
+  MusicRipper" section.
+
+### Engineer release discipline
+1. Bump `$script:RipperVersion` in `src/lib/Common.psm1` per
+   release.
+2. Commit + push to `main`.
+3. `gh release create vX.Y --title "..." --notes "..."`.
+
+The notes body is shown verbatim in the parent's update dialog so
+write them for that audience.
+
+### Pester gotcha caught + logged
+A module's internal `Import-Module <dep>.psd1 -Force` tears down
+the caller's binding to that dep. Symptom: caller imports Logging,
+then imports Updater (whose .psm1 also imports Logging -Force);
+caller can no longer see Start-RipperLog. Fix: drop -Force on
+inner-module dep imports. Plain Import-Module is idempotent.
+Logged in `/memories/powershell.md`.
+
+**Pester:** 594/0/1 green (was 573/0/1; +21 new tests).
+
+**Cross-references:** D-027 (Phase 7 install + uninstall surfaces
+the Update shortcut joins), F-6 (the Settings shortcut precedent
+this mirrors).
+
 

@@ -1,9 +1,9 @@
 <#
 .SYNOPSIS
     Drop "MusicRipper - Rip a CD.lnk", "MusicRipper - Settings.lnk",
-    and "MusicRipper - Uninstall.lnk" directly into the per-user
-    Start Menu Programs folder so they show up in Search and the
-    All apps list.
+    "MusicRipper - Update.lnk", and "MusicRipper - Uninstall.lnk"
+    directly into the per-user Start Menu Programs folder so they
+    show up in Search and the All apps list.
 
 .DESCRIPTION
     Per-user, no admin required. All shortcuts go directly under
@@ -24,6 +24,14 @@
                          WindowStyle=Minimized so the WPF editor is
                          the user-visible surface and not the pwsh
                          console. Targets src\tools\Show-RipperConfig.ps1.
+      - Update         : Phase 8 / D-032. NO RunAsAdministrator flag.
+                         Updater downloads + applies new sources from
+                         GitHub; only the post-apply re-run of
+                         Install-Dependencies.ps1 needs UAC, and
+                         winget self-elevates per-package as needed.
+                         WindowStyle=Minimized so the WPF dialog is
+                         the user-visible surface. Targets
+                         src\tools\Update-MusicRipper.ps1.
       - Uninstall      : NO RunAsAdministrator flag, WindowStyle=Normal.
                          Uninstall-MusicRipper.ps1 self-elevates AFTER
                          the parent shell prompts; pre-elevating would
@@ -34,7 +42,7 @@
 
 .NOTES
     Per-user (%APPDATA%, not %ProgramData%) so we don't need admin
-    to create or remove. Uninstall-MusicRipper.ps1 deletes all three
+    to create or remove. Uninstall-MusicRipper.ps1 deletes all
     shortcuts (and any legacy MusicRipper\ subfolder) when run.
 #>
 
@@ -124,7 +132,29 @@ $lnk.WindowStyle      = 7
 $lnk.Save()
 Write-Host "Created shortcut: $settingsLnk" -ForegroundColor Green
 
-# --- 3. "MusicRipper - Uninstall" ---------------------------------------
+# --- 3. "MusicRipper - Update" (Phase 8 / D-032) -----------------------
+# Standalone entry point for the self-update WPF dialog so a parent
+# can pull the latest GitHub Release without an engineer-driven copy
+# step. NOT elevated -- the source-zip download / extract runs as the
+# parent's user; only the post-apply re-run of Install-Dependencies
+# touches winget which self-elevates per-package as needed.
+# WindowStyle=Minimized so the WPF dialog is the user-visible surface.
+$updateScript = Join-Path $repoRoot 'src\tools\Update-MusicRipper.ps1'
+if (-not (Test-Path -LiteralPath $updateScript -PathType Leaf)) {
+    throw "Update-MusicRipper.ps1 not found at '$updateScript'."
+}
+$updateLnk = Join-Path $startMenuRoot 'MusicRipper - Update.lnk'
+$lnk = $shell.CreateShortcut($updateLnk)
+$lnk.TargetPath       = $pwsh
+$lnk.Arguments        = "-NoProfile -ExecutionPolicy Bypass -File `"$updateScript`""
+$lnk.WorkingDirectory = Split-Path -Parent $updateScript
+$lnk.Description      = 'MusicRipper - check for and apply updates'
+$lnk.IconLocation     = if (Test-Path -LiteralPath $iconPath) { $iconPath } else { "$pwsh,0" }
+$lnk.WindowStyle      = 7
+$lnk.Save()
+Write-Host "Created shortcut: $updateLnk" -ForegroundColor Green
+
+# --- 4. "MusicRipper - Uninstall" ---------------------------------------
 $uninstallScript = Join-Path $repoRoot 'Uninstall-MusicRipper.ps1'
 if (-not (Test-Path -LiteralPath $uninstallScript -PathType Leaf)) {
     throw "Uninstall-MusicRipper.ps1 not found at '$uninstallScript'."

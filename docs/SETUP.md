@@ -123,3 +123,33 @@ All tests should pass.
 
 To start over: delete `%LOCALAPPDATA%\MusicRipper\` and re-launch the
 Desktop shortcut — the WPF first-run editor will reappear.
+
+## Cutting a release (engineer side, Phase 8 / D-032)
+
+Parents update via the **MusicRipper - Update** Start Menu shortcut,
+which calls the GitHub Releases API and downloads the latest tagged
+zip. To make a new release available to them:
+
+1. Bump `$script:RipperVersion` in
+   [src/lib/Common.psm1](../src/lib/Common.psm1) to the new SemVer
+   string (e.g. `'0.2'`). This is the value the updater compares
+   against the GitHub tag.
+2. Commit + push to `main`.
+3. Cut the tagged release:
+   ```powershell
+   gh release create v0.2 --title "v0.2: <one-line summary>" --notes "..."
+   ```
+   (or `--notes-file CHANGELOG-v0.2.md` for longer notes; the body is
+   shown verbatim in the parent's update dialog).
+4. The updater on the parents' machine will see the new tag the next
+   time they click **MusicRipper - Update**.
+
+If you skip step 3 (no Release tag), the updater falls back to a
+direct download of the `main`-branch zip — usable, but with no
+version comparison and no release notes. Cut Releases for anything
+parents should know about.
+
+After the parent applies an update, the prior install is kept at
+`<install-dir>-old-<timestamp>` (the most recent 2 backups are
+retained; older ones are auto-pruned). Recovery from a bad release
+is "rename the latest `-old-*` folder back to the live install path."

@@ -552,6 +552,7 @@ $startMenuProgs   = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Program
 $startMenuLnks    = @(
     (Join-Path $startMenuProgs 'MusicRipper - Rip a CD.lnk'),
     (Join-Path $startMenuProgs 'MusicRipper - Settings.lnk'),
+    (Join-Path $startMenuProgs 'MusicRipper - Update.lnk'),
     (Join-Path $startMenuProgs 'MusicRipper - Uninstall.lnk')
 )
 $startMenuLegacy  = Join-Path $startMenuProgs 'MusicRipper'
