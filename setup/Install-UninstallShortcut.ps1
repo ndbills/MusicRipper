@@ -12,7 +12,7 @@
 
     Idempotent: run it any time to refresh the shortcut.
 
-    Notes vs the desktop "Rip a CD" shortcut:
+    Notes vs the desktop "MusicRipper - Rip a CD" shortcut:
       - This .lnk does NOT set the RunAsAdministrator flag at byte 21
         of the SHLLINK structure. Uninstall-MusicRipper.ps1 already
         self-elevates internally (parent shell prompts the user FIRST,

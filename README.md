@@ -75,7 +75,7 @@ log and the reasoning behind each choice.
 ```powershell
 git clone https://github.com/ndbills/MusicRipper.git C:\bin\MusicRipper ; cd C:\bin\MusicRipper
 ./Install-MusicRipper.ps1 -InPlace   # chains setup steps; or omit -InPlace to copy into %LOCALAPPDATA%\MusicRipper
-# Then double-click the new "Rip a CD" Desktop shortcut. First launch opens the WPF Settings editor.
+# Then double-click the new "MusicRipper - Rip a CD" Desktop shortcut. First launch opens the WPF Settings editor.
 ```
 
 To uninstall later: `./Uninstall-MusicRipper.ps1` removes the desktop
@@ -110,7 +110,7 @@ MusicRipper/
 │   ├── Install-Dependencies.ps1    # winget: PS7, CUETools, Xiph.FLAC, Picard, WireGuard
 │   ├── Register-Drive.ps1          # Detect drive + AccurateRip offset (also called from WPF)
 │   ├── New-RipperConfig.ps1        # Headless config wizard (WPF editor preferred)
-│   ├── Install-Shortcut.ps1        # Desktop shortcut "Rip a CD"
+│   ├── Install-Shortcut.ps1        # Desktop shortcut "MusicRipper - Rip a CD"
 │   ├── Install-UninstallShortcut.ps1   # In-repo "Uninstall MusicRipper.lnk"
 │   └── Install-StartMenuShortcuts.ps1  # Start Menu "MusicRipper - Rip a CD" + "Settings" + "Uninstall"
 │

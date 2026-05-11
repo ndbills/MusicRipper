@@ -28,8 +28,9 @@
                                              continue on network failure --
                                              the runtime path scrapes the
                                              live page anyway.)
-      3. setup\Install-Shortcut.ps1         (Desktop "Rip a CD" shortcut +
-                                             in-repo Uninstall + Start Menu)
+      3. setup\Install-Shortcut.ps1         (Desktop "MusicRipper - Rip a CD"
+                                             shortcut + in-repo Uninstall +
+                                             Start Menu)
       4. Final notice: "open the shortcut to finish first-run config in
          the WPF settings editor (Phase 6.6)."
 
@@ -268,7 +269,7 @@ try {
 
     if (-not $SkipShortcut) {
         Invoke-SetupStep -ScriptPath (Join-Path $repoRoot 'setup\Install-Shortcut.ps1') `
-                         -Description "Creating Desktop shortcut 'Rip a CD'"
+                         -Description "Creating Desktop shortcut 'MusicRipper - Rip a CD'"
         # Also (re)generate the in-repo "Uninstall MusicRipper.lnk" so
         # it points at the install location's actual absolute path.
         # .lnk files store absolute paths, so a committed shortcut
@@ -302,7 +303,7 @@ Write-Host '================================================================' -F
 Write-Host ''
 Write-Host 'Next steps:'
 Write-Host '  1. Double-click ' -NoNewline
-Write-Host '"Rip a CD"' -ForegroundColor White -NoNewline
+Write-Host '"MusicRipper - Rip a CD"' -ForegroundColor White -NoNewline
 Write-Host ' on the Desktop.'
 Write-Host '  2. The first launch opens the Settings window (library root,'
 Write-Host '     drive registration, optional sync targets).'

@@ -41,7 +41,7 @@ the first thing to update.
 | `setup/Install-Dependencies.ps1`   | 1     | winget-install PS7, CUETools, Picard.                  |
 | `setup/Register-Drive.ps1`         | 1     | Pick optical drive, find AccurateRip offset.           |
 | `setup/New-RipperConfig.ps1`       | 1     | Interactive config build, DPAPI credential storage.    |
-| `setup/Install-Shortcut.ps1`       | 1     | Desktop "Rip a CD" shortcut.                           |
+| `setup/Install-Shortcut.ps1`       | 1     | Desktop "MusicRipper - Rip a CD" shortcut.             |
 | `src/lib/Config.psm1`              | 1     | config.json schema + DPAPI cred load/save.             |
 | `src/lib/Logging.psm1`             | 1     | Per-session structured log files.                      |
 | `src/lib/Common.psm1`              | 1     | Path sanitization, repo-root locator.                  |

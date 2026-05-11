@@ -82,7 +82,7 @@ OneDrive is in SyncTargets but no folder is picked).
 ./setup/Install-Shortcut.ps1
 ```
 
-Creates **"Rip a CD.lnk"** on your Desktop pointing at
+Creates **"MusicRipper - Rip a CD.lnk"** on your Desktop pointing at
 `pwsh -NoProfile -ExecutionPolicy Bypass -File <repo>\src\Start-Ripper.ps1`.
 
 After Phase 6.6 the shortcut is the user-facing entry point: it launches
