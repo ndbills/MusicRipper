@@ -1,13 +1,18 @@
 <#
 .SYNOPSIS
     Phase 8 (D-032): standalone entry point for the self-update WPF
-    dialog. Reachable via the "MusicRipper - Update" Desktop / Start
-    Menu shortcut.
+    dialog. Reachable via the "MusicRipper - Update" Start Menu
+    shortcut.
 
 .DESCRIPTION
-    Mirrors the F-6 Show-RipperConfig.ps1 adapter: self-minimize the
-    pwsh host, import deps, dot-source the WPF, run a per-launch log,
-    open the dialog, exit 0 regardless of cancel/save.
+    Sibling at the repo root to Install-MusicRipper.ps1 +
+    Uninstall-MusicRipper.ps1 so the three top-level lifecycle
+    actions (install / update / uninstall) live together.
+
+    Self-minimizes the pwsh host, imports deps, dot-sources the
+    WPF, runs a per-launch log, opens the dialog, exits 0 regardless
+    of cancel/save. Same shape as src\tools\Show-RipperConfig.ps1
+    (the F-6 Settings entry point).
 
     The update flow itself lives in src\ui\Show-UpdateDialog.ps1 +
     src\lib\Updater.psm1; this file is a thin shim.
@@ -22,7 +27,9 @@ param()
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
-$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+# At repo root: $PSScriptRoot is the install root itself. (Sibling
+# to Install-MusicRipper.ps1 / Uninstall-MusicRipper.ps1.)
+$repoRoot = $PSScriptRoot
 
 # Self-minimize the host pwsh window; same rationale + idiom as
 # src\tools\Show-RipperConfig.ps1 (F-6 outcome -- a Minimized .lnk
