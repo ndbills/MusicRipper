@@ -43,8 +43,10 @@
          wireguard.exe /installtunnelservice). Reads
          cfg.WireGuardTunnelName before step 5 nukes the config.
 
-      2. Desktop shortcut "Rip a CD" (or whatever name was used at
-         install time, via -ShortcutName override).
+      2. Desktop shortcut "MusicRipper - Rip a CD" (or whatever
+         name was used at install time, via -ShortcutName override).
+         Also cleans up any legacy bare "Rip a CD.lnk" from
+         pre-rename installs.
 
       3. Winget packages: gchudov.CUETools, Xiph.FLAC,
          MusicBrainz.Picard, WireGuard.WireGuard. Skipped under
@@ -74,8 +76,11 @@
     no-op for each step.
 
 .PARAMETER ShortcutName
-    Override the Desktop shortcut name. Defaults to "Rip a CD"
-    (matches Install-Shortcut.ps1's default).
+    Override the Desktop shortcut name. Defaults to
+    "MusicRipper - Rip a CD" (matches Install-Shortcut.ps1's default).
+    The legacy bare "Rip a CD.lnk" is also removed regardless of this
+    override, so a parent who installed before the rename gets cleaned
+    up correctly.
 
 .PARAMETER KeepDependencies
     Skip the winget uninstall step.
@@ -117,7 +122,7 @@
 
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
-    [string] $ShortcutName    = 'Rip a CD',
+    [string] $ShortcutName    = 'MusicRipper - Rip a CD',
     [switch] $KeepDependencies,
     [switch] $KeepUserData,
     [switch] $KeepShortcut,
@@ -262,6 +267,10 @@ $ripperDataRoot = Join-Path $env:LOCALAPPDATA 'MusicRipper'
 $configPath     = Join-Path $ripperDataRoot 'config.json'
 $desktopPath    = [Environment]::GetFolderPath('Desktop')
 $shortcutPath   = Join-Path $desktopPath "$ShortcutName.lnk"
+# Legacy bare-name shortcut from pre-rename installs. Cleaned up
+# alongside $shortcutPath; only matters when -ShortcutName wasn't
+# explicitly set to the legacy name.
+$legacyShortcutPath = Join-Path $desktopPath 'Rip a CD.lnk'
 
 
 # =========================================================================
@@ -530,6 +539,17 @@ if ($KeepShortcut) {
 } elseif (-not (Test-Path -LiteralPath $shortcutPath -PathType Leaf)) {
     Write-Step 'Desktop shortcut'
     Write-Skip "Not found: $shortcutPath  (already gone, or never installed)."
+    # Still try to clean the legacy bare name even when the primary
+    # one isn't there -- a partial-rename state is possible.
+    if (($ShortcutName -ne 'Rip a CD') -and (Test-Path -LiteralPath $legacyShortcutPath -PathType Leaf)) {
+        try {
+            Remove-Item -LiteralPath $legacyShortcutPath -Force
+            Write-Ok "Removed legacy: $legacyShortcutPath"
+        } catch {
+            Write-Fail "Couldn't remove legacy shortcut '$legacyShortcutPath': $($_.Exception.Message)"
+            $failures++
+        }
+    }
 } elseif ($PSCmdlet.ShouldProcess($shortcutPath, 'Remove desktop shortcut')) {
     Write-Step 'Removing desktop shortcut'
     try {
@@ -538,6 +558,17 @@ if ($KeepShortcut) {
     } catch {
         Write-Fail "Couldn't remove shortcut: $($_.Exception.Message)"
         $failures++
+    }
+    # Also clean up the legacy bare name if it's still around (parents
+    # who installed pre-rename may have BOTH after the next install).
+    if (($ShortcutName -ne 'Rip a CD') -and (Test-Path -LiteralPath $legacyShortcutPath -PathType Leaf)) {
+        try {
+            Remove-Item -LiteralPath $legacyShortcutPath -Force
+            Write-Ok "Removed legacy: $legacyShortcutPath"
+        } catch {
+            Write-Fail "Couldn't remove legacy shortcut '$legacyShortcutPath': $($_.Exception.Message)"
+            $failures++
+        }
     }
 }
 

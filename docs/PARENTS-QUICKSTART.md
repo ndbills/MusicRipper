@@ -4,17 +4,17 @@ One page. One CD at a time. No PowerShell.
 
 ## What you got
 
-A **Rip a CD** shortcut on the Desktop. Double-click it whenever you
-want to digitize a CD. That's the whole thing.
+A **MusicRipper - Rip a CD** shortcut on the Desktop. Double-click
+it whenever you want to digitize a CD. That's the whole thing.
 
-![Desktop with the "Rip a CD" shortcut](images/01-desktop-shortcut.png)
+![Desktop with the "MusicRipper - Rip a CD" shortcut](images/01-desktop-shortcut.png)
 
 ---
 
 ## Step 1 — First launch (one time only)
 
-The very first time you double-click **Rip a CD**, a **Settings**
-window opens. Fill in:
+The very first time you double-click **MusicRipper - Rip a CD**, a
+**Settings** window opens. Fill in:
 
 - **Library root** — the folder on this PC where your ripped CDs will
   live. Pick a spot with plenty of room (one CD ≈ 400 MB).
@@ -39,7 +39,7 @@ window. They should already be filled in for you — leave them alone.
 ## Step 2 — Ripping a CD
 
 1. **Insert a CD** into the drive.
-2. **Double-click "Rip a CD"** on the Desktop.
+2. **Double-click "MusicRipper - Rip a CD"** on the Desktop.
 3. A small dialog pops up showing the album, artist, year, and cover
    art for the disc you just inserted. Look it over.
 

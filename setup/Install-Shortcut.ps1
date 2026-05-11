@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-    Create a Desktop shortcut "Rip a CD" that launches Start-Ripper.ps1 in PS7.
+    Create a Desktop shortcut "MusicRipper - Rip a CD" that launches
+    Start-Ripper.ps1 in PS7.
 
 .DESCRIPTION
     Pipeline position:
@@ -11,6 +12,12 @@
     default, no extra runtime, lets us set the icon. The shortcut points at
     `pwsh.exe -NoProfile -ExecutionPolicy Bypass -File <repo>\src\Start-Ripper.ps1`
     so it runs in PS7 regardless of the user's default association.
+
+    Naming: matches the Start Menu shortcut name ("MusicRipper - Rip a CD")
+    so a parent searching the Start Menu sees the same label as on the
+    Desktop. Earlier installs used the bare "Rip a CD" name; the legacy
+    shortcut is auto-deleted at install time so re-running this script (or
+    letting the auto-updater's setup-chain re-run handle it) cleans up.
 
 .EXAMPLE
     PS> ./setup/Install-Shortcut.ps1
@@ -28,7 +35,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$ShortcutName = 'Rip a CD'
+    [string]$ShortcutName = 'MusicRipper - Rip a CD'
 )
 
 Set-StrictMode -Version 3.0
@@ -46,6 +53,21 @@ $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
 
 $desktop      = [Environment]::GetFolderPath('Desktop')
 $shortcutPath = Join-Path $desktop "$ShortcutName.lnk"
+
+# Clean up legacy Desktop shortcut from pre-rename installs (the
+# bare "Rip a CD.lnk" before we matched the Start Menu naming).
+# Only when the new name actually differs from the legacy one --
+# defends against a deliberate -ShortcutName 'Rip a CD' override
+# nuking its own about-to-be-created file.
+$legacyDesktopLnk = Join-Path $desktop 'Rip a CD.lnk'
+if (($ShortcutName -ne 'Rip a CD') -and (Test-Path -LiteralPath $legacyDesktopLnk)) {
+    try {
+        Remove-Item -LiteralPath $legacyDesktopLnk -Force
+        Write-Host "Removed legacy Desktop shortcut: $legacyDesktopLnk" -ForegroundColor DarkGray
+    } catch {
+        Write-Warning "Couldn't remove legacy shortcut '$legacyDesktopLnk': $($_.Exception.Message). Delete it manually if it's still there after install completes."
+    }
+}
 
 $shell = New-Object -ComObject WScript.Shell
 $lnk = $shell.CreateShortcut($shortcutPath)
