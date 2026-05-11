@@ -28,6 +28,18 @@ Synology NAS over WireGuard).
 - **Your parents** (the eventual users): hand-held by a Desktop shortcut
   and a one-page quickstart. They never see PowerShell.
 
+> **You'll need a CD drive that supports raw audio reads.** Most retail
+> CD/DVD/Blu-ray drives sold in the last 10+ years work out of the box,
+> but a class of older OEM tray drives (notably the **TSSTcorp TS-H65x**
+> family that shipped pre-installed in many ~2008-2010 HP / Dell / Compaq
+> desktops) can identify and play discs but reject the SCSI commands
+> MusicRipper needs to rip them. If your fatal-error dialog mentions
+> *"This CD drive cannot rip audio CDs"* or the log shows
+> `ILLEGAL MODE FOR THIS TRACK`, see the *"CD drive cannot rip audio CDs"*
+> section in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for the
+> diagnosis + a known-good drive list. (A modern external USB CD drive
+> from ASUS / LG / Pioneer is ~$20-25 and will work.)
+
 ## Current status
 
 **Feature-complete.** Initial development closed out the rip pipeline,
