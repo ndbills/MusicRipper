@@ -2624,4 +2624,46 @@ Logged in `/memories/powershell.md`.
 the Update shortcut joins), F-6 (the Settings shortcut precedent
 this mirrors).
 
+### Amendment (May 11 2026): promote Update-MusicRipper.ps1 to repo root
+
+**What changed.** `Update-MusicRipper.ps1` moved from
+`src/tools/Update-MusicRipper.ps1` to the repo root, so the three
+top-level lifecycle scripts (Install / Update / Uninstall) live as
+siblings. The `src/tools/` location was an artifact of mirroring
+F-6's `Show-RipperConfig.ps1` (a Settings entry point that genuinely
+belongs under tools), but Update is a peer of Install / Uninstall
+and was inconsistently placed.
+
+**Why.** Discoverability + consistency. An engineer looking at the
+repo root now sees the full lifecycle as three sibling scripts
+without having to remember that the updater lives elsewhere. Same
+verb-noun shape, same self-elevating / self-minimizing patterns,
+same parent-friendly UX wrapper. Matches the user's stated
+preference for "removing manual steps" -- a parent who needs to
+read the README to understand what's available now sees all three.
+
+**No migration risk.** This was caught between the D-032 land and
+any parent install actually pulling it -- no live install had the
+old `src/tools/Update-MusicRipper.ps1` path baked into a Start
+Menu shortcut yet. Clean cut.
+
+**Files touched.**
+- `git mv src/tools/Update-MusicRipper.ps1 Update-MusicRipper.ps1`.
+- `Update-MusicRipper.ps1` -- `$repoRoot` resolution simplified
+  from `Split-Path -Parent (Split-Path -Parent $PSScriptRoot)`
+  (two levels up) to plain `$PSScriptRoot` (already the install
+  root). Header docstring updated to note the new sibling
+  position.
+- `setup/Install-StartMenuShortcuts.ps1` -- shortcut target path
+  updated; comment block updated.
+- `README.md` -- new "To update later" paragraph after the
+  uninstall paragraph; directory map adds the Update entry.
+- `docs/SETUP.md` -- new "What Update-MusicRipper.ps1 does at
+  runtime" subsection under the existing "Cutting a release"
+  section, walking through the script's flow + failure semantics.
+- `docs/ARCHITECTURE.md` -- table rows added for Updater.psm1,
+  Show-UpdateDialog.ps1, and the root Update-MusicRipper.ps1.
+
+**Pester:** unchanged (594/0/1; the Updater module / WPF / Pester
+fixtures don't depend on the entry point's filesystem location).
 

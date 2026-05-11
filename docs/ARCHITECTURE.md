@@ -71,7 +71,11 @@ the first thing to update.
 | `src/tools/Build-LibraryDiscIndex.ps1` | 5.8 | One-shot seed of `discids.json` from existing library FLACs (uses MUSICBRAINZ_DISCID tag). |
 | `src/tools/Sync-PendingAlbums.ps1` | 6.1 | Retry sync for every album in `sync-state.json` whose configured targets aren't all `OK`; reapplies retention. Supports `-WhatIf`, `-Force`, `-LibraryRoot`. |
 | `src/tools/Show-RipperConfig.ps1`  | F-6 | Standalone WPF config-editor entry point fronted by the "MusicRipper - Settings" Start Menu shortcut. Self-minimizes the host pwsh, opens `Show-RipperConfigDialog` on the existing config (or in `-FirstRun` if `config.json` is absent). Saved settings apply on the next launch of the main app. |
+| `src/lib/Updater.psm1`             | 8     | D-032 self-update helpers: GitHub Releases API lookup (with `main`-branch fallback), SemVer comparator, install-root discovery, stage+atomic-rename apply orchestrator with rollback-on-failure, backup retention. |
+| `src/ui/Show-UpdateDialog.ps1`     | 8     | D-032 WPF dialog (3 states: Checking → Result → Applying) for the self-update flow. Worker runspaces for the network call + the download/extract/apply. |
 | `Install-MusicRipper.ps1` (root)   | 7     | One-shot self-installer.                               |
+| `Update-MusicRipper.ps1` (root)    | 8     | D-032 self-updater entry point. Sibling to Install/Uninstall at repo root; opens `Show-UpdateDialog`; fronted by the "MusicRipper - Update" Start Menu shortcut. |
+| `Uninstall-MusicRipper.ps1` (root) | 7     | Symmetric uninstaller (self-elevates via temp helper). |
 
 ## State on disk
 

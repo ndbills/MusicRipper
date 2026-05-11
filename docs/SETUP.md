@@ -153,3 +153,60 @@ After the parent applies an update, the prior install is kept at
 `<install-dir>-old-<timestamp>` (the most recent 2 backups are
 retained; older ones are auto-pruned). Recovery from a bad release
 is "rename the latest `-old-*` folder back to the live install path."
+
+### What `Update-MusicRipper.ps1` does at runtime
+
+[Update-MusicRipper.ps1](../Update-MusicRipper.ps1) is a sibling of
+[Install-MusicRipper.ps1](../Install-MusicRipper.ps1) and
+[Uninstall-MusicRipper.ps1](../Uninstall-MusicRipper.ps1) at the
+repo root. It's a thin entry-point shim — the actual logic lives in
+[src/lib/Updater.psm1](../src/lib/Updater.psm1) (pure helpers) and
+[src/ui/Show-UpdateDialog.ps1](../src/ui/Show-UpdateDialog.ps1)
+(WPF). The script:
+
+1. Self-minimizes the host pwsh window (so the WPF dialog is the
+   only user-visible surface).
+2. Imports `Logging` / `Common` / `Updater` modules + dot-sources
+   the WPF dialog.
+3. Resolves the install root via `Get-RipperInstallRoot` (validates
+   that `Install-MusicRipper.ps1` + `src\Start-Ripper.ps1` exist
+   alongside).
+4. Opens the `Show-RipperUpdateDialog` — three states:
+   - **Checking**: queries `https://api.github.com/repos/ndbills/MusicRipper/releases/latest`
+     in a worker runspace.
+   - **Result**: either *"You're up to date"* (single OK), *"Update
+     available: vX.Y"* (Update + Cancel buttons + release notes
+     panel), or *"Couldn't check"* (Retry + Cancel).
+   - **Applying** (if the user clicks Update): downloads the source
+     zip to `%TEMP%\musicripper-update-<guid>\`, expands it,
+     validates the layout, snapshots user-generated files
+     (`data\driveoffsets.cached.json`), renames the live install to
+     `<install>-old-<yyyyMMdd-HHmmss>` as a rollback point, moves
+     the new tree into place, restores user files, re-runs
+     [setup/Install-Dependencies.ps1](../setup/Install-Dependencies.ps1)
+     + [setup/Install-Shortcut.ps1](../setup/Install-Shortcut.ps1)
+     + [setup/Install-StartMenuShortcuts.ps1](../setup/Install-StartMenuShortcuts.ps1)
+     idempotently, prunes old backups (keeps 2).
+5. Logs every step to `%LOCALAPPDATA%\MusicRipper\logs\<stamp>-update.log`
+   so a failed apply can be diagnosed after the fact.
+
+Failure semantics:
+
+- **Network error checking** → "Couldn't check" panel; no state changed.
+- **Download/extract fails** → install untouched (no backup created
+  yet); dialog shows the error.
+- **Apply fails mid-move** → automatic rollback (rename `-old-*`
+  back to live); dialog reports "rolled back to previous version."
+- **Setup-chain re-run fails post-apply** → new files ARE in place;
+  logged as WARN, apply still reports success. Parent re-runs the
+  Update shortcut later or runs the failing setup script manually.
+
+Engineers can invoke the script directly during testing
+(`./Update-MusicRipper.ps1` from a clone), but the parent-facing
+entry point is the **MusicRipper - Update** Start Menu shortcut
+created by `setup/Install-StartMenuShortcuts.ps1`.
+
+Full architectural rationale (why stage+atomic-rename, why backup
+retention 2-deep, why "leave orphan files", rejected alternatives
+including auto-check-on-launch and push-from-engineer) lives in
+[DECISIONS.md D-032](DECISIONS.md).

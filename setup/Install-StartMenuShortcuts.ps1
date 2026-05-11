@@ -30,8 +30,9 @@
                          Install-Dependencies.ps1 needs UAC, and
                          winget self-elevates per-package as needed.
                          WindowStyle=Minimized so the WPF dialog is
-                         the user-visible surface. Targets
-                         src\tools\Update-MusicRipper.ps1.
+                         the user-visible surface. Targets the
+                         repo-root Update-MusicRipper.ps1 (sibling to
+                         Install-MusicRipper.ps1 / Uninstall-MusicRipper.ps1).
       - Uninstall      : NO RunAsAdministrator flag, WindowStyle=Normal.
                          Uninstall-MusicRipper.ps1 self-elevates AFTER
                          the parent shell prompts; pre-elevating would
@@ -139,7 +140,7 @@ Write-Host "Created shortcut: $settingsLnk" -ForegroundColor Green
 # parent's user; only the post-apply re-run of Install-Dependencies
 # touches winget which self-elevates per-package as needed.
 # WindowStyle=Minimized so the WPF dialog is the user-visible surface.
-$updateScript = Join-Path $repoRoot 'src\tools\Update-MusicRipper.ps1'
+$updateScript = Join-Path $repoRoot 'Update-MusicRipper.ps1'
 if (-not (Test-Path -LiteralPath $updateScript -PathType Leaf)) {
     throw "Update-MusicRipper.ps1 not found at '$updateScript'."
 }

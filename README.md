@@ -85,6 +85,19 @@ WireGuard), the WireGuard tunnel service, and `%LOCALAPPDATA%\MusicRipper\`
 PowerShell 7 stays installed. The script self-elevates if needed (one UAC
 prompt at launch). Add `-WhatIf` to preview without changing anything.
 
+To update later: `./Update-MusicRipper.ps1` (or click **MusicRipper -
+Update** in the Start Menu) opens a small WPF dialog that checks GitHub
+for a newer release. If one's available, it downloads the source zip
+and applies it with a stage-and-atomic-rename strategy: the live install
+is renamed to `<install>-old-<timestamp>` as a rollback point, the new
+tree is moved into place, then the setup chain is re-run idempotently
+so any new winget dependencies install cleanly. User-generated files
+(currently `data/driveoffsets.cached.json`) are preserved. The two most
+recent backups are retained; older ones auto-prune. Falls back to the
+`main`-branch zip when no GitHub Release exists yet. See
+[docs/SETUP.md](docs/SETUP.md) for the engineer-side "cutting a
+release" workflow and the full apply-and-rollback design (D-032).
+
 On first launch the WPF settings editor opens (library root, MusicBrainz
 contact address, drive registration with progress bar, OneDrive / Synology
 NAS sync targets, WireGuard `.conf` picker). Save and you're ripping.
@@ -104,6 +117,7 @@ low-confidence MusicBrainz matches, and unknown discs route to
 ```
 MusicRipper/
 ├── Install-MusicRipper.ps1         # One-shot installer (chains setup steps)
+├── Update-MusicRipper.ps1          # In-place self-updater (D-032; pulls latest GitHub Release)
 ├── Uninstall-MusicRipper.ps1       # Symmetric uninstaller (self-elevates)
 │
 ├── setup/                          # Install chain steps + per-feature setup
