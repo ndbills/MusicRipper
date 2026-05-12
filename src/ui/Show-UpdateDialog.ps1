@@ -43,16 +43,35 @@
     failure). The shortcut entry point doesn't act on the return value
     -- the dialog is its own self-contained UI -- but the value is
     still useful for unit-style integration tests.
-#>
 
-[CmdletBinding()]
-param(
-    [Parameter(Mandatory)] [string]$InstallRoot,
-    [System.Windows.Window]$Owner
-)
+.NOTES
+    This file is dot-sourced from Update-MusicRipper.ps1 -- it is NOT
+    a standalone script. The reason there's no script-level `param(...)`
+    block: the [System.Windows.Window]$Owner parameter on
+    Show-RipperUpdateDialog is parsed at file-load time, and PowerShell's
+    type resolution for `[System.Windows.Window]` requires
+    PresentationFramework to be ALREADY loaded into the AppDomain. So
+    the `Add-Type -AssemblyName PresentationFramework` call below MUST
+    happen before any param block referencing WPF types. A previous
+    version of this file had a script-level param block above the
+    Add-Type calls, which crashed on first launch on fresh test
+    machines (where the dev shell hadn't already pre-loaded WPF for
+    other reasons). Keep the Add-Type calls at the very top.
+#>
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
+
+# Load WPF assemblies BEFORE any function-level param block in this
+# file references [System.Windows.Window]. These four are the same set
+# every WPF dialog in the project loads (Show-RipperConfigDialog.ps1,
+# Show-PendingSyncProgress.ps1, etc.); Add-Type is idempotent so
+# loading them again here when the host has already imported them is
+# a fast no-op.
+Add-Type -AssemblyName PresentationFramework
+Add-Type -AssemblyName PresentationCore
+Add-Type -AssemblyName WindowsBase
+Add-Type -AssemblyName System.Xaml
 
 # Load deps. The dialog can be sourced standalone (from
 # Update-MusicRipper.ps1) so we import everything we need here rather
@@ -61,11 +80,6 @@ $libRoot = Join-Path $PSScriptRoot '..\lib'
 Import-Module (Join-Path $libRoot 'Logging.psd1') -Force
 Import-Module (Join-Path $libRoot 'Common.psd1')  -Force
 Import-Module (Join-Path $libRoot 'Updater.psd1') -Force
-
-Add-Type -AssemblyName PresentationFramework
-Add-Type -AssemblyName PresentationCore
-Add-Type -AssemblyName WindowsBase
-Add-Type -AssemblyName System.Xaml
 
 function Show-RipperUpdateDialog {
     [CmdletBinding()]
