@@ -50,6 +50,20 @@ public static extern System.IntPtr GetConsoleWindow();
     }
 } catch { }
 
+# Pre-load WPF assemblies BEFORE dot-sourcing Show-UpdateDialog.ps1.
+# That file's `function Show-RipperUpdateDialog` has a
+# [System.Windows.Window]$Owner parameter, and PowerShell resolves
+# parameter types at parse-time (when the dot-source executes), NOT at
+# call-time. Without WPF already in the AppDomain the dot-source
+# fails with "Unable to find type [System.Windows.Window]." This
+# failure mode bites only on FRESH pwsh processes; a dev shell that
+# previously opened any other MusicRipper WPF (Settings, etc.) has
+# already loaded these assemblies and the bug stays hidden.
+Add-Type -AssemblyName PresentationFramework
+Add-Type -AssemblyName PresentationCore
+Add-Type -AssemblyName WindowsBase
+Add-Type -AssemblyName System.Xaml
+
 Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
 Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
 Import-Module (Join-Path $repoRoot 'src\lib\Updater.psd1') -Force
