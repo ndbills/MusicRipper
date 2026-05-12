@@ -440,17 +440,26 @@ function Invoke-RipperUpdateApply {
 
     & $report 'Move' "Moving new tree into '$InstallRoot'."
     try {
-        # Try a same-volume rename first (instant). If that fails (the
-        # temp dir is on a different volume from the install),
-        # fall back to recursive copy + delete.
+        # Primary: Move-Item handles same-volume (instant rename) and
+        # cross-volume (recursive copy + delete) by itself; no need for
+        # a manual rename-then-move dance. Same OneDrive-folder-redirected
+        # Desktop trips up plain Rename-Item across the OneDrive
+        # boundary even when the source + dest look like the same
+        # volume; Move-Item handles that case via copy fallback
+        # internally.
         try {
-            Rename-Item -LiteralPath $newRoot -NewName (Split-Path -Leaf $InstallRoot) -ErrorAction Stop
-            $renamedRoot = Join-Path (Split-Path -Parent $newRoot) (Split-Path -Leaf $InstallRoot)
-            Move-Item -LiteralPath $renamedRoot -Destination $InstallRoot -ErrorAction Stop
+            Move-Item -LiteralPath $newRoot -Destination $InstallRoot -ErrorAction Stop
         } catch {
-            # Fall back: copy + remove the staging child.
+            # Fall back: explicit recursive copy of the staging child's
+            # CONTENTS into the install path (not the wrapper folder
+            # itself). NB: -Path (NOT -LiteralPath) so the trailing
+            # '\*' is treated as a wildcard. -LiteralPath would look
+            # for a file or folder literally named '*'. Pre-Phase-8.2
+            # this used -LiteralPath and failed every cross-volume
+            # update with "Cannot find path '...\*' because it does
+            # not exist."
             New-Item -ItemType Directory -Path $InstallRoot -Force -ErrorAction Stop | Out-Null
-            Copy-Item -LiteralPath (Join-Path $newRoot '*') -Destination $InstallRoot -Recurse -Force -ErrorAction Stop
+            Copy-Item -Path (Join-Path $newRoot '*') -Destination $InstallRoot -Recurse -Force -ErrorAction Stop
         }
     } catch {
         $applyErr = $_.Exception.Message

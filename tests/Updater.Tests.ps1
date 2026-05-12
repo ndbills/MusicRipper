@@ -296,6 +296,31 @@ Describe 'Invoke-RipperUpdateApply' {
         # Live install untouched (the rename never succeeded).
         Test-Path -LiteralPath $live | Should -BeTrue
     }
+
+    It 'falls back to recursive copy when Move-Item fails (cross-volume / OneDrive boundary)' {
+        # Regression for the Phase-8.2 copy-fallback wildcard bug:
+        # the fallback used -LiteralPath with a trailing '\*', which
+        # PowerShell read as a literal filename '*' (not a wildcard)
+        # and failed every cross-volume / OneDrive-boundary update
+        # with "Cannot find path '...\*' because it does not exist".
+        # Forcing Move-Item to throw drives the fallback path; the
+        # test passes when the install ends up populated from the
+        # staging child's contents.
+        $live  = New-FakeInstall -RootName 'apply-fallback'
+        $stage = New-FakeStaging -Marker 'v0.2'
+        Mock -ModuleName Updater Move-Item {
+            throw 'simulated cross-volume failure'
+        }
+        $r = Invoke-RipperUpdateApply -InstallRoot $live -StagingRoot $stage
+        $r.Success | Should -BeTrue
+        Test-Path -LiteralPath $live                                 | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $live 'NEW-FILE.md')        | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $live 'Install-MusicRipper.ps1') | Should -BeTrue
+        # Marker is the new one (so the contents really were copied,
+        # not just a stub left behind by another path).
+        (Get-Content -LiteralPath (Join-Path $live 'Install-MusicRipper.ps1') -Raw).Trim() |
+            Should -Match 'v0\.2'
+    }
 }
 
 
