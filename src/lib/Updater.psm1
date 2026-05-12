@@ -270,18 +270,30 @@ function Save-RipperUpdateBackup {
 .SYNOPSIS
     Rename the live install dir to '<install>-old-<yyyyMMdd-HHmmss>'
     so the apply step can move the new tree into the original
-    location. Returns the backup path on success, $null on failure.
+    location. Returns a result hashtable.
+
+.DESCRIPTION
+    Returns:
+      @{ Success=$true;  BackupPath=<path>; ErrorMessage=$null }
+        on successful rename.
+      @{ Success=$false; BackupPath=$null; ErrorMessage=<text> }
+        on failure. ErrorMessage includes the underlying exception
+        text + a short hint about the most likely 'in use' causes
+        when the underlying error matches the
+        ERROR_SHARING_VIOLATION shape ("because it is in use" /
+        "used by another process").
 
 .PARAMETER InstallRoot
     Absolute path to the current MusicRipper install. Will be RENAMED;
-    after this call the path no longer exists.
+    after a successful call the path no longer exists.
 #>
     [CmdletBinding()]
-    [OutputType([string])]
+    [OutputType([hashtable])]
     param([Parameter(Mandatory)] [string]$InstallRoot)
     if (-not (Test-Path -LiteralPath $InstallRoot)) {
-        Write-RipperLog WARN 'Updater' "Save-RipperUpdateBackup: install root '$InstallRoot' does not exist."
-        return $null
+        $msg = "install root '$InstallRoot' does not exist."
+        Write-RipperLog WARN 'Updater' "Save-RipperUpdateBackup: $msg"
+        return @{ Success = $false; BackupPath = $null; ErrorMessage = $msg }
     }
     $stamp  = (Get-Date).ToString('yyyyMMdd-HHmmss')
     $parent = Split-Path -Parent $InstallRoot
@@ -290,10 +302,28 @@ function Save-RipperUpdateBackup {
     try {
         Rename-Item -LiteralPath $InstallRoot -NewName (Split-Path -Leaf $backup) -ErrorAction Stop
         Write-RipperLog INFO 'Updater' "Renamed live install '$InstallRoot' -> '$backup' (rollback point)."
-        return $backup
+        return @{ Success = $true; BackupPath = $backup; ErrorMessage = $null }
     } catch {
-        Write-RipperLog ERROR 'Updater' "Save-RipperUpdateBackup: rename failed: $($_.Exception.Message)"
-        return $null
+        $raw = $_.Exception.Message
+        Write-RipperLog ERROR 'Updater' "Save-RipperUpdateBackup: rename failed: $raw"
+        # Distinguish the 'in use' case (someone is holding a handle on
+        # the install dir) from other failures (permissions, missing
+        # parent, etc.). The 'in use' case is by far the most common
+        # in the field and the one a parent can do something about.
+        $hint = ''
+        if ($raw -match 'in use|being used by another process|sharing violation') {
+            $hint = ' Likely cause: another process is holding the install directory open. ' +
+                    'Common culprits: (1) MusicRipper is currently running -- check the system tray ' +
+                    'or close any "Rip a CD" windows; (2) a File Explorer window has the install ' +
+                    "folder or its parent open -- close those; (3) an antivirus is mid-scan -- wait " +
+                    'a minute and retry.'
+        } elseif ($raw -match 'denied|UnauthorizedAccess') {
+            $hint = " Likely cause: insufficient permissions to rename '$InstallRoot'. " +
+                    "Make sure your Windows user owns this folder. (The install path is '$InstallRoot' " +
+                    "and the rename targets its parent '$parent'.)"
+        }
+        $errMsg = "Could not back up live install: $raw.$hint"
+        return @{ Success = $false; BackupPath = $null; ErrorMessage = $errMsg }
     }
 }
 
@@ -399,10 +429,14 @@ function Invoke-RipperUpdateApply {
     }
 
     & $report 'Backup' "Renaming live install to backup."
-    $backup = Save-RipperUpdateBackup -InstallRoot $InstallRoot
-    if (-not $backup) {
-        return @{ Success = $false; BackupPath = $null; ErrorMessage = "Could not back up live install (rename failed). New install was NOT applied." }
+    $backupResult = Save-RipperUpdateBackup -InstallRoot $InstallRoot
+    if (-not $backupResult.Success) {
+        # Propagate the rich error verbatim (it already includes the
+        # underlying exception text + the 'in use' / permissions hint).
+        # Pre-Phase-8.1 this was the unhelpful generic 'rename failed'.
+        return @{ Success = $false; BackupPath = $null; ErrorMessage = $backupResult.ErrorMessage }
     }
+    $backup = $backupResult.BackupPath
 
     & $report 'Move' "Moving new tree into '$InstallRoot'."
     try {

@@ -172,17 +172,44 @@ Describe 'Get-RipperLatestRelease' {
 
 
 Describe 'Save-RipperUpdateBackup' {
-    It 'renames the install dir to <leaf>-old-<stamp> and returns the new path' {
+    It 'renames the install dir to a timestamped backup folder and returns Success=true with BackupPath' {
         $root = New-FakeInstall -RootName 'backup-test'
-        $bak  = Save-RipperUpdateBackup -InstallRoot $root
-        $bak  | Should -Not -BeNullOrEmpty
-        Test-Path -LiteralPath $root | Should -BeFalse
-        Test-Path -LiteralPath $bak  | Should -BeTrue
-        $bak  | Should -Match '-old-\d{8}-\d{6}$'
+        $r    = Save-RipperUpdateBackup -InstallRoot $root
+        $r          | Should -Not -BeNullOrEmpty
+        $r.Success  | Should -BeTrue
+        $r.ErrorMessage | Should -BeNullOrEmpty
+        Test-Path -LiteralPath $root         | Should -BeFalse
+        Test-Path -LiteralPath $r.BackupPath | Should -BeTrue
+        $r.BackupPath | Should -Match '-old-\d{8}-\d{6}$'
     }
-    It 'returns $null when the install dir does not exist' {
+    It 'returns Success=false with a descriptive error when the install dir does not exist' {
         $missing = Join-Path $TestDrive 'no-such-install'
-        Save-RipperUpdateBackup -InstallRoot $missing | Should -BeNullOrEmpty
+        $r = Save-RipperUpdateBackup -InstallRoot $missing
+        $r.Success      | Should -BeFalse
+        $r.BackupPath   | Should -BeNullOrEmpty
+        $r.ErrorMessage | Should -Match 'does not exist'
+    }
+    It 'surfaces the underlying exception text + an "in use" hint when Rename-Item fails with a sharing violation' {
+        # Mock Rename-Item to throw the exact ERROR_SHARING_VIOLATION
+        # message PowerShell produces on Windows ("because it is in use").
+        # The real failure on the parents'-PC test machine -- this test
+        # is the regression guard for the fix that surfaced the
+        # underlying message + a parent-friendly hint instead of just
+        # "rename failed".
+        $root = New-FakeInstall -RootName 'backup-shared'
+        Mock -ModuleName Updater Rename-Item {
+            throw "Cannot rename the item at '$root' because it is in use."
+        }
+        $r = Save-RipperUpdateBackup -InstallRoot $root
+        $r.Success      | Should -BeFalse
+        $r.BackupPath   | Should -BeNullOrEmpty
+        # Underlying exception text preserved (the most common cause we
+        # hit in the field; previously thrown away into an unhelpful
+        # generic "rename failed").
+        $r.ErrorMessage | Should -Match 'because it is in use'
+        # Parent-friendly hint enumerating the three usual culprits.
+        $r.ErrorMessage | Should -Match 'system tray'
+        $r.ErrorMessage | Should -Match 'File Explorer'
     }
 }
 
@@ -249,6 +276,25 @@ Describe 'Invoke-RipperUpdateApply' {
         @($phases) | Should -Contain 'Backup'
         @($phases) | Should -Contain 'Move'
         @($phases) | Should -Contain 'Restore'
+    }
+
+    It 'propagates the underlying rename-failed exception text into the orchestrator ErrorMessage' {
+        # Regression for the "rename failed" diagnostic-loss bug: when
+        # Save-RipperUpdateBackup fails, the orchestrator must surface
+        # the underlying exception (e.g. "because it is in use") +
+        # the parent-friendly hint, NOT a generic placeholder.
+        $live  = New-FakeInstall -RootName 'apply-locked'
+        $stage = New-FakeStaging
+        Mock -ModuleName Updater Rename-Item {
+            throw "Cannot rename the item at '$live' because it is in use."
+        }
+        $r = Invoke-RipperUpdateApply -InstallRoot $live -StagingRoot $stage
+        $r.Success      | Should -BeFalse
+        $r.BackupPath   | Should -BeNullOrEmpty
+        $r.ErrorMessage | Should -Match 'because it is in use'
+        $r.ErrorMessage | Should -Match 'system tray'
+        # Live install untouched (the rename never succeeded).
+        Test-Path -LiteralPath $live | Should -BeTrue
     }
 }
 
