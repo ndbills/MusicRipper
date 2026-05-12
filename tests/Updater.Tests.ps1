@@ -12,6 +12,19 @@
     exercised against a real synthetic install tree under $TestDrive --
     that tests the rename / move / rollback paths against actual
     filesystem semantics (which is the most likely place for bugs).
+
+    NOT covered here: the Update-MusicRipper.ps1 entry point's
+    bootstrap (D-032 amendment, May 2026). The bootstrap copies
+    itself + deps to %TEMP% and respawns a hidden pwsh from there
+    so the apply step can rename the install dir without the
+    parent process holding open file handles. That self-mutation
+    bootstrap is hard to unit-test (spawns processes, mutates
+    real filesystem state outside $TestDrive); it's verified
+    manually via end-to-end testing on the parents'-PC test
+    machine. Tests in this file would have caught the apply bug
+    in isolation but did NOT catch the self-mutation bug because
+    they run from $TestDrive, not from inside an "install dir"
+    that the test process has loaded modules from.
 #>
 
 Set-StrictMode -Version 3.0
