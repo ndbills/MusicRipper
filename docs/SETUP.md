@@ -145,9 +145,18 @@ zip. To make a new release available to them:
    time they click **MusicRipper - Update**.
 
 If you skip step 3 (no Release tag), the updater falls back to a
-direct download of the `main`-branch zip — usable, but with no
-version comparison and no release notes. Cut Releases for anything
-parents should know about.
+direct download of the `main`-branch zip. There's no version tag to
+compare against, so the comparator can't tell "up to date" from
+"newer available" — it conservatively reports **"Update available"
+on every click**, downloads the current `main` zip, and re-applies
+it. Functionally harmless (each apply just overwrites with the same
+content + creates a new `-old-<timestamp>` backup), but it nags the
+parent and clutters the install dir's parent with backup folders.
+**Cut at least one Release before handing the install to a parent**
+— `gh release create v0.1 --title "v0.1: baseline" --notes "Initial
+tagged release."` is enough to silence the always-prompts behavior
+and establish the comparison anchor. From that point on you only
+see "Update available" when you actually cut a new tag.
 
 After the parent applies an update, the prior install is kept at
 `<install-dir>-old-<timestamp>` (the most recent 2 backups are
