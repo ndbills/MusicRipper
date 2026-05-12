@@ -109,4 +109,15 @@ the CI badge in [README.md](README.md) to be green before opening a PR.
    short manual-verification recipe in the PR description so the
    maintainer can re-run it locally.
 
+## Cutting a release
+
+After a merge that should reach the parents' install via the
+auto-updater (`Update-MusicRipper.ps1`), bump
+`$script:RipperVersion` in [src/lib/Common.psm1](src/lib/Common.psm1)
+and run `gh release create vX.Y --title "..." --notes "..."`. The
+notes body is shown verbatim in the parent's update dialog, so write
+it for that audience. Full workflow + rationale (and what happens if
+you skip the Release tag) lives in
+[docs/SETUP.md](docs/SETUP.md#cutting-a-release-engineer-side-phase-8--d-032).
+
 That's it. Thanks for reading.
