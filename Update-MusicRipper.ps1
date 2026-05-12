@@ -105,14 +105,26 @@ if (-not $IsTempHelper) {
         Copy-Item -LiteralPath (Join-Path $sourceRoot 'src\ui\Show-UpdateDialog.ps1') `
                   -Destination (Join-Path $tempBase 'src\ui') -Force -ErrorAction Stop
 
-        # Spawn the helper. -WindowStyle Hidden so the parent never sees
-        # a stray pwsh console -- only the WPF dialog comes up. The
-        # helper self-minimizes its own console as belt-and-suspenders.
-        # We DON'T -Wait: the parent must exit immediately so its file
-        # handles are released; the helper runs independently.
+        # Spawn the helper. Three things matter here:
+        # 1. -WindowStyle Hidden so the parent never sees a stray pwsh
+        #    console -- only the WPF dialog comes up.
+        # 2. -WorkingDirectory $env:TEMP so the helper does NOT inherit
+        #    the install dir as its CWD. Without this, even though the
+        #    helper file + modules live in %TEMP%, the helper PROCESS
+        #    holds the install dir as its current directory, and
+        #    Windows refuses to rename a directory that any process
+        #    has as CWD (ERROR_SHARING_VIOLATION; manifests as
+        #    "Cannot rename the item ... because it is in use").
+        #    Logged in /memories/powershell.md.
+        # 3. We DON'T -Wait: the parent must exit immediately so its
+        #    own file handles + CWD lock release; the helper runs
+        #    independently.
         $helperPath = Join-Path $tempBase 'Update-MusicRipper.ps1'
         $pwshExe = (Get-Command pwsh -ErrorAction Stop).Source
-        Start-Process -FilePath $pwshExe -WindowStyle Hidden -ArgumentList @(
+        Start-Process -FilePath $pwshExe `
+                      -WindowStyle Hidden `
+                      -WorkingDirectory ([System.IO.Path]::GetTempPath()) `
+                      -ArgumentList @(
             '-NoProfile',
             '-ExecutionPolicy', 'Bypass',
             '-File', $helperPath,
@@ -194,6 +206,19 @@ Import-Module (Join-Path $repoRoot 'src\lib\Updater.psd1') -Force
 Start-RipperLog -Context 'update'
 
 try {
+    # Belt-and-braces against -WorkingDirectory not propagating: force
+    # CWD to the helper's temp dir. Without this, ANY parent-process
+    # CWD inheritance (-WorkingDirectory bug, alternate launchers, etc.)
+    # would re-trigger the "rename failed: in use" bug. Logged before
+    # the Set-Location so the diagnostic survives if the change throws.
+    Write-RipperLog INFO 'Update-MusicRipper' "Helper CWD on entry: $((Get-Location).Path)"
+    try {
+        Set-Location -LiteralPath $repoRoot
+        Write-RipperLog INFO 'Update-MusicRipper' "Helper CWD pinned to temp: $repoRoot"
+    } catch {
+        Write-RipperLog WARN 'Update-MusicRipper' "Could not pin helper CWD to '$repoRoot': $($_.Exception.Message). Continuing; the rename step may fail with 'in use'."
+    }
+
     Write-RipperLog INFO 'Update-MusicRipper' "Update helper starting (install root: $InstallRoot, helper temp: $repoRoot)."
 
     try {
