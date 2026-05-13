@@ -161,3 +161,77 @@ Describe 'Test-RipperDependencies' {
         }
     }
 }
+
+Describe 'Read-RipperVersionFromFile (Phase 8.3 / D-032 amendment)' {
+
+    It 'returns the trimmed contents of a single-line VERSION file' {
+        $f = Join-Path $TestDrive 'VERSION'
+        Set-Content -LiteralPath $f -Value '0.2' -NoNewline
+        Read-RipperVersionFromFile -Path $f | Should -Be '0.2'
+    }
+
+    It 'tolerates a trailing newline (Set-Content default)' {
+        $f = Join-Path $TestDrive 'VERSION-newline'
+        Set-Content -LiteralPath $f -Value '0.3'   # trailing CRLF
+        Read-RipperVersionFromFile -Path $f | Should -Be '0.3'
+    }
+
+    It 'tolerates leading and trailing whitespace inside the line' {
+        $f = Join-Path $TestDrive 'VERSION-spaces'
+        Set-Content -LiteralPath $f -Value '   0.4   '
+        Read-RipperVersionFromFile -Path $f | Should -Be '0.4'
+    }
+
+    It 'reads the first non-empty line of a multi-line file' {
+        # Engineer added a comment block under the version, or saved
+        # with a stray blank first line; either way we want just the
+        # version.
+        $f = Join-Path $TestDrive 'VERSION-multiline'
+        Set-Content -LiteralPath $f -Value @('', '0.5', '# a comment')
+        Read-RipperVersionFromFile -Path $f | Should -Be '0.5'
+    }
+
+    It 'returns the unparseable fallback when the file is missing' {
+        # Fallback is intentionally SemVer-unparseable so
+        # Compare-RipperVersion treats it as "always update available"
+        # (string-compare path) -- safer than a numeric like '0.0'
+        # which would compare cleanly and silently misreport the
+        # update state.
+        $missing = Join-Path $TestDrive 'no-such-VERSION'
+        Read-RipperVersionFromFile -Path $missing | Should -Be '0.0-unknown'
+    }
+
+    It 'returns the unparseable fallback when the file is empty' {
+        $f = Join-Path $TestDrive 'VERSION-empty'
+        Set-Content -LiteralPath $f -Value ''
+        Read-RipperVersionFromFile -Path $f | Should -Be '0.0-unknown'
+    }
+
+    It 'returns the unparseable fallback when the file is whitespace-only' {
+        $f = Join-Path $TestDrive 'VERSION-ws'
+        Set-Content -LiteralPath $f -Value "   `n  `n"
+        Read-RipperVersionFromFile -Path $f | Should -Be '0.0-unknown'
+    }
+}
+
+Describe 'Get-RipperVersion (Phase 8.3 / D-032 amendment)' {
+
+    It 'returns the version sourced from the repo-root VERSION file at module load' {
+        # Sanity: the running test process loaded Common.psd1 from the
+        # actual repo, so Get-RipperVersion should equal the contents
+        # of the actual VERSION file. This catches regressions where
+        # the module accidentally hardcodes a string again.
+        $repoRoot   = Split-Path -Parent $PSScriptRoot
+        $versionFile = Join-Path $repoRoot 'VERSION'
+        $expected = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+        Get-RipperVersion | Should -Be $expected
+    }
+
+    It 'returns a non-empty string (defends against the worst-case fallback path)' {
+        # Even if VERSION goes missing in some weird install state,
+        # Get-RipperVersion must always return SOMETHING usable so the
+        # MusicBrainz / CTDB / GnuDB User-Agent string composition
+        # doesn't throw at the call sites.
+        Get-RipperVersion | Should -Not -BeNullOrEmpty
+    }
+}

@@ -2667,3 +2667,73 @@ Menu shortcut yet. Clean cut.
 **Pester:** unchanged (594/0/1; the Updater module / WPF / Pester
 fixtures don't depend on the entry point's filesystem location).
 
+### Amendment (Phase 8.3, May 13 2026): single-source-of-truth VERSION file
+
+**What changed.** The MusicRipper version string moved from a
+hardcoded `$script:RipperVersion = '0.1'` in `src/lib/Common.psm1`
+to a one-line `VERSION` file at the repo root (sibling to
+Install-MusicRipper.ps1 + Update-MusicRipper.ps1). `Common.psm1`
+reads it once at module load via a new `Read-RipperVersionFromFile`
+helper.
+
+**Why.** Pre-amendment the version-in-code and the git-tag for a
+release were two separate things bumped in two separate steps:
+
+```
+1. Edit Common.psm1   $script:RipperVersion = '0.2'
+2. git commit + push
+3. gh release create v0.2 ...
+```
+
+If the engineer skipped step 1 (or did it but forgot to commit), the
+parents' installed app would forever after report `0.1`, the
+auto-updater would compare `0.1` against the new `v0.2` tag, see
+"Update available", apply v0.2 (which still ships `Common.psm1` with
+`$script:RipperVersion = '0.1'`), and STILL report `0.1` next
+launch -- "update available" perpetually. The class is "the running
+app's reported version is decoupled from what's actually installed."
+
+Single-source-of-truth fix: the VERSION file IS the version. Bump
+it, commit, tag in the same commit, done. No way to ship a release
+that disagrees with itself about its own version.
+
+**Fallback.** A missing or unreadable VERSION file returns
+`'0.0-unknown'` -- intentionally SemVer-unparseable so
+`Compare-RipperVersion` treats it as "always update available"
+(string-compare path). Safer than `'0.0'` which would compare
+cleanly and silently misreport.
+
+**SemVer.** The amendment also adds a "SemVer for MusicRipper"
+table to `docs/SETUP.md` documenting the loose convention used:
+MAJOR for parent-action-required changes (relaxed pre-1.0 since
+0.x is "experimental"), MINOR for new parent-visible features
+backward-compat, PATCH for bug fixes. The auto-updater's
+`Compare-RipperVersion` strips the leading `v` and compares
+numerically; `v0.2` and `0.2` work the same.
+
+**Update-MusicRipper.ps1 bootstrap.** Now stages `VERSION` to the
+%TEMP% helper alongside the modules. Without that the helper would
+load Common.psm1 from %TEMP% (where there's no VERSION file
+sibling) and fall back to `'0.0-unknown'`, biasing the check toward
+always-update-available.
+
+**Files.**
+- `VERSION` -- NEW. Single-line, no extension.
+- `src/lib/Common.psm1` -- new `Read-RipperVersionFromFile` helper
+  + module-load lookup. Old hardcode + the "no automated bumping
+  yet" docstring caveat removed.
+- `src/lib/Common.psd1` -- export the new helper.
+- `Update-MusicRipper.ps1` -- bootstrap stages `VERSION` to %TEMP%.
+- `tests/Common.Tests.ps1` -- 9 new tests covering helper edge
+  cases (single-line / trailing-newline / leading+trailing
+  whitespace / multi-line first-non-empty / missing-file fallback
+  / empty-file fallback / whitespace-only fallback) + the
+  Get-RipperVersion-reads-from-VERSION integration test +
+  defensive non-empty assertion.
+- `docs/SETUP.md` -- "Cutting a release" step 1 now references
+  VERSION; new "SemVer for MusicRipper" subsection.
+- `CONTRIBUTING.md` -- "Cutting a release" pointer updated.
+
+**Pester:** 606/0/1 (was 597; +9 new tests).
+
+

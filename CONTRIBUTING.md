@@ -112,12 +112,16 @@ the CI badge in [README.md](README.md) to be green before opening a PR.
 ## Cutting a release
 
 After a merge that should reach the parents' install via the
-auto-updater (`Update-MusicRipper.ps1`), bump
-`$script:RipperVersion` in [src/lib/Common.psm1](src/lib/Common.psm1)
+auto-updater (`Update-MusicRipper.ps1`), bump the version in the
+[VERSION](VERSION) file at the repo root (single line, e.g. `0.2`)
 and run `gh release create vX.Y --title "..." --notes "..."`. The
-notes body is shown verbatim in the parent's update dialog, so write
-it for that audience. Full workflow + rationale (and what happens if
-you skip the Release tag) lives in
+VERSION file is the single source of truth for both the running
+app's reported version AND what the auto-updater compares against;
+bumping it + tagging in the same commit prevents the version-in-
+code / tag-in-git mismatch class of bugs. The notes body is shown
+verbatim in the parent's update dialog, so write it for that
+audience. Full workflow + rationale (incl. SemVer rules, what
+happens if you skip the Release tag) lives in
 [docs/SETUP.md](docs/SETUP.md#cutting-a-release-engineer-side-phase-8--d-032).
 
 That's it. Thanks for reading.

@@ -87,6 +87,7 @@ if (-not $IsTempHelper) {
         #   <temp>\Update-MusicRipper.ps1
         #   <temp>\src\lib\{Logging,Common,Updater}.{psd1,psm1}
         #   <temp>\src\ui\Show-UpdateDialog.ps1
+        #   <temp>\VERSION   (Phase 8.3: Common.psm1 reads it at module load)
         New-Item -ItemType Directory -Path $tempBase                          -Force | Out-Null
         New-Item -ItemType Directory -Path (Join-Path $tempBase 'src\lib')    -Force | Out-Null
         New-Item -ItemType Directory -Path (Join-Path $tempBase 'src\ui')     -Force | Out-Null
@@ -104,6 +105,20 @@ if (-not $IsTempHelper) {
 
         Copy-Item -LiteralPath (Join-Path $sourceRoot 'src\ui\Show-UpdateDialog.ps1') `
                   -Destination (Join-Path $tempBase 'src\ui') -Force -ErrorAction Stop
+
+        # Phase 8.3: stage the VERSION file alongside the modules.
+        # Common.psm1 reads it at load time to populate the local
+        # $script:RipperVersion that Compare-RipperVersion compares
+        # against the GitHub Release tag. Without staging it the
+        # helper would read '0.0-unknown' and bias the check toward
+        # always-update-available. Best-effort: a missing VERSION on
+        # the source is non-fatal (helper falls back to '0.0-unknown'
+        # which still works, just with the suboptimal nag behavior).
+        $versionSrc = Join-Path $sourceRoot 'VERSION'
+        if (Test-Path -LiteralPath $versionSrc) {
+            Copy-Item -LiteralPath $versionSrc `
+                      -Destination (Join-Path $tempBase 'VERSION') -Force -ErrorAction Stop
+        }
 
         # Spawn the helper. Three things matter here:
         # 1. -WindowStyle Hidden so the parent never sees a stray pwsh

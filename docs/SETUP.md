@@ -130,10 +130,13 @@ Parents update via the **MusicRipper - Update** Start Menu shortcut,
 which calls the GitHub Releases API and downloads the latest tagged
 zip. To make a new release available to them:
 
-1. Bump `$script:RipperVersion` in
-   [src/lib/Common.psm1](../src/lib/Common.psm1) to the new SemVer
-   string (e.g. `'0.2'`). This is the value the updater compares
-   against the GitHub tag.
+1. Bump the version in [VERSION](../VERSION) at the repo root
+   (single line, e.g. `0.2`). This is the value the running app
+   reports as its own version, and the value the auto-updater
+   compares against the GitHub tag. Phase 8.3 / D-032 amendment
+   replaced the previous `$script:RipperVersion` hardcode with this
+   file-based source of truth so the version-in-code and the
+   git-tag are bumped in the same commit.
 2. Commit + push to `main`.
 3. Cut the tagged release:
    ```powershell
@@ -143,6 +146,20 @@ zip. To make a new release available to them:
    shown verbatim in the parent's update dialog).
 4. The updater on the parents' machine will see the new tag the next
    time they click **MusicRipper - Update**.
+
+### SemVer for MusicRipper
+
+VERSION follows [Semantic Versioning](https://semver.org/) loosely:
+
+| Bump  | When                                                          |
+| ----- | ------------------------------------------------------------- |
+| MAJOR | A change a parent has to do something for (re-do config, etc.). Pre-1.0 (we're at 0.x) this rule is relaxed -- 0.x is "experimental, we reserve the right to break things." |
+| MINOR | New parent-visible feature, backward-compatible (auto-updater itself, NAS-credential validator, etc.). Most MusicRipper bumps are MINOR. |
+| PATCH | Bug fix only, no new features. The four Updater fixes shipped on 2026-05-11 would be a single PATCH bump if they were tagged. |
+
+Use the matching git tag prefix (`v0.2`, `v0.2.1`). The auto-
+updater's `Compare-RipperVersion` strips the leading `v` and
+compares numerically; tags without a `v` prefix work too.
 
 If you skip step 3 (no Release tag), the updater falls back to a
 direct download of the `main`-branch zip. There's no version tag to

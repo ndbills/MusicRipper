@@ -16,11 +16,72 @@
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
-# Single source of truth for the MusicRipper version string. Used to
-# build the MusicBrainz / CTDB / GnuDB User-Agent at runtime so we
-# don't have to chase hardcoded 'MusicRipper/0.1' strings across the
-# codebase whenever we cut a release. Bump here, recompose UA there.
-$script:RipperVersion = '0.1'
+# Phase 8.3 / D-032 amendment: single source of truth for the
+# MusicRipper version string is the `VERSION` file at the repo root
+# (sibling to Install-MusicRipper.ps1 + Update-MusicRipper.ps1). The
+# auto-updater compares this value against the latest GitHub Release
+# tag; cutting a release is now "edit VERSION + commit + gh release
+# create vX.Y" with no risk of code/tag mismatch within the commit.
+#
+# We read it ONCE at module load into $script:RipperVersion. Get-
+# RipperVersion returns that cached value -- the file is not re-read
+# per call (the running app's reported version is fixed for its
+# lifetime, and the auto-updater spawns a fresh helper that re-reads
+# anyway).
+#
+# Fallback: if VERSION is missing or unreadable (dev clone with the
+# file deleted, malformed install, etc.) we use '0.0-unknown' which
+# Compare-RipperVersion will treat as "always update available" via
+# the unparseable-input string-compare path -- safe by construction.
+
+function Read-RipperVersionFromFile {
+<#
+.SYNOPSIS
+    Read a single-line SemVer string from a VERSION file. Returns
+    '0.0-unknown' on any failure (missing file, empty, multi-line,
+    unreadable).
+
+.DESCRIPTION
+    Defensive against:
+      - File missing entirely (dev clone with VERSION removed).
+      - File empty / whitespace-only (forgot to type the number).
+      - Trailing newlines / Windows CRLF line endings (handled by
+        .Trim()).
+      - Multi-line file (ignore everything past the first non-empty
+        line; engineer might have added a comment under the version).
+
+    The fallback '0.0-unknown' is intentionally a SemVer-unparseable
+    string so Compare-RipperVersion treats it as "always update
+    available" (string-compare path). That's the safer default than
+    a numeric like '0.0' which would compare cleanly.
+
+.PARAMETER Path
+    Absolute path to the VERSION file.
+
+.OUTPUTS
+    [string] the trimmed version string, or '0.0-unknown' on failure.
+#>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)] [string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return '0.0-unknown' }
+    try {
+        $raw = Get-Content -LiteralPath $Path -ErrorAction Stop
+        # Get-Content returns string[] for multi-line files, [string]
+        # for single-line. Normalize to first non-empty trimmed line.
+        $first = @($raw | ForEach-Object { ([string]$_).Trim() } |
+                          Where-Object { $_ -ne '' }) | Select-Object -First 1
+        if ([string]::IsNullOrWhiteSpace($first)) { return '0.0-unknown' }
+        return $first
+    } catch {
+        return '0.0-unknown'
+    }
+}
+
+# Resolve the VERSION file at the repo root. $PSScriptRoot here is
+# 'src\lib'; two parents up is the install root.
+$script:RipperVersionFile = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'VERSION'
+$script:RipperVersion     = Read-RipperVersionFromFile -Path $script:RipperVersionFile
 
 function Get-RipperVersion {
 <#
@@ -28,11 +89,17 @@ function Get-RipperVersion {
     Return the current MusicRipper version string (e.g. '0.1').
 
 .DESCRIPTION
-    Used by the metadata providers to compose User-Agent headers of
-    the form 'MusicRipper/<version> ( <contactAddress> )'. There is
-    no automated bumping wired up yet (see the Phase-8 backlog item
-    on versioning + git tagging) -- update `$script:RipperVersion`
-    in this module when cutting a release.
+    Sourced from the `VERSION` file at the repo root, read once at
+    module load. Used by the metadata providers to compose User-
+    Agent headers of the form `MusicRipper/<version> ( <contactAddress> )`,
+    AND by Update-MusicRipper.ps1's `Compare-RipperVersion` to decide
+    whether to offer an update.
+
+    Cutting a release: edit `VERSION` (single line, e.g. `0.2`),
+    commit, push, then `gh release create v0.2 --title "..." --notes "..."`.
+    The VERSION-in-code and the git-tag now share a single source
+    of truth (the file) and are bumped in the same commit. See
+    docs/SETUP.md "Cutting a release".
 
 .EXAMPLE
     PS> Get-RipperVersion
@@ -439,4 +506,4 @@ function Set-RipperWindowIcon {
     }
 }
 
-Export-ModuleMember -Function ConvertTo-SafeWindowsPathSegment, Get-RipperRepoRoot, Get-CueToolsPath, Get-MetaflacPath, Test-RipperDependencies, Get-RipperAssetPath, Set-RipperWindowIcon, Get-RipperVersion
+Export-ModuleMember -Function ConvertTo-SafeWindowsPathSegment, Get-RipperRepoRoot, Get-CueToolsPath, Get-MetaflacPath, Test-RipperDependencies, Get-RipperAssetPath, Set-RipperWindowIcon, Get-RipperVersion, Read-RipperVersionFromFile
