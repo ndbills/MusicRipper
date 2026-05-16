@@ -124,4 +124,42 @@ audience. Full workflow + rationale (incl. SemVer rules, what
 happens if you skip the Release tag) lives in
 [docs/SETUP.md](docs/SETUP.md#cutting-a-release-engineer-side-phase-8--d-032).
 
+## Updating the auto-updater bootstrap manifest
+
+The standalone `MusicRipper - Update` shortcut runs
+[Update-MusicRipper.ps1](Update-MusicRipper.ps1) in a two-mode
+"copy myself to %TEMP%, then re-launch from there" bootstrap.
+The list of files copied during the bootstrap step lives in
+**one place**: the `$manifest` variable inside
+`Copy-RipperUpdaterBootstrap` in
+[src/lib/Updater.psm1](src/lib/Updater.psm1). Today the manifest is:
+
+- `Update-MusicRipper.ps1` (the script itself, re-launched in helper mode)
+- `src\lib\Logging.{psd1,psm1}`
+- `src\lib\Common.{psd1,psm1}` (also reads `VERSION` at load time)
+- `src\lib\Updater.{psd1,psm1}`
+- `src\ui\Show-UpdateDialog.ps1`
+- `VERSION` (optional; older installs without it skip cleanly)
+
+**If you add a new dependency the update flow imports or
+dot-sources** -- a new module under `src/lib/`, a new dialog
+under `src/ui/`, a new top-level file the helper reads -- you
+MUST extend the manifest in `Copy-RipperUpdaterBootstrap`
+to stage it, OR the helper crashes silently at parse/import time
+in `%TEMP%` and the parent sees "click Update, nothing happens"
+(the same v0.2.2 outage class we hit). The Pester suite has
+guardrails for both halves of this:
+
+- `tests/Updater.Tests.ps1` `Describe 'Copy-RipperUpdaterBootstrap'`
+  asserts the manifest count + that every required file lands on
+  disk + that the live repo can satisfy the manifest (the
+  "live-tree smoke" test).
+- `tests/Syntax.Tests.ps1` AST-parses every shipped `.ps1` /
+  `.psm1` / `.psd1`, so an orphaned-brace edit in a dependency
+  the bootstrap stages can't sneak through.
+
+Update both the manifest AND the test's expected count when you
+add to the dependency graph. The test failure message will tell
+you exactly what's off.
+
 That's it. Thanks for reading.

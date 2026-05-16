@@ -11,7 +11,14 @@
         'Get-RipperInstallRoot',
         'Save-RipperUpdateBackup',
         'Invoke-RipperUpdateApply',
-        'Remove-RipperOldUpdateBackups'
+        'Remove-RipperOldUpdateBackups',
+        # v0.2.4: pure-function helpers exercised by the WPF dialogs.
+        # Pulled out so Pester can unit-test the data decisions that
+        # caused the v0.1.1/v0.2.0 visibility + notes-text bugs.
+        'Get-RipperReleaseIndexUrl',
+        'Test-RipperReleaseHasViewButton',
+        'Get-RipperReleaseNotesText',
+        'Copy-RipperUpdaterBootstrap'
     )
     CmdletsToExport   = @()
     AliasesToExport   = @()

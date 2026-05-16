@@ -424,3 +424,261 @@ Describe 'Remove-RipperOldUpdateBackups' {
         Test-Path -LiteralPath $d | Should -BeTrue
     }
 }
+
+
+# =========================================================================
+# v0.2.4: tests for the pure-function helpers extracted from the WPF
+# dialogs and the Update-MusicRipper.ps1 bootstrap. Locking these in
+# prevents the bug classes that hit v0.1.1 (View-on-GitHub button
+# stayed hidden), v0.2.0 (startup-prompt showed "(No release notes
+# provided.)"), and the hypothetical "added a new dependency module
+# but forgot to stage it" from re-shipping.
+# =========================================================================
+
+Describe 'Get-RipperReleaseIndexUrl' {
+    It 'returns the canonical Releases index URL (NOT a per-tag URL)' {
+        $url = Get-RipperReleaseIndexUrl
+        $url | Should -Be 'https://github.com/ndbills/MusicRipper/releases'
+        # Belt-and-braces: a future refactor that accidentally points
+        # this at the /releases/tag/<x> page would break the v0.2.2
+        # design decision. Explicit no-/tag/ assertion.
+        $url | Should -Not -Match '/releases/tag/'
+    }
+}
+
+Describe 'Test-RipperReleaseHasViewButton' {
+
+    It 'returns $true when ReleaseInfo is a hashtable with a non-empty HtmlUrl' {
+        $r = @{ HtmlUrl = 'https://github.com/x/y/releases/tag/v1.0' }
+        Test-RipperReleaseHasViewButton -ReleaseInfo $r | Should -BeTrue
+    }
+
+    It 'returns $false when HtmlUrl is present but empty (MainBranch fallback shape)' {
+        $r = @{ HtmlUrl = '' }
+        Test-RipperReleaseHasViewButton -ReleaseInfo $r | Should -BeFalse
+    }
+
+    It 'returns $false when ReleaseInfo lacks the HtmlUrl key entirely' {
+        # Defensive: an older Get-RipperLatestRelease (or a forked
+        # caller building its own hashtable) might not have the key.
+        $r = @{ Version = '1.0'; Notes = 'x' }
+        Test-RipperReleaseHasViewButton -ReleaseInfo $r | Should -BeFalse
+    }
+
+    It 'returns $false when ReleaseInfo is $null' {
+        Test-RipperReleaseHasViewButton -ReleaseInfo $null | Should -BeFalse
+    }
+
+    It 'returns $false when ReleaseInfo is a [pscustomobject] (the v0.1.1 trap)' {
+        # The v0.1.1 bug came from $latest.PSObject.Properties['HtmlUrl']
+        # being null on a hashtable. The defensive `-is [hashtable]`
+        # guard means a pscustomobject input (which DOES have
+        # PSObject.Properties working) is treated as 'unsupported'
+        # rather than silently returning $true via a different path.
+        $pco = [pscustomobject]@{ HtmlUrl = 'https://example.com/x' }
+        Test-RipperReleaseHasViewButton -ReleaseInfo $pco | Should -BeFalse
+    }
+
+    It 'works end-to-end against the real Get-RipperLatestRelease output shape' {
+        # Highest-fidelity regression: mock the API the way our own
+        # production code paths build the hashtable, then assert the
+        # helper says yes. If a future refactor accidentally changes
+        # the shape returned by Get-RipperLatestRelease, this test
+        # fails loudly with the WPF visibility consequence.
+        Mock -ModuleName Updater Invoke-RestMethod {
+            [pscustomobject]@{
+                tag_name    = 'v0.7'
+                body        = 'release notes'
+                zipball_url = 'https://api.github.com/repos/x/y/zipball/v0.7'
+                html_url    = 'https://github.com/x/y/releases/tag/v0.7'
+            }
+        }
+        $r = Get-RipperLatestRelease
+        Test-RipperReleaseHasViewButton -ReleaseInfo $r | Should -BeTrue
+    }
+}
+
+Describe 'Get-RipperReleaseNotesText' {
+
+    It 'returns the trimmed Notes value when present and non-empty' {
+        $r = @{ Notes = "  ## What's new`n- Thing 1`n  " }
+        $text = Get-RipperReleaseNotesText -ReleaseInfo $r
+        $text | Should -Match "## What's new"
+        $text.StartsWith(' ') | Should -BeFalse   # leading whitespace stripped
+        $text.EndsWith(' ')   | Should -BeFalse   # trailing whitespace stripped
+    }
+
+    It 'returns the parent-friendly fallback when Notes key is missing' {
+        $r = @{ HtmlUrl = 'https://x'; Version = '1.0' }
+        Get-RipperReleaseNotesText -ReleaseInfo $r |
+            Should -Be '(No release notes provided.)'
+    }
+
+    It 'returns the fallback when Notes is empty string' {
+        $r = @{ Notes = '' }
+        Get-RipperReleaseNotesText -ReleaseInfo $r |
+            Should -Be '(No release notes provided.)'
+    }
+
+    It 'returns the fallback when Notes is whitespace-only' {
+        $r = @{ Notes = "   `n`t  " }
+        Get-RipperReleaseNotesText -ReleaseInfo $r |
+            Should -Be '(No release notes provided.)'
+    }
+
+    It 'returns the fallback when ReleaseInfo is $null' {
+        Get-RipperReleaseNotesText -ReleaseInfo $null |
+            Should -Be '(No release notes provided.)'
+    }
+
+    It 'works end-to-end against the real Get-RipperLatestRelease output shape' {
+        Mock -ModuleName Updater Invoke-RestMethod {
+            [pscustomobject]@{
+                tag_name    = 'v0.9'
+                body        = 'cool changes in v0.9'
+                zipball_url = 'https://api.github.com/repos/x/y/zipball/v0.9'
+                html_url    = 'https://github.com/x/y/releases/tag/v0.9'
+            }
+        }
+        $r = Get-RipperLatestRelease
+        Get-RipperReleaseNotesText -ReleaseInfo $r |
+            Should -Be 'cool changes in v0.9'
+    }
+}
+
+Describe 'Copy-RipperUpdaterBootstrap' {
+
+    function script:New-FakeUpdateInstall {
+        # Synthesizes a minimum-viable install tree that has every
+        # file Copy-RipperUpdaterBootstrap is supposed to stage.
+        param([switch]$NoVersion)
+        $root = Join-Path $TestDrive ('install-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $root                       -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $root 'src\lib') -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $root 'src\ui')  -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $root 'Update-MusicRipper.ps1') -Value '# fake updater'
+        foreach ($m in 'Logging','Common','Updater') {
+            Set-Content -LiteralPath (Join-Path $root "src\lib\$m.psd1") -Value "@{ RootModule = '$m.psm1' }"
+            Set-Content -LiteralPath (Join-Path $root "src\lib\$m.psm1") -Value "# fake $m"
+        }
+        Set-Content -LiteralPath (Join-Path $root 'src\ui\Show-UpdateDialog.ps1') -Value '# fake dialog'
+        if (-not $NoVersion) {
+            Set-Content -LiteralPath (Join-Path $root 'VERSION') -Value '0.2.4'
+        }
+        return $root
+    }
+
+    It 'copies the full v0.2.4 manifest (9 files) into a fresh staging dir' {
+        $src   = New-FakeUpdateInstall
+        $stage = Join-Path $TestDrive ('stage-' + [guid]::NewGuid().ToString('N'))
+
+        $copied = Copy-RipperUpdaterBootstrap -SourceRoot $src -StagingRoot $stage
+
+        # Sanity on the return value: list order is the manifest order,
+        # and the count is the locked-in 9 (1 + 3 modules x 2 exts + 1
+        # dialog + VERSION).
+        @($copied).Count | Should -Be 9
+
+        # Files actually on disk under staging.
+        $expected = @(
+            'Update-MusicRipper.ps1',
+            'src\lib\Logging.psd1', 'src\lib\Logging.psm1',
+            'src\lib\Common.psd1',  'src\lib\Common.psm1',
+            'src\lib\Updater.psd1', 'src\lib\Updater.psm1',
+            'src\ui\Show-UpdateDialog.ps1',
+            'VERSION'
+        )
+        foreach ($rel in $expected) {
+            Test-Path -LiteralPath (Join-Path $stage $rel) | Should -BeTrue -Because "Bootstrap should have staged '$rel'"
+            $copied | Should -Contain $rel
+        }
+    }
+
+    It 'skips VERSION cleanly when the source pre-dates v0.2.0' {
+        # Older installs (v0.1.x) don't have a VERSION file. The
+        # bootstrap must succeed anyway -- the helper falls back to
+        # '0.0-unknown' which still works.
+        $src   = New-FakeUpdateInstall -NoVersion
+        $stage = Join-Path $TestDrive ('stage-' + [guid]::NewGuid().ToString('N'))
+
+        $copied = Copy-RipperUpdaterBootstrap -SourceRoot $src -StagingRoot $stage
+
+        @($copied).Count | Should -Be 8
+        $copied                                                  | Should -Not -Contain 'VERSION'
+        Test-Path -LiteralPath (Join-Path $stage 'VERSION')      | Should -BeFalse
+        # But every REQUIRED file is still there.
+        Test-Path -LiteralPath (Join-Path $stage 'src\lib\Updater.psm1') | Should -BeTrue
+    }
+
+    It 'throws a helpful error when a required source file is missing' {
+        # Catches "I added a new required module but forgot to ship it
+        # in the install" -- the bootstrap detects the gap up front
+        # instead of letting the helper crash on Import-Module.
+        $src   = New-FakeUpdateInstall
+        Remove-Item -LiteralPath (Join-Path $src 'src\lib\Updater.psm1') -Force
+        $stage = Join-Path $TestDrive ('stage-' + [guid]::NewGuid().ToString('N'))
+
+        { Copy-RipperUpdaterBootstrap -SourceRoot $src -StagingRoot $stage } |
+            Should -Throw -ExpectedMessage '*required source file missing*Updater.psm1*'
+    }
+
+    It 'throws when SourceRoot itself does not exist' {
+        $stage = Join-Path $TestDrive ('stage-' + [guid]::NewGuid().ToString('N'))
+        { Copy-RipperUpdaterBootstrap -SourceRoot 'C:\does\not\exist' -StagingRoot $stage } |
+            Should -Throw -ExpectedMessage '*SourceRoot does not exist*'
+    }
+
+    It 'is idempotent: re-running into the same staging dir overwrites cleanly' {
+        $src   = New-FakeUpdateInstall
+        $stage = Join-Path $TestDrive ('stage-' + [guid]::NewGuid().ToString('N'))
+
+        $first  = Copy-RipperUpdaterBootstrap -SourceRoot $src -StagingRoot $stage
+        $second = Copy-RipperUpdaterBootstrap -SourceRoot $src -StagingRoot $stage
+
+        @($first).Count  | Should -Be 9
+        @($second).Count | Should -Be 9
+        Test-Path -LiteralPath (Join-Path $stage 'src\lib\Updater.psm1') | Should -BeTrue
+    }
+
+    It 'stages files that match the source contents byte-for-byte' {
+        # If a future refactor accidentally writes a placeholder
+        # instead of copying, the helper would import the wrong code
+        # and silently misbehave. Assert content fidelity.
+        $src   = New-FakeUpdateInstall
+        $stage = Join-Path $TestDrive ('stage-' + [guid]::NewGuid().ToString('N'))
+        $sentinel = "## sentinel content $(Get-Random)"
+        Set-Content -LiteralPath (Join-Path $src 'src\lib\Updater.psm1') -Value $sentinel
+
+        Copy-RipperUpdaterBootstrap -SourceRoot $src -StagingRoot $stage | Out-Null
+
+        (Get-Content -LiteralPath (Join-Path $stage 'src\lib\Updater.psm1') -Raw).Trim() |
+            Should -Be $sentinel
+    }
+
+    It "stages the REAL repo's Update-MusicRipper.ps1 + its dependencies (live-tree smoke)" {
+        # The strongest guarantee: point Copy-RipperUpdaterBootstrap at
+        # the live repo and confirm every manifest entry resolves on
+        # the actual install layout. Catches "the bootstrap manifest
+        # drifted from the on-disk layout" without us needing a
+        # full integration test that spawns a child pwsh process.
+        $repoRoot = Split-Path -Parent $PSScriptRoot
+        $stage    = Join-Path $TestDrive ('stage-live-' + [guid]::NewGuid().ToString('N'))
+
+        $copied = Copy-RipperUpdaterBootstrap -SourceRoot $repoRoot -StagingRoot $stage
+
+        # Every required file must resolve against the actual repo.
+        @($copied) | Should -Contain 'Update-MusicRipper.ps1'
+        @($copied) | Should -Contain 'src\lib\Updater.psm1'
+        @($copied) | Should -Contain 'src\ui\Show-UpdateDialog.ps1'
+
+        # And the staged Updater.psm1 must AST-parse on its own -- if
+        # a future commit lands an orphaned-brace bug in the helper's
+        # most critical dependency, this test surfaces it AT THE
+        # BOOTSTRAP STEP, not at the parent's-house step.
+        $errs = $null
+        [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $stage 'src\lib\Updater.psm1'),
+            [ref]$null, [ref]$errs) | Out-Null
+        $errs | Should -BeNullOrEmpty
+    }
+}

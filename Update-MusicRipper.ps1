@@ -83,41 +83,22 @@ if (-not $IsTempHelper) {
                             ('musicripper-updater-' + [guid]::NewGuid().ToString('N'))
 
     try {
-        # Mirror the install layout for just the files the helper needs:
-        #   <temp>\Update-MusicRipper.ps1
-        #   <temp>\src\lib\{Logging,Common,Updater}.{psd1,psm1}
-        #   <temp>\src\ui\Show-UpdateDialog.ps1
-        #   <temp>\VERSION   (Phase 8.3: Common.psm1 reads it at module load)
-        New-Item -ItemType Directory -Path $tempBase                          -Force | Out-Null
-        New-Item -ItemType Directory -Path (Join-Path $tempBase 'src\lib')    -Force | Out-Null
-        New-Item -ItemType Directory -Path (Join-Path $tempBase 'src\ui')     -Force | Out-Null
+        # v0.2.4: file-copy logic moved into Copy-RipperUpdaterBootstrap
+        # in Updater.psm1 so a Pester test can lock in the manifest. If
+        # you add a new dependency to the helper (a new module, a new
+        # dialog file, etc.), update the manifest in that function AND
+        # extend tests/Updater.Tests.ps1 to assert it -- the test will
+        # fail with a clear diff if the two get out of sync.
+        Import-Module (Join-Path $sourceRoot 'src\lib\Logging.psd1') -Force
+        Import-Module (Join-Path $sourceRoot 'src\lib\Common.psd1')  -Force
+        Import-Module (Join-Path $sourceRoot 'src\lib\Updater.psd1') -Force
 
-        Copy-Item -LiteralPath (Join-Path $sourceRoot 'Update-MusicRipper.ps1') `
-                  -Destination $tempBase -Force -ErrorAction Stop
-
-        foreach ($m in @('Logging', 'Common', 'Updater')) {
-            foreach ($ext in @('psd1', 'psm1')) {
-                $src = Join-Path $sourceRoot "src\lib\$m.$ext"
-                $dst = Join-Path $tempBase  "src\lib\$m.$ext"
-                Copy-Item -LiteralPath $src -Destination $dst -Force -ErrorAction Stop
-            }
-        }
-
-        Copy-Item -LiteralPath (Join-Path $sourceRoot 'src\ui\Show-UpdateDialog.ps1') `
-                  -Destination (Join-Path $tempBase 'src\ui') -Force -ErrorAction Stop
-
-        # Phase 8.3: stage the VERSION file alongside the modules.
-        # Common.psm1 reads it at load time to populate the local
-        # $script:RipperVersion that Compare-RipperVersion compares
-        # against the GitHub Release tag. Without staging it the
-        # helper would read '0.0-unknown' and bias the check toward
-        # always-update-available. Best-effort: a missing VERSION on
-        # the source is non-fatal (helper falls back to '0.0-unknown'
-        # which still works, just with the suboptimal nag behavior).
-        $versionSrc = Join-Path $sourceRoot 'VERSION'
-        if (Test-Path -LiteralPath $versionSrc) {
-            Copy-Item -LiteralPath $versionSrc `
-                      -Destination (Join-Path $tempBase 'VERSION') -Force -ErrorAction Stop
+        $copied = Copy-RipperUpdaterBootstrap -SourceRoot $sourceRoot -StagingRoot $tempBase
+        # Light sanity touch: a future bootstrap regression where the
+        # manifest gets gutted to zero files would be a silent failure
+        # without this guard.
+        if (-not $copied -or $copied.Count -lt 5) {
+            throw "Bootstrap copy staged fewer files than expected ($($copied.Count)). Refusing to spawn helper."
         }
 
         # Spawn the helper. Three things matter here:
