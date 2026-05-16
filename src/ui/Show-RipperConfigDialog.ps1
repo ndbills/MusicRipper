@@ -483,8 +483,12 @@ function Show-RipperConfigDialog {
                       ToolTip="Default on. After each disc a between-discs dialog offers Rip Next / Quit."/>
 
             <CheckBox x:Name="RetryPendingCheck" Content="Retry pending syncs at startup"
-                      Margin="0,0,0,14"
+                      Margin="0,0,0,8"
                       ToolTip="Default on. Albums whose previous sync didn't finish (e.g. NAS offline) get retried before the first rip."/>
+
+            <CheckBox x:Name="CheckUpdatesCheck" Content="Check for MusicRipper updates at startup"
+                      Margin="0,0,0,14"
+                      ToolTip="Default on. Silently queries GitHub once per launch (5s timeout). Only pops a prompt if a newer release is available; otherwise launch continues straight to the rip flow."/>
 
             <Separator Margin="0,4,0,12"/>
 
@@ -717,6 +721,7 @@ function Show-RipperConfigDialog {
     $ejectCheck   = $window.FindName('EjectCheck')
     $contCheck    = $window.FindName('ContinuousCheck')
     $retryCheck   = $window.FindName('RetryPendingCheck')
+    $checkUpdatesCheck = $window.FindName('CheckUpdatesCheck')
     $driveInfo    = $window.FindName('DriveInfoText')
     $regDriveBtn  = $window.FindName('RegisterDriveButton')
 
@@ -760,6 +765,9 @@ function Show-RipperConfigDialog {
     $ejectCheck.IsChecked  = [bool]$cfg.EjectAfterRip
     $contCheck.IsChecked   = [bool]$cfg.ContinuousMode
     $retryCheck.IsChecked  = [bool]$cfg.RetryPendingSyncOnStartup
+    # Forward-compat: older configs predate CheckForUpdatesOnLaunch
+    # (added in v0.2.0); treat missing as the default (true).
+    $checkUpdatesCheck.IsChecked = if ($cfg.PSObject.Properties['CheckForUpdatesOnLaunch']) { [bool]$cfg.CheckForUpdatesOnLaunch } else { $true }
     $oneDriveText.Text  = if ($cfg.OneDriveSyncTargetRoot) { [string]$cfg.OneDriveSyncTargetRoot } else { '' }
     $synUncText.Text    = if ($cfg.SynologyUnc)            { [string]$cfg.SynologyUnc } else { '' }
     $synRqCheck.IsChecked  = [bool]$cfg.SynologySyncReviewQueue
@@ -987,6 +995,7 @@ function Show-RipperConfigDialog {
         $cfg.EjectAfterRip                = [bool]$ejectCheck.IsChecked
         $cfg.ContinuousMode               = [bool]$contCheck.IsChecked
         $cfg.RetryPendingSyncOnStartup    = [bool]$retryCheck.IsChecked
+        $cfg.CheckForUpdatesOnLaunch      = [bool]$checkUpdatesCheck.IsChecked
         $cfg.OneDriveSyncTargetRoot       = $(if ($oneDriveText.Text.Trim()) { $oneDriveText.Text.Trim() } else { $null })
         $cfg.SynologyUnc                  = $(if ($synUncText.Text.Trim())  { $synUncText.Text.Trim() }  else { $null })
         $cfg.SynologySyncReviewQueue      = [bool]$synRqCheck.IsChecked
@@ -1063,7 +1072,7 @@ function Show-RipperConfigDialog {
     foreach ($tb in @($libText, $contactText, $oneDriveText, $synUncText, $wgTunnelText)) {
         $tb.Add_TextChanged({ & $refreshOk }.GetNewClosure())
     }
-    foreach ($cb in @($ejectCheck, $contCheck, $retryCheck, $synRqCheck, $wgAutoCheck, $wgKeepCheck, $wgPreferDirectCheck)) {
+    foreach ($cb in @($ejectCheck, $contCheck, $retryCheck, $checkUpdatesCheck, $synRqCheck, $wgAutoCheck, $wgKeepCheck, $wgPreferDirectCheck)) {
         $cb.Add_Checked(  { & $refreshOk }.GetNewClosure())
         $cb.Add_Unchecked({ & $refreshOk }.GetNewClosure())
     }

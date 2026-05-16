@@ -280,6 +280,89 @@ if (-not (Test-Path -LiteralPath $configPath)) {
 }
 $cfg = Import-RipperConfig
 
+# --- Startup update check (v0.2.0) ----------------------------------------
+# After config-load, BEFORE the drive prompt: silently query the GitHub
+# Releases API (5s timeout). If a newer release is available, pop a
+# small WPF prompt with notes + 'Update now' / 'Not now' / 'View on
+# GitHub'. Up-to-date / network-error / MainBranch-fallback all skip
+# silently (no dialog flash, the parent goes straight to the rip flow).
+#
+# Why we DON'T just call Show-RipperUpdateDialog (the standalone
+# Update shortcut's full UI):
+#   That dialog applies the update IN-PROCESS, which works when
+#   Update-MusicRipper.ps1 has bootstrapped itself into %TEMP% so the
+#   install dir is free to be replaced. Start-Ripper runs FROM the
+#   install dir with ~30 dot-sourced scripts open -- inline apply
+#   would collide with our own file handles. Instead, on 'Update
+#   now' we hand off to Update-MusicRipper.ps1 (which DOES bootstrap)
+#   and exit cleanly.
+#
+# Skip conditions (in priority order):
+#   1. cfg.CheckForUpdatesOnLaunch = false -> user disabled the auto-check.
+#   2. Network call failed / timed out -> log WARN, continue.
+#   3. Get-RipperLatestRelease returned MainBranch fallback -> don't
+#      pretend that's a "release" worth prompting about.
+#   4. Compare-RipperVersion != 'NewerAvailable' -> already current.
+$checkOnLaunch = if ($cfg.PSObject.Properties['CheckForUpdatesOnLaunch']) {
+    [bool]$cfg.CheckForUpdatesOnLaunch
+} else {
+    $true   # forward-compat default for configs that predate v0.2.0
+}
+if ($checkOnLaunch) {
+    try {
+        Import-Module (Join-Path $repoRoot 'src\lib\Updater.psd1') -Force
+        # 5s timeout: a fast-and-online machine answers in <500ms; an
+        # offline / flaky-wifi launch waits at most 5s before silently
+        # continuing into the rip flow. See v0.2.0 design discussion.
+        $latest = Get-RipperLatestRelease -TimeoutSec 5
+        if ($latest -and $latest.Source -eq 'Release') {
+            $localVer = Get-RipperVersion
+            $cmp = Compare-RipperVersion -Local $localVer -Remote $latest.Version
+            if ($cmp -eq 'NewerAvailable') {
+                Write-RipperLog INFO 'Start-Ripper' "Startup update check: local=$localVer, remote=v$($latest.Version) -- prompting parent."
+                . (Join-Path $repoRoot 'src\ui\Show-UpdatePromptDialog.ps1')
+                $action = Show-RipperUpdatePromptDialog -ReleaseInfo $latest -LocalVersion $localVer
+                if ($action -eq 'Update') {
+                    # Hand off to the standalone updater + exit. The
+                    # updater's bootstrap copies itself to %TEMP%
+                    # before applying anything, so our exit here
+                    # releases all file handles before any byte of
+                    # the install dir gets replaced.
+                    $updaterScript = Join-Path $repoRoot 'Update-MusicRipper.ps1'
+                    if (Test-Path -LiteralPath $updaterScript) {
+                        Write-RipperLog INFO 'Start-Ripper' "Parent chose to update; launching '$updaterScript' and exiting Start-Ripper."
+                        try {
+                            Start-Process -FilePath 'pwsh.exe' `
+                                          -ArgumentList @(
+                                              '-NoProfile',
+                                              '-ExecutionPolicy','Bypass',
+                                              '-File', $updaterScript
+                                          ) | Out-Null
+                        } catch {
+                            Write-RipperLog WARN 'Start-Ripper' "Failed to launch updater: $($_.Exception.Message). The parent can still click 'MusicRipper - Update' from the Start Menu."
+                        }
+                        Stop-RipperLog
+                        return
+                    } else {
+                        Write-RipperLog WARN 'Start-Ripper' "Update-MusicRipper.ps1 not found at '$updaterScript'; falling through to normal startup."
+                    }
+                } else {
+                    Write-RipperLog INFO 'Start-Ripper' "Startup update check: parent chose 'Not now'."
+                }
+            } else {
+                Write-RipperLog INFO 'Start-Ripper' "Startup update check: local=$localVer, remote=v$($latest.Version), comparison=$cmp -- no prompt needed."
+            }
+        } else {
+            # $null OR MainBranch fallback (= API call failed).
+            # Silent skip; Get-RipperLatestRelease already logged the
+            # underlying network/HTTP detail.
+            Write-RipperLog INFO 'Start-Ripper' 'Startup update check: GitHub Releases not reachable (or no Releases yet) -- skipping prompt.'
+        }
+    } catch {
+        Write-RipperLog WARN 'Start-Ripper' "Startup update check failed: $($_.Exception.Message). Continuing to normal flow."
+    }
+}
+
 # --- Drive check ----------------------------------------------------------
 # Phase 6.6.E: if no drive is registered (fresh first-run config, or a
 # parent re-saved config without ever picking the drive), pop the config
