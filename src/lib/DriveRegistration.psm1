@@ -140,6 +140,30 @@ function Find-RipperAccurateRipEntry {
 .PARAMETER SkipLive
     If set, skip the live page and use only the bundled cache (tests
     + fast-retry path).
+
+.PARAMETER MatchPartialModel
+    v0.3.0: also accept matches where the input is SHORTER than the
+    AccurateRip entry (e.g. user typed bare 'UJ8E2'; entry is
+    'Panasonic UJ8E2'). The original strict rule -- entry tokens must
+    be a contiguous subsequence of drive tokens -- was correct for
+    auto-lookup against Windows-reported names which are always
+    richer than AR entries ('ASUS BW-12B1ST ATA Device' vs 'ASUS
+    BW-12B1ST'). The new manual-lookup WPF field inverts that
+    relationship, so the WPF passes this switch.
+
+    With the switch on, the matcher runs a tiered tiebreak:
+      - Tier 0 (forward, entry tokens in drive tokens): preserves
+        the v6.4.5 firmware-variant disambiguation -- longest entry
+        wins. Auto-lookup callers stay here.
+      - Tier 1 (reverse-suffix, drive tokens at END of entry tokens):
+        the canonical 'vendor + model' shape -- shortest entry wins
+        (least vendor padding).
+      - Tier 2 (reverse-non-suffix, drive tokens elsewhere in entry
+        tokens): a less-canonical match like 'Panasonic UJ8E2
+        firmware-v2' -- longest entry wins (most-specific).
+
+    Tiers 1 + 2 are reachable only with this switch on. Lower tier
+    always beats higher tier; ties broken within tier as above.
 #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -147,7 +171,8 @@ function Find-RipperAccurateRipEntry {
         [Parameter(Mandatory)] [string]$DriveName,
         [Parameter(Mandatory)] [string]$CachedListPath,
         [int]$TimeoutSec = 10,
-        [switch]$SkipLive
+        [switch]$SkipLive,
+        [switch]$MatchPartialModel
     )
 
     # Phase 6.4.3: normalize both sides before matching so we tolerate
@@ -178,28 +203,72 @@ function Find-RipperAccurateRipEntry {
     if ($driveTokens.Count -eq 0) { return $null }
 
     # Local helper: scan a sequence of @{ Name; Offset } candidates,
-    # return @{ Offset; MatchedName } for the candidate whose token
-    # list is the longest contiguous subsequence of $driveTokens, or
+    # return @{ Offset; MatchedName } for the best-scoring candidate, or
     # $null if none match.
+    #
+    # v0.3.0 scoring tiers (LOWER tier wins; ties broken by 2nd value
+    # LOWER-wins). Real-world AR data has both canonical entries and
+    # firmware variants for the same drive, AND entries often have
+    # generic descriptors between vendor and model ('Panasonic - DVD-RAM
+    # UJ8E2'). A parent typing a bare model ('UJ8E2') OR a vendor +
+    # model ('panasonic UJ8E2') wants the most canonical entry --
+    # the bare drive name, then the bare-with-descriptors entry, then
+    # firmware variants -- regardless of how long the entry is.
+    #
+    #   Tier 0 (forward contig, entry tokens contiguous in drive tokens):
+    #     The classic auto-lookup case. Windows-reported drive names
+    #     are always richer than AR entries; longer entry = more
+    #     specific = correct (v6.4.5 firmware-variant disambiguation).
+    #     Tiebreak: -entryTokens.Count (longer wins).
+    #
+    #   Tier 1 (reverse contig suffix, drive tokens contiguous at END
+    #     of entry tokens): the canonical manual-lookup case where the
+    #     user typed the bare model. Shorter entry = least vendor
+    #     padding = canonical. Tiebreak: +entryTokens.Count (shorter
+    #     wins).
+    #
+    #   Tier 2 (reverse subsequence suffix, drive tokens appear in
+    #     order with gaps in entry, last drive token at last entry
+    #     position): the 'vendor + descriptors + model' case
+    #     ('panasonic UJ8E2' -> 'Panasonic - DVD-RAM UJ8E2'). Same
+    #     intent as Tier 1, just looser; goes after Tier 1 so a tight
+    #     canonical match always beats one with descriptor gaps.
+    #     Tiebreak: +entryTokens.Count (shorter wins).
+    #
+    #   Tier 3 (reverse contig non-suffix, drive tokens contiguous
+    #     somewhere in entry but not at the end): the firmware-variant
+    #     case of Tier 1 ('Panasonic UJ8E2 firmware-v2' when user
+    #     typed 'UJ8E2'). Longer entry = more-specific variant.
+    #     Tiebreak: -entryTokens.Count (longer wins).
+    #
+    #   Tier 4 (reverse subsequence non-suffix, drive tokens appear
+    #     in order with gaps, NOT ending the entry): the firmware-
+    #     variant case of Tier 2 ('Panasonic - DVD-RAM UJ8E2 S' when
+    #     user typed 'panasonic UJ8E2'). Same intent as Tier 3, just
+    #     looser. Tiebreak: -entryTokens.Count (longer wins).
+    #
+    # Tiers 1-4 are reachable ONLY when -MatchPartialModel is set.
+    # Auto-lookup callers leave the switch off and stay in Tier 0,
+    # preserving the v6.4.5 strict-forward-contig disambiguation.
     $bestMatch = {
         param([object[]]$Candidates)
-        $bestTokenCount = -1
-        $best           = $null
+        $bestTier     = 99
+        $bestTiebreak = [int]::MaxValue
+        $best         = $null
         foreach ($c in $Candidates) {
             $entryKey = ConvertTo-RipperDriveNameKey -Name $c.Name
             if ([string]::IsNullOrWhiteSpace($entryKey)) { continue }
             $entryTokens = $entryKey.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)
             if ($entryTokens.Count -eq 0) { continue }
-            # Empty AR-key => can't match; single-character tokens are
-            # legitimate model digits (e.g. 'a' suffix in some real
-            # entries) so we don't reject by min-length anymore --
-            # token equality is itself strict enough that a stray
-            # short token can't substring into a vendor name.
 
-            # Sliding-window search for the entry-token sequence inside
-            # the drive-token sequence. Token equality is exact (already
-            # normalized to lowercase + alphanumeric runs).
-            $matched = $false
+            $tier     = 99
+            $tiebreak = [int]::MaxValue
+
+            # ---- Tier 0: forward contiguous direction ----
+            # Entry tokens must appear as a contiguous substring of
+            # drive tokens. This is the only path reachable in the
+            # auto-lookup flow (no -MatchPartialModel).
+            $forwardMatched = $false
             $maxStart = $driveTokens.Count - $entryTokens.Count
             for ($i = 0; $i -le $maxStart; $i++) {
                 $allEq = $true
@@ -209,11 +278,61 @@ function Find-RipperAccurateRipEntry {
                         break
                     }
                 }
-                if ($allEq) { $matched = $true; break }
+                if ($allEq) { $forwardMatched = $true; break }
             }
-            if (-not $matched) { continue }
-            if ($entryTokens.Count -gt $bestTokenCount) {
-                $bestTokenCount = $entryTokens.Count
+            if ($forwardMatched) {
+                $tier     = 0
+                $tiebreak = -$entryTokens.Count
+            }
+            elseif ($MatchPartialModel -and $driveTokens.Count -lt $entryTokens.Count) {
+                # ---- Tiers 1-4: reverse direction ----
+                # Find drive tokens as an ORDERED subsequence inside
+                # entry tokens (gaps allowed). The single subsequence
+                # scan covers both the contig and the gap cases; we
+                # then inspect the resulting positions to assign the
+                # right tier.
+                $positions  = New-Object 'System.Collections.Generic.List[int]'
+                $searchFrom = 0
+                $allFound   = $true
+                foreach ($needleTok in $driveTokens) {
+                    $found = -1
+                    for ($k = $searchFrom; $k -lt $entryTokens.Count; $k++) {
+                        if ($entryTokens[$k] -eq $needleTok) {
+                            $found = $k
+                            break
+                        }
+                    }
+                    if ($found -lt 0) { $allFound = $false; break }
+                    $positions.Add($found)
+                    $searchFrom = $found + 1
+                }
+
+                if ($allFound) {
+                    # Contiguous = positions are sequential (no gaps).
+                    $isContig = $true
+                    for ($p = 1; $p -lt $positions.Count; $p++) {
+                        if ($positions[$p] -ne $positions[$p-1] + 1) {
+                            $isContig = $false
+                            break
+                        }
+                    }
+                    # Suffix = the last drive token landed at the last
+                    # entry position. Captures the 'entry ends with
+                    # the typed model' shape regardless of gaps before.
+                    $isSuffix = ($positions[$positions.Count - 1] -eq ($entryTokens.Count - 1))
+
+                    if     ($isContig -and $isSuffix) { $tier = 1; $tiebreak =  $entryTokens.Count }   # canonical (bare)
+                    elseif ($isSuffix)                { $tier = 2; $tiebreak =  $entryTokens.Count }   # canonical (with descriptors)
+                    elseif ($isContig)                { $tier = 3; $tiebreak = -$entryTokens.Count }   # firmware variant of bare
+                    else                              { $tier = 4; $tiebreak = -$entryTokens.Count }   # firmware variant with descriptors
+                }
+            }
+
+            if ($tier -eq 99) { continue }
+            if ($tier -lt $bestTier -or
+                ($tier -eq $bestTier -and $tiebreak -lt $bestTiebreak)) {
+                $bestTier     = $tier
+                $bestTiebreak = $tiebreak
                 $best = @{ Offset = [int]$c.Offset; MatchedName = [string]$c.Name }
             }
         }

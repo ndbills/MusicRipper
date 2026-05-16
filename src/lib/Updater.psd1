@@ -16,6 +16,7 @@
         # Pulled out so Pester can unit-test the data decisions that
         # caused the v0.1.1/v0.2.0 visibility + notes-text bugs.
         'Get-RipperReleaseIndexUrl',
+        'Get-RipperAccurateRipDatabaseUrl',
         'Test-RipperReleaseHasViewButton',
         'Get-RipperReleaseNotesText',
         'Copy-RipperUpdaterBootstrap'

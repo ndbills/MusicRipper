@@ -446,6 +446,53 @@ Describe 'Get-RipperReleaseIndexUrl' {
     }
 }
 
+Describe 'Get-RipperAccurateRipDatabaseUrl' {
+    # v0.3.0: backs the 'Browse AccurateRip database (web)' button in
+    # Show-RegisterDriveDialog. Centralized so the same URL doesn't
+    # drift across the dialog click handler + Register-Drive.ps1's
+    # doc-comment + future callers. Tests lock the URL shape so a
+    # well-intentioned 'let's clean this up' refactor can't silently
+    # point parents at the wrong page.
+
+    It 'returns the AccurateRip drive-offsets index URL' {
+        $url = Get-RipperAccurateRipDatabaseUrl
+        $url | Should -Be 'http://www.accuraterip.com/driveoffsets.htm'
+    }
+
+    It 'is a well-formed absolute http(s) URL that ProcessStartInfo can launch' {
+        # The button hands the string straight to
+        # ProcessStartInfo.FileName + UseShellExecute=$true. The
+        # shell-execute path REQUIRES an absolute URI with a scheme;
+        # a relative path would silently open in File Explorer
+        # against the dialog's CWD. Lock that contract.
+        $url = Get-RipperAccurateRipDatabaseUrl
+        $uri = $null
+        [System.Uri]::TryCreate($url, [System.UriKind]::Absolute, [ref]$uri) |
+            Should -BeTrue -Because "URL must parse as absolute for ShellExecute"
+        $uri.Scheme | Should -BeIn @('http', 'https')
+        $uri.Host   | Should -Be 'www.accuraterip.com'
+    }
+
+    It "matches the URL referenced in setup/Register-Drive.ps1's doc-comment" {
+        # The console-flow Register-Drive.ps1 cites the same URL in
+        # its banner; if either drifts the parent sees inconsistent
+        # advice depending on which path they took. Lock the
+        # host+path in sync via a regex grep (scheme-agnostic --
+        # the doc-comment historically mentions both http:// and
+        # https://, but the host + path are what actually matter).
+        $repoRoot = Split-Path -Parent $PSScriptRoot
+        $script   = Join-Path $repoRoot 'setup\Register-Drive.ps1'
+        # The file might predate the helper by a long time; defend
+        # the assertion only if the script is still present. Guards
+        # against test brittleness if the console flow ever gets
+        # removed.
+        if (Test-Path -LiteralPath $script) {
+            $body = Get-Content -LiteralPath $script -Raw
+            $body | Should -Match 'www\.accuraterip\.com/driveoffsets\.htm'
+        }
+    }
+}
+
 Describe 'Test-RipperReleaseHasViewButton' {
 
     It 'returns $true when ReleaseInfo is a hashtable with a non-empty HtmlUrl' {
