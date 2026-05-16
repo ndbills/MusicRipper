@@ -127,6 +127,7 @@ function Show-RipperUpdateDialog {
 
     <!-- Row 2: action buttons -->
     <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+      <Button x:Name="ViewBtn"    Content="View on GitHub" Padding="14,6" Margin="0,0,8,0" Visibility="Collapsed"/>
       <Button x:Name="UpdateButton" Content="Update now" Padding="14,6" Margin="0,0,8,0" Visibility="Collapsed" IsDefault="True"/>
       <Button x:Name="RetryButton"  Content="Retry"      Padding="14,6" Margin="0,0,8,0" Visibility="Collapsed"/>
       <Button x:Name="CancelButton" Content="Cancel"     Padding="14,6" Margin="0,0,8,0" IsCancel="True"/>
@@ -173,6 +174,7 @@ function Show-RipperUpdateDialog {
     $progressBar  = $window.FindName('ProgressBar')
     $notesBorder  = $window.FindName('NotesBorder')
     $notesText    = $window.FindName('NotesText')
+    $viewBtn      = $window.FindName('ViewBtn')
     $updateBtn    = $window.FindName('UpdateButton')
     $retryBtn     = $window.FindName('RetryButton')
     $cancelBtn    = $window.FindName('CancelButton')
@@ -210,6 +212,7 @@ function Show-RipperUpdateDialog {
         $progressBar.Visibility    = 'Visible'
         $progressBar.IsIndeterminate = $true
         $notesBorder.Visibility    = 'Collapsed'
+        $viewBtn.Visibility        = 'Collapsed'
         $updateBtn.Visibility      = 'Collapsed'
         $retryBtn.Visibility       = 'Collapsed'
         $okBtn.Visibility          = 'Collapsed'
@@ -223,6 +226,7 @@ function Show-RipperUpdateDialog {
         $statusText.Text = "Installed version: $localVer. No newer release available on GitHub right now."
         $progressBar.Visibility = 'Collapsed'
         $notesBorder.Visibility = 'Collapsed'
+        $viewBtn.Visibility     = 'Collapsed'
         $updateBtn.Visibility   = 'Collapsed'
         $retryBtn.Visibility    = 'Collapsed'
         $cancelBtn.Visibility   = 'Collapsed'
@@ -239,6 +243,17 @@ function Show-RipperUpdateDialog {
         $notesBorder.Visibility = 'Visible'
         $notes = if ($latest.Notes) { $latest.Notes.Trim() } else { '(No release notes provided.)' }
         $notesText.Text   = $notes
+        # Show 'View on GitHub' only when the API gave us a release
+        # page URL. The MainBranch fallback (no Releases yet) returns
+        # HtmlUrl='' and gets no button -- there is no release page
+        # for a bare-branch zip.
+        $hasUrl = $latest.PSObject.Properties['HtmlUrl'] -and $latest.HtmlUrl
+        if ($hasUrl) {
+            $viewBtn.Visibility = 'Visible'
+            $viewBtn.IsEnabled  = $true
+        } else {
+            $viewBtn.Visibility = 'Collapsed'
+        }
         $updateBtn.Visibility   = 'Visible'
         $updateBtn.IsEnabled    = $true
         $retryBtn.Visibility    = 'Collapsed'
@@ -254,6 +269,7 @@ function Show-RipperUpdateDialog {
         $statusText.Text  = "GitHub couldn't be reached. Check your internet connection and try again.`n`n($errMsg)"
         $progressBar.Visibility = 'Collapsed'
         $notesBorder.Visibility = 'Collapsed'
+        $viewBtn.Visibility     = 'Collapsed'
         $updateBtn.Visibility   = 'Collapsed'
         $retryBtn.Visibility    = 'Visible'
         $retryBtn.IsEnabled     = $true
@@ -269,6 +285,7 @@ function Show-RipperUpdateDialog {
         $progressBar.Visibility    = 'Visible'
         $progressBar.IsIndeterminate = $true
         $notesBorder.Visibility = 'Collapsed'
+        $viewBtn.Visibility   = 'Collapsed'
         $updateBtn.Visibility = 'Collapsed'
         $retryBtn.Visibility  = 'Collapsed'
         $cancelBtn.IsEnabled  = $false   # don't allow mid-apply cancel
@@ -286,6 +303,7 @@ function Show-RipperUpdateDialog {
         }
         $progressBar.Visibility = 'Collapsed'
         $notesBorder.Visibility = 'Collapsed'
+        $viewBtn.Visibility     = 'Collapsed'
         $updateBtn.Visibility   = 'Collapsed'
         $retryBtn.Visibility    = 'Collapsed'
         $cancelBtn.Visibility   = 'Collapsed'
@@ -497,6 +515,28 @@ function Show-RipperUpdateDialog {
     # ---- Button handlers -------------------------------------------
     $updateBtn.Add_Click({ & $startApply }.GetNewClosure())
     $retryBtn.Add_Click(  { & $startCheck }.GetNewClosure())
+    $viewBtn.Add_Click({
+        # Open the release page in the user's default browser. The
+        # shell-execute trick (UseShellExecute=$true, no FileName
+        # validation needed) is the most reliable launcher for an
+        # http(s) URL from a WPF event handler -- Start-Process
+        # occasionally trips on PowerShell parameter binding when the
+        # URL contains special chars. We only set $viewBtn.Visibility
+        # in the available state when $latest.HtmlUrl is non-empty,
+        # so $shared.CheckResult.Latest.HtmlUrl is guaranteed safe to
+        # read here.
+        try {
+            $url = [string]$shared.CheckResult.Latest.HtmlUrl
+            if ($url) {
+                $psi = New-Object System.Diagnostics.ProcessStartInfo
+                $psi.FileName        = $url
+                $psi.UseShellExecute = $true
+                [System.Diagnostics.Process]::Start($psi) | Out-Null
+            }
+        } catch {
+            Write-RipperLog WARN 'Updater' "View on GitHub click failed to open '$url': $($_.Exception.Message)"
+        }
+    }.GetNewClosure())
     $cancelBtn.Add_Click({
         $shared.Cancelled = $true
         $window.DialogResult = $false

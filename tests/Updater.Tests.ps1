@@ -137,6 +137,7 @@ Describe 'Get-RipperLatestRelease' {
                 body         = 'cool changes'
                 published_at = '2026-05-11T12:00:00Z'
                 zipball_url  = 'https://api.github.com/repos/x/y/zipball/v0.7'
+                html_url     = 'https://github.com/x/y/releases/tag/v0.7'
             }
         }
         $r = Get-RipperLatestRelease
@@ -145,6 +146,24 @@ Describe 'Get-RipperLatestRelease' {
         $r.Notes       | Should -Be 'cool changes'
         $r.PublishedAt | Should -Be '2026-05-11T12:00:00Z'
         $r.ZipballUrl  | Should -Be 'https://api.github.com/repos/x/y/zipball/v0.7'
+        $r.HtmlUrl     | Should -Be 'https://github.com/x/y/releases/tag/v0.7'
+    }
+
+    It 'returns HtmlUrl as empty string when the API omits html_url' {
+        # Defensive: GitHub always sets html_url on real Releases, but
+        # we still need the field present in the returned hashtable
+        # so the WPF binding code can read it without tripping
+        # StrictMode 3.0 on a missing property.
+        Mock -ModuleName Updater Invoke-RestMethod {
+            [pscustomobject]@{
+                tag_name    = 'v0.8'
+                zipball_url = 'https://api.github.com/repos/x/y/zipball/v0.8'
+            }
+        }
+        $r = Get-RipperLatestRelease
+        $r.Source                         | Should -Be 'Release'
+        $r.ContainsKey('HtmlUrl')         | Should -BeTrue
+        $r.HtmlUrl                        | Should -Be ''
     }
 
     It 'falls back to main-branch zip on 404 (no Releases yet)' {
@@ -158,6 +177,9 @@ Describe 'Get-RipperLatestRelease' {
         $r.Source     | Should -Be 'MainBranch'
         $r.Version    | Should -Be 'main-latest'
         $r.ZipballUrl | Should -Be 'https://github.com/fake/repo/archive/refs/heads/main.zip'
+        # No release page exists for the bare-main-branch zip path; the
+        # WPF uses an empty HtmlUrl to hide the 'View on GitHub' button.
+        $r.HtmlUrl    | Should -Be ''
     }
 
     It 'falls back to main-branch zip on a generic network error (also returns a result, not $null)' {
@@ -166,7 +188,8 @@ Describe 'Get-RipperLatestRelease' {
         # rather than "we could not check" which is a worse UX.
         Mock -ModuleName Updater Invoke-RestMethod { throw 'simulated dns failure' }
         $r = Get-RipperLatestRelease -Repo 'fake/repo'
-        $r.Source | Should -Be 'MainBranch'
+        $r.Source  | Should -Be 'MainBranch'
+        $r.HtmlUrl | Should -Be ''
     }
 }
 
