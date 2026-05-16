@@ -219,6 +219,10 @@ function Get-RipperLatestRelease {
         $version = ([string]$resp.tag_name).TrimStart('v', 'V')
         $notes   = if ($resp.PSObject.Properties['body']) { [string]$resp.body } else { '' }
         $pub     = if ($resp.PSObject.Properties['published_at']) { [string]$resp.published_at } else { '' }
+        # The 'html_url' field is the github.com page for the release
+        # (e.g. https://github.com/<owner>/<repo>/releases/tag/v0.1).
+        # Show-UpdateDialog uses it to back a 'View on GitHub' button.
+        $htmlUrl = if ($resp.PSObject.Properties['html_url']) { [string]$resp.html_url } else { '' }
         # Prefer the source-zip 'zipball_url'; that's what GitHub
         # generates from the tag (matches what 'Code -> Download ZIP'
         # gives you for that tag).
@@ -228,6 +232,7 @@ function Get-RipperLatestRelease {
             ZipballUrl  = $zip
             Notes       = $notes
             PublishedAt = $pub
+            HtmlUrl     = $htmlUrl
             Source      = 'Release'
         }
     } catch {
@@ -259,6 +264,7 @@ function Get-RipperLatestRelease {
             ZipballUrl  = "https://github.com/$Repo/archive/refs/heads/main.zip"
             Notes       = ''
             PublishedAt = ''
+            HtmlUrl     = ''
             Source      = 'MainBranch'
         }
     }
