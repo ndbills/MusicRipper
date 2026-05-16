@@ -183,14 +183,20 @@ function Show-RipperUpdatePromptDialog {
     $titleText.Text  = "Update available: v$($ReleaseInfo.Version)"
     $statusText.Text = "You're on v$LocalVersion. A newer release is on GitHub. Update now, or skip and rip your CD first -- you can always run the 'MusicRipper - Update' shortcut later."
 
-    $notesBody = if ($ReleaseInfo.PSObject.Properties['Notes'] -and $ReleaseInfo.Notes) {
+    # NB: $ReleaseInfo is a [hashtable] from Get-RipperLatestRelease,
+    # so $ReleaseInfo.PSObject.Properties['Foo'] does NOT see
+    # hashtable keys (it surfaces the .NET dictionary internals like
+    # Keys / Count). Use ContainsKey() for presence and dot-notation
+    # for the value -- the PowerShell adapter routes both to the
+    # underlying dictionary correctly. v0.2.1 fix.
+    $notesBody = if ($ReleaseInfo.ContainsKey('Notes') -and $ReleaseInfo.Notes) {
         ([string]$ReleaseInfo.Notes).Trim()
     } else {
         '(No release notes provided.)'
     }
     $notesText.Text = $notesBody
 
-    $hasUrl = $ReleaseInfo.PSObject.Properties['HtmlUrl'] -and $ReleaseInfo.HtmlUrl
+    $hasUrl = $ReleaseInfo.ContainsKey('HtmlUrl') -and $ReleaseInfo.HtmlUrl
     if ($hasUrl) {
         $viewBtn.Visibility = 'Visible'
     }
