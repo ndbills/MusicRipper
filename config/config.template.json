@@ -47,6 +47,9 @@
   "//RetryPendingSyncOnStartup": "Phase 6.5: at startup -- BEFORE any disc-rip -- show a WPF dialog that retries albums whose previous sync didn't finish (e.g. NAS was offline). Default true. Set false if you'd rather run src/tools/Sync-PendingAlbums.ps1 manually. The dialog has its own Cancel button so a single launch can still skip the retry without flipping this flag.",
   "RetryPendingSyncOnStartup": true,
 
+  "//CheckForUpdatesOnLaunch":  "v0.2.0: at startup -- AFTER config-load, BEFORE the drive prompt -- silently query the GitHub Releases API (5s timeout). If a newer release is available, pop a small WPF prompt with the release notes + 'Update now' / 'Not now' / 'View on GitHub' buttons. Up-to-date / network-error / first-run-with-no-config-yet all skip silently (no dialog flash). 'Update now' launches the standalone Update-MusicRipper updater (same script as the Start Menu 'Update' shortcut) and exits MusicRipper cleanly so the parent re-launches into the new version. Default true. Set false to disable the auto-prompt -- you can still trigger it manually via the Update shortcut any time.",
+  "CheckForUpdatesOnLaunch": true,
+
   "//WireGuardTunnelName":     "Phase 6.4: bare tunnel name (typically the .conf filename without extension) of a WireGuard tunnel installed via wireguard.exe /installtunnelservice. When set AND WireGuardAutoToggle=true, MusicRipper starts the tunnel before each NAS sync and stops it on application exit. The Windows service it manages is 'WireGuardTunnel$<Name>'. setup/New-RipperConfig.ps1 prompts for a .conf path and runs install + sc.exe sdset (one UAC prompt) so subsequent rips are silent. null = no VPN management; the share must already be reachable.",
   "WireGuardTunnelName": null,
 

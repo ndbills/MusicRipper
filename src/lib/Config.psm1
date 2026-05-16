@@ -211,6 +211,20 @@ function New-RipperConfigObject {
         # via src/tools/Sync-PendingAlbums.ps1.
         RetryPendingSyncOnStartup = $true
 
+        # v0.2.0: at startup -- AFTER config-load, BEFORE the drive
+        # prompt -- silently query the GitHub Releases API (5s
+        # timeout). If a newer release is available, pop a small WPF
+        # prompt with the release notes + 'Update now' / 'Not now' /
+        # 'View on GitHub' buttons. Up-to-date / network-error /
+        # first-run-with-no-config-yet all skip silently (no dialog
+        # flash). 'Update now' launches the standalone
+        # Update-MusicRipper updater (same script as the Start Menu
+        # 'Update' shortcut) and exits MusicRipper cleanly so the
+        # parent re-launches into the new version. Default true. Set
+        # false to disable the auto-prompt -- you can still trigger
+        # it manually via the Update shortcut any time.
+        CheckForUpdatesOnLaunch   = $true
+
         # Phase 6.4: WireGuard auto-toggle. When the NAS share lives on
         # the other side of a WireGuard VPN (typical home-lab setup
         # where the parent rips at a friend's house and the family NAS

@@ -17,6 +17,12 @@ Describe 'New-RipperConfigObject' {
         $cfg.HasSynologyCredential   | Should -BeFalse
         $cfg.EjectAfterRip           | Should -BeTrue
         $cfg.ContinuousMode          | Should -BeTrue
+        # v0.2.0: both startup-time auto-actions default ON. Documented
+        # in config.template.json + src/lib/Config.psm1 + dialog
+        # checkboxes in Show-RipperConfigDialog.ps1; the parent can
+        # turn either off in Settings.
+        $cfg.RetryPendingSyncOnStartup | Should -BeTrue
+        $cfg.CheckForUpdatesOnLaunch   | Should -BeTrue
         # SyncTargets default = empty array. PowerShell unrolls an empty
         # NoteProperty array to $null on access; @() coerces both back to
         # an empty array for the count check.
