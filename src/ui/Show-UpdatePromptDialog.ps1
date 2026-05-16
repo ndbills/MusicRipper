@@ -183,21 +183,10 @@ function Show-RipperUpdatePromptDialog {
     $titleText.Text  = "Update available: v$($ReleaseInfo.Version)"
     $statusText.Text = "You're on v$LocalVersion. A newer release is on GitHub. Update now, or skip and rip your CD first -- you can always run the 'MusicRipper - Update' shortcut later."
 
-    # NB: $ReleaseInfo is a [hashtable] from Get-RipperLatestRelease,
-    # so $ReleaseInfo.PSObject.Properties['Foo'] does NOT see
-    # hashtable keys (it surfaces the .NET dictionary internals like
-    # Keys / Count). Use ContainsKey() for presence and dot-notation
-    # for the value -- the PowerShell adapter routes both to the
-    # underlying dictionary correctly. v0.2.1 fix.
-    $notesBody = if ($ReleaseInfo.ContainsKey('Notes') -and $ReleaseInfo.Notes) {
-        ([string]$ReleaseInfo.Notes).Trim()
-    } else {
-        '(No release notes provided.)'
-    }
-    $notesText.Text = $notesBody
-
-    $hasUrl = $ReleaseInfo.ContainsKey('HtmlUrl') -and $ReleaseInfo.HtmlUrl
-    if ($hasUrl) {
+    # v0.2.4: delegate notes-text + view-button visibility to the
+    # pure-function helpers in Updater.psm1 (unit-tested in Pester).
+    $notesText.Text = Get-RipperReleaseNotesText -ReleaseInfo $ReleaseInfo
+    if (Test-RipperReleaseHasViewButton -ReleaseInfo $ReleaseInfo) {
         $viewBtn.Visibility = 'Visible'
     }
 
@@ -221,18 +210,9 @@ function Show-RipperUpdatePromptDialog {
     }.GetNewClosure())
 
     $viewBtn.Add_Click({
-        # Open the GitHub Releases INDEX page (not the specific tag
-        # page) in the user's default browser. v0.2.2 change: parents
-        # often want to scroll the full release history rather than
-        # only see the one we're prompting them to install.
-        # Visibility of this button still keys off ReleaseInfo.HtmlUrl
-        # presence above (so the MainBranch fallback hides it) -- we
-        # just navigate to the index once they click.
-        #
-        # ProcessStartInfo + UseShellExecute is more reliable from a
-        # WPF event than Start-Process for raw URLs. Same approach as
-        # Show-UpdateDialog.ps1's ViewBtn.
-        $url = 'https://github.com/ndbills/MusicRipper/releases'
+        # v0.2.4: URL sourced from Get-RipperReleaseIndexUrl (see the
+        # standalone Show-UpdateDialog ViewBtn for the rationale).
+        $url = Get-RipperReleaseIndexUrl
         try {
             $psi = New-Object System.Diagnostics.ProcessStartInfo
             $psi.FileName        = $url

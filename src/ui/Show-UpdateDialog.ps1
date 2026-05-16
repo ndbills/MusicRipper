@@ -241,20 +241,13 @@ function Show-RipperUpdateDialog {
         $statusText.Text  = "Installed version: $localVer. Click 'Update now' to download and apply."
         $progressBar.Visibility = 'Collapsed'
         $notesBorder.Visibility = 'Visible'
-        $notes = if ($latest.Notes) { $latest.Notes.Trim() } else { '(No release notes provided.)' }
-        $notesText.Text   = $notes
-        # Show 'View on GitHub' only when the API gave us a release
-        # page URL. The MainBranch fallback (no Releases yet) returns
-        # HtmlUrl='' and gets no button -- there is no release page
-        # for a bare-branch zip.
-        # NB: $latest is a [hashtable] from Get-RipperLatestRelease, so
-        # $latest.PSObject.Properties['HtmlUrl'] does NOT see hashtable
-        # keys (it surfaces the .NET dictionary internals like Keys /
-        # Count). Use ContainsKey() for presence and dot-notation for
-        # the value -- the PowerShell adapter routes both to the
-        # underlying dictionary correctly. v0.2.1 fix.
-        $hasUrl = ($latest -is [hashtable]) -and $latest.ContainsKey('HtmlUrl') -and $latest.HtmlUrl
-        if ($hasUrl) {
+        # v0.2.4: delegate the notes-text + view-button visibility
+        # decisions to pure-function helpers in Updater.psm1. The
+        # helpers are unit-tested in Pester, which catches the class
+        # of bug that hid the v0.1.1 View button and the v0.2.0
+        # startup-prompt notes panel.
+        $notesText.Text = Get-RipperReleaseNotesText -ReleaseInfo $latest
+        if (Test-RipperReleaseHasViewButton -ReleaseInfo $latest) {
             $viewBtn.Visibility = 'Visible'
             $viewBtn.IsEnabled  = $true
         } else {
@@ -522,21 +515,12 @@ function Show-RipperUpdateDialog {
     $updateBtn.Add_Click({ & $startApply }.GetNewClosure())
     $retryBtn.Add_Click(  { & $startCheck }.GetNewClosure())
     $viewBtn.Add_Click({
-        # Open the GitHub Releases INDEX page (not the specific tag
-        # page) in the user's default browser. v0.2.2 change: parents
-        # often want to scroll the full release history rather than
-        # only see the one we're prompting them to install. Visibility
-        # of this button still keys off $latest.HtmlUrl presence in
-        # setUpdateAvailableState (so the MainBranch fallback, which
-        # has no release page at all, still hides the button) -- we
-        # just navigate to the index once they click.
-        #
-        # The shell-execute trick (UseShellExecute=$true, no FileName
-        # validation needed) is the most reliable launcher for an
-        # http(s) URL from a WPF event handler -- Start-Process
-        # occasionally trips on PowerShell parameter binding when the
-        # URL contains special chars.
-        $url = 'https://github.com/ndbills/MusicRipper/releases'
+        # v0.2.4: URL sourced from Get-RipperReleaseIndexUrl so the
+        # link is centralized (vs. duplicated in this file + the
+        # startup-prompt dialog + commit messages + docs).
+        # ProcessStartInfo + UseShellExecute is more reliable from a
+        # WPF event than Start-Process for raw URLs.
+        $url = Get-RipperReleaseIndexUrl
         try {
             $psi = New-Object System.Diagnostics.ProcessStartInfo
             $psi.FileName        = $url

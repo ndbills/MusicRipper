@@ -549,10 +549,198 @@ function Remove-RipperOldUpdateBackups {
 }
 
 
+# =========================================================================
+# v0.2.4: Pure-function helpers extracted from the WPF dialogs.
+#
+# Why: every update-path bug we've shipped (v0.1.1 View-on-GitHub button
+# hidden, v0.2.0 startup-prompt notes panel showing "(No release notes
+# provided.)" even when notes existed) lived in the data-decision logic
+# INSIDE the WPF click handlers / state setters. The dialogs themselves
+# are dumb renderers. Extracting the decisions here makes them
+# unit-testable in Pester without instantiating a WPF window -- catching
+# the next bug of that class at test time instead of at parent's-house
+# time.
+# =========================================================================
+
+function Get-RipperReleaseIndexUrl {
+<#
+.SYNOPSIS
+    Return the GitHub URL of the Releases index page (NOT a specific
+    tag page). Centralized so we don't sprinkle the literal URL across
+    the two dialog click handlers + commit messages + docs.
+
+.OUTPUTS
+    [string] e.g. 'https://github.com/ndbills/MusicRipper/releases'.
+#>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+    return 'https://github.com/ndbills/MusicRipper/releases'
+}
+
+
+function Test-RipperReleaseHasViewButton {
+<#
+.SYNOPSIS
+    Return $true iff the View-on-GitHub button should be visible for
+    the given release info. Encapsulates the hashtable-key-presence
+    test that hit the v0.1.1/v0.2.0 visibility bug
+    (`$ht.PSObject.Properties['HtmlUrl']` doesn't see hashtable keys
+    -- documented in /memories/powershell.md).
+
+.PARAMETER ReleaseInfo
+    Hashtable returned by Get-RipperLatestRelease. Anything else
+    (null, pscustomobject, garbage) returns $false defensively.
+
+.OUTPUTS
+    [bool]
+#>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [object]$ReleaseInfo
+    )
+    if (-not $ReleaseInfo) { return $false }
+    if (-not ($ReleaseInfo -is [hashtable])) { return $false }
+    if (-not $ReleaseInfo.ContainsKey('HtmlUrl')) { return $false }
+    return [bool][string]$ReleaseInfo['HtmlUrl']
+}
+
+
+function Get-RipperReleaseNotesText {
+<#
+.SYNOPSIS
+    Return the body text the WPF notes panel should display for the
+    given release info. Either the trimmed release-notes body, or a
+    parent-friendly fallback string.
+
+.DESCRIPTION
+    Encapsulates the "release notes are present and non-empty" decision
+    that hit the v0.2.0 startup-prompt "(No release notes provided.)"
+    bug. Same hashtable-key-presence rule as
+    Test-RipperReleaseHasViewButton.
+
+.PARAMETER ReleaseInfo
+    Hashtable returned by Get-RipperLatestRelease. Defensive against
+    null / non-hashtable / missing-key / empty / whitespace-only.
+
+.OUTPUTS
+    [string] either the trimmed Notes value, or
+    '(No release notes provided.)' when notes are absent or blank.
+#>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [object]$ReleaseInfo
+    )
+    $fallback = '(No release notes provided.)'
+    if (-not $ReleaseInfo)                          { return $fallback }
+    if (-not ($ReleaseInfo -is [hashtable]))        { return $fallback }
+    if (-not $ReleaseInfo.ContainsKey('Notes'))     { return $fallback }
+    $raw = [string]$ReleaseInfo['Notes']
+    if ([string]::IsNullOrWhiteSpace($raw))         { return $fallback }
+    return $raw.Trim()
+}
+
+
+function Copy-RipperUpdaterBootstrap {
+<#
+.SYNOPSIS
+    Stage the minimum set of files the temp-helper needs to drive the
+    update WPF from %TEMP%. Extracted from Update-MusicRipper.ps1's
+    bootstrap block so a Pester test can assert the file list without
+    spawning a child pwsh process.
+
+.DESCRIPTION
+    Mirrors the install layout for just the files the helper imports
+    + dot-sources:
+
+        <StagingRoot>\Update-MusicRipper.ps1
+        <StagingRoot>\src\lib\{Logging,Common,Updater}.{psd1,psm1}
+        <StagingRoot>\src\ui\Show-UpdateDialog.ps1
+        <StagingRoot>\VERSION    (best-effort; missing on source = skip)
+
+    Why pure-function: catches "added a new module to the helper's
+    dependency graph but forgot to add it to the bootstrap file list"
+    bugs at Pester time. The test asserts the returned list matches
+    the expected manifest, so a future addition (or accidental
+    removal) shows up as a test failure with a clear diff.
+
+.PARAMETER SourceRoot
+    Live install directory (where Update-MusicRipper.ps1 lives).
+
+.PARAMETER StagingRoot
+    Destination directory; usually a fresh
+    %TEMP%\musicripper-updater-<guid>\ folder. Created if absent.
+
+.OUTPUTS
+    [string[]] workspace-relative paths of the files actually copied,
+    in copy order. The VERSION entry is omitted when the source has
+    no VERSION file (older installs predate it).
+#>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)] [string]$SourceRoot,
+        [Parameter(Mandatory)] [string]$StagingRoot
+    )
+
+    if (-not (Test-Path -LiteralPath $SourceRoot -PathType Container)) {
+        throw "Copy-RipperUpdaterBootstrap: SourceRoot does not exist: '$SourceRoot'."
+    }
+
+    # Build (or re-use) the staging skeleton.
+    New-Item -ItemType Directory -Path $StagingRoot                           -Force -ErrorAction Stop | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $StagingRoot 'src\lib')     -Force -ErrorAction Stop | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $StagingRoot 'src\ui')      -Force -ErrorAction Stop | Out-Null
+
+    # The required file manifest. The order doesn't matter at runtime
+    # (the helper dot-sources by absolute path) but is preserved for
+    # test introspection + logging.
+    $manifest = [System.Collections.Generic.List[pscustomobject]]::new()
+    $manifest.Add([pscustomobject]@{ Rel = 'Update-MusicRipper.ps1';        Required = $true })
+    foreach ($m in @('Logging', 'Common', 'Updater')) {
+        foreach ($ext in @('psd1', 'psm1')) {
+            $manifest.Add([pscustomobject]@{ Rel = "src\lib\$m.$ext"; Required = $true })
+        }
+    }
+    $manifest.Add([pscustomobject]@{ Rel = 'src\ui\Show-UpdateDialog.ps1';   Required = $true })
+    # v0.2.0: VERSION file. Older installs don't have it (the file was
+    # added in v0.2.0); missing = skip, not error.
+    $manifest.Add([pscustomobject]@{ Rel = 'VERSION';                       Required = $false })
+
+    $copied = [System.Collections.Generic.List[string]]::new()
+    foreach ($entry in $manifest) {
+        $src = Join-Path $SourceRoot  $entry.Rel
+        $dst = Join-Path $StagingRoot $entry.Rel
+        if (-not (Test-Path -LiteralPath $src)) {
+            if ($entry.Required) {
+                throw "Copy-RipperUpdaterBootstrap: required source file missing: '$src'."
+            }
+            continue
+        }
+        $dstDir = Split-Path -Parent $dst
+        if (-not (Test-Path -LiteralPath $dstDir)) {
+            New-Item -ItemType Directory -Path $dstDir -Force -ErrorAction Stop | Out-Null
+        }
+        Copy-Item -LiteralPath $src -Destination $dst -Force -ErrorAction Stop
+        $copied.Add($entry.Rel)
+    }
+
+    # Comma-prefix prevents PowerShell from unrolling a single-element
+    # array to a bare string on return.
+    return ,$copied.ToArray()
+}
+
+
 Export-ModuleMember -Function `
     Get-RipperLatestRelease, `
     Compare-RipperVersion, `
     Get-RipperInstallRoot, `
     Save-RipperUpdateBackup, `
     Invoke-RipperUpdateApply, `
-    Remove-RipperOldUpdateBackups
+    Remove-RipperOldUpdateBackups, `
+    Get-RipperReleaseIndexUrl, `
+    Test-RipperReleaseHasViewButton, `
+    Get-RipperReleaseNotesText, `
+    Copy-RipperUpdaterBootstrap
