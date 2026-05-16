@@ -522,22 +522,30 @@ function Show-RipperUpdateDialog {
     $updateBtn.Add_Click({ & $startApply }.GetNewClosure())
     $retryBtn.Add_Click(  { & $startCheck }.GetNewClosure())
     $viewBtn.Add_Click({
-        # Open the release page in the user's default browser. The
-        # shell-execute trick (UseShellExecute=$true, no FileName
+        # Open the GitHub Releases INDEX page (not the specific tag
+        # page) in the user's default browser. v0.2.2 change: parents
+        # often want to scroll the full release history rather than
+        # only see the one we're prompting them to install. Visibility
+        # of this button still keys off $latest.HtmlUrl presence in
+        # setUpdateAvailableState (so the MainBranch fallback, which
+        # has no release page at all, still hides the button) -- we
+        # just navigate to the index once they click.
+        #
+        # The shell-execute trick (UseShellExecute=$true, no FileName
         # validation needed) is the most reliable launcher for an
         # http(s) URL from a WPF event handler -- Start-Process
         # occasionally trips on PowerShell parameter binding when the
-        # URL contains special chars. We only set $viewBtn.Visibility
-        # in the available state when $latest.HtmlUrl is non-empty,
-        # so $shared.CheckResult.Latest.HtmlUrl is guaranteed safe to
-        # read here.
+        # URL contains special chars.
+        $url = 'https://github.com/ndbills/MusicRipper/releases'
         try {
-            $url = [string]$shared.CheckResult.Latest.HtmlUrl
-            if ($url) {
-                $psi = New-Object System.Diagnostics.ProcessStartInfo
-                $psi.FileName        = $url
-                $psi.UseShellExecute = $true
-                [System.Diagnostics.Process]::Start($psi) | Out-Null
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName        = $url
+            $psi.UseShellExecute = $true
+            [System.Diagnostics.Process]::Start($psi) | Out-Null
+        } catch {
+            Write-RipperLog WARN 'Updater' "View on GitHub click failed to open '$url': $($_.Exception.Message)"
+        }
+    }.GetNewClosure())
             }
         } catch {
             Write-RipperLog WARN 'Updater' "View on GitHub click failed to open '$url': $($_.Exception.Message)"
