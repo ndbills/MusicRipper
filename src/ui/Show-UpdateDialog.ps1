@@ -546,11 +546,6 @@ function Show-RipperUpdateDialog {
             Write-RipperLog WARN 'Updater' "View on GitHub click failed to open '$url': $($_.Exception.Message)"
         }
     }.GetNewClosure())
-            }
-        } catch {
-            Write-RipperLog WARN 'Updater' "View on GitHub click failed to open '$url': $($_.Exception.Message)"
-        }
-    }.GetNewClosure())
     $cancelBtn.Add_Click({
         $shared.Cancelled = $true
         $window.DialogResult = $false
