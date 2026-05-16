@@ -221,18 +221,23 @@ function Show-RipperUpdatePromptDialog {
     }.GetNewClosure())
 
     $viewBtn.Add_Click({
-        # Open the release page in the user's default browser. Using
+        # Open the GitHub Releases INDEX page (not the specific tag
+        # page) in the user's default browser. v0.2.2 change: parents
+        # often want to scroll the full release history rather than
+        # only see the one we're prompting them to install.
+        # Visibility of this button still keys off ReleaseInfo.HtmlUrl
+        # presence above (so the MainBranch fallback hides it) -- we
+        # just navigate to the index once they click.
+        #
         # ProcessStartInfo + UseShellExecute is more reliable from a
         # WPF event than Start-Process for raw URLs. Same approach as
         # Show-UpdateDialog.ps1's ViewBtn.
+        $url = 'https://github.com/ndbills/MusicRipper/releases'
         try {
-            $url = [string]$ReleaseInfo.HtmlUrl
-            if ($url) {
-                $psi = New-Object System.Diagnostics.ProcessStartInfo
-                $psi.FileName        = $url
-                $psi.UseShellExecute = $true
-                [System.Diagnostics.Process]::Start($psi) | Out-Null
-            }
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName        = $url
+            $psi.UseShellExecute = $true
+            [System.Diagnostics.Process]::Start($psi) | Out-Null
         } catch {
             # Swallow; the prompt is best-effort. The dispatcher
             # exception sink would already have caught a real crash.
