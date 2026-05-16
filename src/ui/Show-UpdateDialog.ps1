@@ -247,7 +247,13 @@ function Show-RipperUpdateDialog {
         # page URL. The MainBranch fallback (no Releases yet) returns
         # HtmlUrl='' and gets no button -- there is no release page
         # for a bare-branch zip.
-        $hasUrl = $latest.PSObject.Properties['HtmlUrl'] -and $latest.HtmlUrl
+        # NB: $latest is a [hashtable] from Get-RipperLatestRelease, so
+        # $latest.PSObject.Properties['HtmlUrl'] does NOT see hashtable
+        # keys (it surfaces the .NET dictionary internals like Keys /
+        # Count). Use ContainsKey() for presence and dot-notation for
+        # the value -- the PowerShell adapter routes both to the
+        # underlying dictionary correctly. v0.2.1 fix.
+        $hasUrl = ($latest -is [hashtable]) -and $latest.ContainsKey('HtmlUrl') -and $latest.HtmlUrl
         if ($hasUrl) {
             $viewBtn.Visibility = 'Visible'
             $viewBtn.IsEnabled  = $true

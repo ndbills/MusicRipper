@@ -191,6 +191,44 @@ Describe 'Get-RipperLatestRelease' {
         $r.Source  | Should -Be 'MainBranch'
         $r.HtmlUrl | Should -Be ''
     }
+
+    It 'returns a [hashtable] whose keys are visible via ContainsKey (NOT via PSObject.Properties)' {
+        # v0.2.1 regression guard. The WPF dialogs (Show-UpdateDialog
+        # + Show-UpdatePromptDialog) both check whether HtmlUrl /
+        # Notes are populated before showing the View-on-GitHub button
+        # and the release-notes panel. v0.2.0 used the wrong pattern:
+        #
+        #   $hasUrl = $latest.PSObject.Properties['HtmlUrl'] -and ...
+        #
+        # which silently evaluates to $null on a hashtable -- because
+        # PSObject.Properties on a [hashtable] surfaces .NET dictionary
+        # internals (Keys, Count, IsSynchronized, ...), NOT the user's
+        # dictionary keys. Net effect: button stayed Collapsed, notes
+        # panel showed "(No release notes provided.)" even when the
+        # API returned both. Fixed in v0.2.1 by switching to
+        # ContainsKey(). This test locks in the contract: callers
+        # MUST use ContainsKey() (not PSObject.Properties) to test
+        # for key presence on this return value.
+        Mock -ModuleName Updater Invoke-RestMethod {
+            [pscustomobject]@{
+                tag_name    = 'v0.9'
+                body        = 'release notes'
+                zipball_url = 'https://api.github.com/repos/x/y/zipball/v0.9'
+                html_url    = 'https://github.com/x/y/releases/tag/v0.9'
+            }
+        }
+        $r = Get-RipperLatestRelease
+        $r -is [hashtable]                 | Should -BeTrue
+        $r.ContainsKey('HtmlUrl')          | Should -BeTrue
+        $r.ContainsKey('Notes')            | Should -BeTrue
+        $r.ContainsKey('Version')          | Should -BeTrue
+        $r.ContainsKey('Source')           | Should -BeTrue
+        # And confirm the trap: PSObject.Properties does NOT see
+        # hashtable keys. If a future PowerShell version changes this
+        # behavior, this assertion will fail and we'll know we can
+        # simplify the WPF call sites.
+        $r.PSObject.Properties['HtmlUrl'] | Should -BeNullOrEmpty
+    }
 }
 
 
