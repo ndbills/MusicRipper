@@ -579,6 +579,36 @@ function Get-RipperReleaseIndexUrl {
 }
 
 
+function Get-RipperAccurateRipDatabaseUrl {
+<#
+.SYNOPSIS
+    Return the AccurateRip drive-offsets database URL (the page that
+    lists known drive models + their read offsets). Centralized so the
+    'Browse AccurateRip database' button in Show-RegisterDriveDialog
+    -- and any future caller -- gets the URL from one place.
+
+.DESCRIPTION
+    v0.3.0: parents using USB-to-SATA adapters / docking stations
+    often see the drive's REAL model name masked by the adapter's
+    chipset name in Windows. When the auto-lookup misses, they can
+    click this URL to find their underlying drive's actual model +
+    offset, then either type the model into the manual-lookup field
+    or type the offset value directly.
+
+    The URL is http (not https) because that's the form the
+    AccurateRip site itself uses + matches the existing scraping
+    code in Find-RipperAccurateRipEntry.
+
+.OUTPUTS
+    [string] 'http://www.accuraterip.com/driveoffsets.htm'.
+#>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+    return 'http://www.accuraterip.com/driveoffsets.htm'
+}
+
+
 function Test-RipperReleaseHasViewButton {
 <#
 .SYNOPSIS
@@ -741,6 +771,7 @@ Export-ModuleMember -Function `
     Invoke-RipperUpdateApply, `
     Remove-RipperOldUpdateBackups, `
     Get-RipperReleaseIndexUrl, `
+    Get-RipperAccurateRipDatabaseUrl, `
     Test-RipperReleaseHasViewButton, `
     Get-RipperReleaseNotesText, `
     Copy-RipperUpdaterBootstrap

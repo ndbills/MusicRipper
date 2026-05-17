@@ -48,6 +48,9 @@ Import-Module (Join-Path $libRoot 'DriveRegistration.psd1') -Force
 # so the dispatcher-tick log lines below never throw if the dialog
 # is sourced standalone (Phase 6.4.4).
 Import-Module (Join-Path $libRoot 'Logging.psd1') -Force
+# v0.3.0: Updater.psm1 owns Get-RipperAccurateRipDatabaseUrl (the
+# centralized URL the 'Browse AccurateRip database' button opens).
+Import-Module (Join-Path $libRoot 'Updater.psd1') -Force
 
 function Show-RipperRegisterDriveDialog {
 <#
@@ -127,6 +130,44 @@ function Show-RipperRegisterDriveDialog {
     <TextBlock x:Name="StatusText" TextWrapping="Wrap"
                Foreground="#666" Margin="0,0,0,12"/>
 
+    <!-- v0.3.0: 'Drive not detected correctly?' escape hatch.
+         USB-to-SATA adapters / docking stations mask the optical
+         drive's real model with the adapter's chipset name, so the
+         auto-lookup against the AccurateRip page misses. Two ways
+         out from here:
+           - type the underlying drive model and look it up directly
+           - browse the AccurateRip database in your browser to find
+             the right model + offset (then either type the model
+             above or the offset directly into the field higher up).
+         Collapsed by default so normal users don't see the clutter.
+    -->
+    <Expander Header="Drive not detected correctly? (USB adapter / docking station)"
+              Margin="0,0,0,12" Foreground="#444">
+      <StackPanel Margin="0,8,4,0">
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,8"
+                   Foreground="#666" FontSize="11">
+          USB-to-SATA adapters often mask the drive's real model name
+          with the adapter's chipset name. Type your drive's actual
+          model below to look it up directly, or browse the
+          AccurateRip database in your browser to find the right value.
+        </TextBlock>
+        <Grid Margin="0,0,0,6">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+          <TextBox x:Name="ManualDriveText" Grid.Column="0" Padding="4"
+                   ToolTip="The drive's actual model name, e.g. 'TSSTcorp CDDVDW SH-224DB'."/>
+          <Button  x:Name="ManualLookupBtn" Grid.Column="1"
+                   Content="Look up by model" Padding="10,4" Margin="6,0,0,0"
+                   ToolTip="Search the AccurateRip database using this typed model name instead of the drive name Windows reports."/>
+        </Grid>
+        <Button x:Name="BrowseDbBtn" Content="Browse AccurateRip database (web)"
+                HorizontalAlignment="Left" Padding="10,4"
+                ToolTip="Open http://www.accuraterip.com/driveoffsets.htm in your default browser."/>
+      </StackPanel>
+    </Expander>
+
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
       <Button x:Name="OkBtn"     Content="OK"     Width="90"
               Margin="0,0,8,0" IsDefault="True"/>
@@ -171,6 +212,10 @@ function Show-RipperRegisterDriveDialog {
     $lookupBtn   = $window.FindName('LookupButton')
     $progBar     = $window.FindName('ProgBar')
     $statusText  = $window.FindName('StatusText')
+    # v0.3.0: manual-lookup escape hatch.
+    $manualText  = $window.FindName('ManualDriveText')
+    $manualBtn   = $window.FindName('ManualLookupBtn')
+    $browseBtn   = $window.FindName('BrowseDbBtn')
     $okBtn       = $window.FindName('OkBtn')
     $cancelBtn   = $window.FindName('CancelBtn')
 
@@ -214,19 +259,42 @@ function Show-RipperRegisterDriveDialog {
     })
 
     $startLookup = {
-        $sel = $driveCombo.SelectedItem
-        if (-not $sel) { return }
-        $driveObj = $sel.Tag
+        # v0.3.0: parameterized over $args[0] = drive-name string.
+        # Both LookupButton (passes the ComboBox's selected drive name)
+        # and ManualLookupBtn (passes the user-typed model from the
+        # Expander) call this. Empty / whitespace -> no-op + warning
+        # status, so a stray click doesn't kick off a useless lookup.
+        #
+        # v0.3.0: the second positional arg toggles the matcher's
+        # bi-directional mode. Auto-lookup (Windows-reported name) is
+        # always richer than AR entries, so we leave the strict
+        # forward-direction rule on (preserves v6.4.5 firmware-variant
+        # disambiguation). Manual lookup passes -MatchPartialModel
+        # because the user often types just a bare model number
+        # ('UJ8E2') that's SHORTER than the full AR entry
+        # ('Panasonic UJ8E2') -- the reverse-direction match.
+        param(
+            [string]$DriveName,
+            [bool]$MatchPartialModel = $false
+        )
+        if ([string]::IsNullOrWhiteSpace($DriveName)) {
+            $statusText.Text       = 'Pick a drive (or type a model name) first.'
+            $statusText.Foreground = '#a00'
+            return
+        }
+        $DriveName = $DriveName.Trim()
+
         $shared.Phase     = 'running'
         $shared.Result    = $null
         $shared.Error     = $null
-        $shared.DriveName = $driveObj.Name
+        $shared.DriveName = $DriveName
 
-        $statusText.Text       = "Querying AccurateRip for '$($driveObj.Name)'..."
+        $statusText.Text       = "Querying AccurateRip for '$DriveName'..."
         $statusText.Foreground = '#666'
         $progBar.Visibility    = 'Visible'
         $progBar.IsIndeterminate = $true
         $lookupBtn.IsEnabled   = $false
+        $manualBtn.IsEnabled   = $false
         $driveCombo.IsEnabled  = $false
         $okBtn.IsEnabled       = $false
 
@@ -234,10 +302,11 @@ function Show-RipperRegisterDriveDialog {
         $rs.ApartmentState = 'STA'
         $rs.ThreadOptions  = 'ReuseThread'
         $rs.Open()
-        $rs.SessionStateProxy.SetVariable('shared',         $shared)
-        $rs.SessionStateProxy.SetVariable('repoRoot',       $RepoRoot)
-        $rs.SessionStateProxy.SetVariable('driveName',      $driveObj.Name)
-        $rs.SessionStateProxy.SetVariable('cachedListPath', $cachedListPath)
+        $rs.SessionStateProxy.SetVariable('shared',             $shared)
+        $rs.SessionStateProxy.SetVariable('repoRoot',           $RepoRoot)
+        $rs.SessionStateProxy.SetVariable('driveName',          $DriveName)
+        $rs.SessionStateProxy.SetVariable('cachedListPath',     $cachedListPath)
+        $rs.SessionStateProxy.SetVariable('matchPartialModel',  [bool]$MatchPartialModel)
         $ps = [powershell]::Create()
         $ps.Runspace = $rs
         [void]$ps.AddScript({
@@ -250,8 +319,9 @@ function Show-RipperRegisterDriveDialog {
                 # matched the Windows drive name. Helps confirm the
                 # right physical drive was identified.
                 $shared.Result = Find-RipperAccurateRipEntry `
-                                    -DriveName      $driveName `
-                                    -CachedListPath $cachedListPath
+                                    -DriveName          $driveName `
+                                    -CachedListPath     $cachedListPath `
+                                    -MatchPartialModel:$matchPartialModel
                 $shared.Phase  = 'done'
             } catch {
                 $shared.Error = $_.Exception.Message
@@ -261,7 +331,48 @@ function Show-RipperRegisterDriveDialog {
         [void]$ps.BeginInvoke()
     }.GetNewClosure()
 
-    $lookupBtn.Add_Click({ & $startLookup }.GetNewClosure())
+    $lookupBtn.Add_Click({
+        # Auto-lookup against the drive Windows reports for the
+        # ComboBox-selected row. Strict forward-direction matching
+        # only -- the Windows-reported name is always richer than
+        # the AR entry, so reverse-direction matching would only
+        # introduce false positives here (v6.4.5 firmware-variant).
+        $sel = $driveCombo.SelectedItem
+        if (-not $sel) {
+            $statusText.Text       = 'Pick a drive first.'
+            $statusText.Foreground = '#a00'
+            return
+        }
+        & $startLookup $sel.Tag.Name $false
+    }.GetNewClosure())
+
+    $manualBtn.Add_Click({
+        # v0.3.0: lookup against the user-typed model string from the
+        # Expander. Used when the ComboBox-selected drive is masked
+        # by a USB-to-SATA adapter so the auto-lookup keeps missing.
+        # Passes -MatchPartialModel because bare-model input ('UJ8E2')
+        # is typically SHORTER than the AR entry ('Panasonic UJ8E2')
+        # -- needs the reverse-direction match.
+        & $startLookup $manualText.Text $true
+    }.GetNewClosure())
+
+    $browseBtn.Add_Click({
+        # v0.3.0: open the AccurateRip drive-offsets index page in the
+        # user's default browser. ProcessStartInfo + UseShellExecute is
+        # the proven-from-Show-UpdateDialog WPF-event pattern; raw URLs
+        # occasionally trip Start-Process's parameter binding.
+        $url = Get-RipperAccurateRipDatabaseUrl
+        try {
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName        = $url
+            $psi.UseShellExecute = $true
+            [System.Diagnostics.Process]::Start($psi) | Out-Null
+        } catch {
+            Write-RipperLog WARN 'Show-RegisterDriveDialog' "Browse AccurateRip click failed to open '$url': $($_.Exception.Message)"
+            $statusText.Text       = "Couldn't open browser. Visit $url manually."
+            $statusText.Foreground = '#a00'
+        }
+    }.GetNewClosure())
 
     # ---- Tick: poll $shared and update UI -----------------------------
     $timer = New-Object System.Windows.Threading.DispatcherTimer
@@ -271,6 +382,7 @@ function Show-RipperRegisterDriveDialog {
             $progBar.IsIndeterminate = $false
             $progBar.Visibility      = 'Collapsed'
             $lookupBtn.IsEnabled     = $true
+            $manualBtn.IsEnabled     = $true
             $driveCombo.IsEnabled    = $true
             $okBtn.IsEnabled         = $true
             if ($null -ne $shared.Result) {
@@ -280,7 +392,7 @@ function Show-RipperRegisterDriveDialog {
                 $statusText.Foreground = '#070'
                 Write-RipperLog INFO 'Show-RegisterDriveDialog' "AR lookup HIT for drive '$($shared.DriveName)': offset=$($entry.Offset), matched='$($entry.MatchedName)', source=$($entry.Source)."
             } else {
-                $statusText.Text       = "No AccurateRip offset found for '$($shared.DriveName)'. Enter the value manually if you know it, or leave 0 (rips will still work but AR verification will be unreliable)."
+                $statusText.Text       = "No AccurateRip offset found for '$($shared.DriveName)'. Try the 'Drive not detected correctly?' panel below to look up the underlying drive model, or enter the value manually if you know it (0 = AR verification disabled)."
                 $statusText.Foreground = '#a60'
                 if (-not $offsetText.Text) { $offsetText.Text = '0' }
                 Write-RipperLog INFO 'Show-RegisterDriveDialog' "AR lookup MISS for drive '$($shared.DriveName)': no normalized substring match in live page or cache."
@@ -291,6 +403,7 @@ function Show-RipperRegisterDriveDialog {
             $progBar.IsIndeterminate = $false
             $progBar.Visibility      = 'Collapsed'
             $lookupBtn.IsEnabled     = $true
+            $manualBtn.IsEnabled     = $true
             $driveCombo.IsEnabled    = $true
             $okBtn.IsEnabled         = $true
             $statusText.Text         = "Lookup failed: $($shared.Error)"
