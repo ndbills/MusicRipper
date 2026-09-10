@@ -134,6 +134,33 @@ Describe 'Get-RipperDriveFirmware (Phase 6.4.6)' {
     }
 }
 
+Describe 'Get-RipperCompletedTrackRecords' {
+    It 'returns only closed tracks whose FLAC files exist' {
+        $output = Join-Path $TestDrive 'rip'
+        New-Item -ItemType Directory -Path $output | Out-Null
+        Set-Content -LiteralPath (Join-Path $output '01 - One.flac') -Value 'one'
+        $metadata = [pscustomobject]@{ Tracks=@(
+            [pscustomobject]@{ Number=1; Title='One' },
+            [pscustomobject]@{ Number=2; Title='Two' },
+            [pscustomobject]@{ Number=3; Title='Three' }
+        ) }
+
+        $records = @(Get-RipperCompletedTrackRecords -Metadata $metadata `
+            -FlacNames @('01 - One.flac','02 - Two.flac','03 - Three.flac') `
+            -CompletedTrackCount 2 -OutputDir $output)
+
+        $records.Count | Should -Be 1
+        $records[0].Number | Should -Be 1
+        $records[0].FileName | Should -Be '01 - One.flac'
+    }
+
+    It 'returns no records when no encoder closed successfully' {
+        $metadata = [pscustomobject]@{ Tracks=@([pscustomobject]@{ Number=1; Title='One' }) }
+        @(Get-RipperCompletedTrackRecords -Metadata $metadata -FlacNames @('01 - One.flac') `
+            -CompletedTrackCount 0 -OutputDir $TestDrive).Count | Should -Be 0
+    }
+}
+
 Describe 'Get-RipperOpticalDrives (Phase 6.4.6 firmware capture)' {
 
     BeforeAll {

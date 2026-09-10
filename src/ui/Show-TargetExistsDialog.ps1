@@ -37,6 +37,9 @@
     log under %LOCALAPPDATA%\MusicRipper\logs\target-exists-dispatcher.log.
 #>
 
+$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+Import-Module (Join-Path $repoRoot 'src\lib\FailedRips.psd1') -Force
+
 function Show-RipperTargetExistsDialog {
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -232,33 +235,4 @@ function Show-RipperTargetExistsDialog {
     [void]$window.ShowDialog()
 
     [pscustomobject]@{ Action = $state.Action }
-}
-
-function Move-RipperFolderToRecycleBin {
-<#
-.SYNOPSIS
-    Send a folder to the Windows Recycle Bin (recoverable). Used by the
-    "Discard new rip" button on Show-RipperTargetExistsDialog.
-
-.DESCRIPTION
-    Wraps Microsoft.VisualBasic.FileIO.FileSystem.DeleteDirectory with
-    RecycleOption.SendToRecycleBin. Adds VisualBasic to the AppDomain
-    once and reuses thereafter.
-
-    Throws if the path doesn't exist or the recycle operation fails.
-    Caller is expected to log + surface a warning dialog on failure.
-#>
-    [CmdletBinding(SupportsShouldProcess)]
-    param([Parameter(Mandatory)] [string]$Path)
-
-    if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
-        throw "Move-RipperFolderToRecycleBin: not a directory: $Path"
-    }
-    Add-Type -AssemblyName Microsoft.VisualBasic | Out-Null
-    if ($PSCmdlet.ShouldProcess($Path, 'Send to Recycle Bin')) {
-        [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory(
-            $Path,
-            [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs,
-            [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin)
-    }
 }

@@ -35,6 +35,9 @@
     but DO get REVIEW.txt + a single-file FLAC image for foobar2000 inspection.
 #>
 
+$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+Import-Module (Join-Path $repoRoot 'src\lib\FailedRips.psd1') -Force
+
 function Invoke-RipperPostProcess {
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -319,6 +322,27 @@ function Invoke-RipperPostProcess {
         # No sync configured / review-queue rip -- credit the remainder
         # so overall reaches 1.0 cleanly.
         & $bumpOverall ($W_SYNC + $W_RETENTION)
+    }
+
+    # A library-bound replacement is now complete and durable. Recycle any
+    # preserved failed attempts for this exact disc id. Review-queue outcomes
+    # intentionally retain them because the replacement still needs human
+    # quality/metadata review. Cleanup is advisory and can never undo success.
+    if ($quality.Destination -eq 'Library') {
+        & $reportStatus 'Cleaning up failed attempts...'
+        try {
+            $cleanupResults = @(Remove-RipperFailedRipAttempts -LibraryRoot $LibraryRoot -DiscId $DiscId)
+            foreach ($cleanup in $cleanupResults) {
+                $completedCount = @($cleanup.State.CompletedTracks).Count
+                if ($cleanup.Recycled) {
+                    Write-RipperLog INFO 'PostProcess' "Recycled superseded failed-rip attempt: $($cleanup.Path) ($completedCount completed track(s))."
+                } else {
+                    Write-RipperLog WARN 'PostProcess' "Could not recycle failed-rip attempt '$($cleanup.Path)': $($cleanup.Error)"
+                }
+            }
+        } catch {
+            Write-RipperLog WARN 'PostProcess' "Failed-rip cleanup threw (non-fatal): $($_.Exception.Message)"
+        }
     }
     & $reportStatus 'Done.'
 

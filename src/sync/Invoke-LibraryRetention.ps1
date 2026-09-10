@@ -52,6 +52,9 @@
         }
 #>
 
+$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+Import-Module (Join-Path $repoRoot 'src\lib\FailedRips.psd1') -Force
+
 Set-StrictMode -Version 3.0
 
 
@@ -156,10 +159,9 @@ function Invoke-RipperLibraryRetention {
             return @{ Action='MovedToSent'; Reason='All targets OK'; NewPath=$newPath }
         }
         'RecycleAfterAllSynced' {
-            # Move-RipperFolderToRecycleBin is defined in
-            # src/ui/Show-TargetExistsDialog.ps1 (Phase 5.11). Both
-            # files are dot-sourced by Start-Ripper.ps1 before this
-            # function runs.
+            # Move-RipperFolderToRecycleBin is exported by the FailedRips
+            # module imported above. Keep the guard for unusual standalone
+            # callers that load only this function body.
             $cmd = Get-Command -Name Move-RipperFolderToRecycleBin -ErrorAction SilentlyContinue
             if (-not $cmd) {
                 Write-RipperLog WARN 'Retention' 'Move-RipperFolderToRecycleBin not loaded; falling back to Keep.'
