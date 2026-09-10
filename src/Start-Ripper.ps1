@@ -68,6 +68,7 @@ public static extern System.IntPtr GetConsoleWindow();
 Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1')  -Force
 Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
 Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')  -Force
+Import-Module (Join-Path $repoRoot 'src\lib\FailedRips.psd1') -Force
 
 # Dot-source the Phase 2/3/4/5 core scripts and dialogs so their functions
 # are in scope.

@@ -3,9 +3,8 @@
 
 <#
 .SYNOPSIS
-    Phase 5.11: smoke tests for src/ui/Show-TargetExistsDialog.ps1's
-    non-WPF helper Move-RipperFolderToRecycleBin and the dispatcher
-    contract on the dialog itself.
+    Phase 5.11: smoke tests for the shared Recycle Bin helper and the
+    dispatcher contract on Show-TargetExistsDialog.ps1.
 
     The WPF window is not driven from Pester (same convention as
     Show-DuplicateDiscDialog.Tests would have followed -- its CI tests
@@ -19,6 +18,7 @@
 BeforeAll {
     $repoRoot = Split-Path -Parent $PSScriptRoot
     Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1') -Force
+    Import-Module (Join-Path $repoRoot 'src\lib\FailedRips.psd1') -Force
     . (Join-Path $repoRoot 'src\ui\Show-TargetExistsDialog.ps1')
 
     $script:tmpRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("targetexists-tests-" + [guid]::NewGuid())

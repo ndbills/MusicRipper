@@ -139,6 +139,28 @@ combination. A pre-Phase-6.4.6 backlog item -- F-7 in
 [Windows IMAPI2] as a fallback for these drives, but it's not
 implemented.)
 
+### "UNRECOVERED READ ERROR" or another failure partway through a disc
+
+This is usually a damaged/dirty sector or a drive that cannot recover that
+part of the disc. Clean the disc from the center outward and retry; a
+different optical drive may read the same sector successfully.
+
+MusicRipper preserves tracks that finished before the failure under:
+
+```
+<LibraryRoot>\_FailedRips\<DiscId>\<timestamp-drive-guid>\
+```
+
+The folder contains only successfully closed FLACs plus `FAILED-RIP.txt`,
+`failed-rip.json`, and `ripper-session.log`. It is incomplete and has not
+passed whole-disc AccurateRip/CTDB verification, so do not move it into the
+music library manually.
+
+Reinserting the disc starts a fresh rip from track 1. When that replacement
+finishes cleanly and reaches the library, MusicRipper logs and sends matching
+failed attempts to the Recycle Bin. A replacement routed to `_ReviewQueue`
+does not remove them.
+
 ## Tagging & library files (Phase 5)
 
 ### Why does Phase 5 "re-tag" files that already have tags?

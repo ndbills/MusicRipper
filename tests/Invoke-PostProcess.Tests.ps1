@@ -25,6 +25,7 @@ BeforeAll {
     function script:Add-RipperLibraryDiscIndexEntry { param($LibraryRoot,$DiscId,$Path,$Label,$Source) }
     function script:Invoke-RipperSync { param($AlbumPath,$LibraryRoot,$DiscId,$Config) }
     function script:Invoke-RipperLibraryRetention { param($AlbumPath,$LibraryRoot,$Config,$SyncResult,$DiscId) }
+    function script:Remove-RipperFailedRipAttempts { param($LibraryRoot,$DiscId) }
 
     . (Join-Path $repoRoot 'src\core\Invoke-PostProcess.ps1')
 
@@ -67,6 +68,7 @@ Describe 'Invoke-RipperPostProcess (library route)' {
         Mock -CommandName Write-RipperReviewTxt    -MockWith { $null }
         Mock -CommandName New-RipperReviewImage    -MockWith { $null }
         Mock -CommandName Add-RipperLibraryDiscIndexEntry -MockWith { $null }
+        Mock -CommandName Remove-RipperFailedRipAttempts -MockWith { @() }
     }
 
     It 'returns Quality, Move, Target, IsReviewQueue' {
@@ -144,6 +146,28 @@ Describe 'Invoke-RipperPostProcess (library route)' {
             -Metadata (New-FakeMetadata) -DiscId 'discABC' -LibraryRoot 'C:\Library' } |
             Should -Not -Throw
     }
+
+    It 'recycles failed attempts after a clean library-bound replacement' {
+        Invoke-RipperPostProcess -RipFolder 'C:\rip' -LogFile 'C:\rip\album.log' `
+            -Metadata (New-FakeMetadata) -DiscId 'discABC' -LibraryRoot 'C:\Library' | Out-Null
+        Should -Invoke -CommandName Remove-RipperFailedRipAttempts -Times 1 -Exactly -ParameterFilter {
+            $LibraryRoot -eq 'C:\Library' -and $DiscId -eq 'discABC'
+        }
+    }
+
+    It 'does not fail a clean replacement when failed-attempt cleanup reports an error' {
+        Mock -CommandName Remove-RipperFailedRipAttempts -MockWith {
+            @([pscustomobject]@{
+                Path='C:\Library\_FailedRips\discABC\attempt'
+                Recycled=$false
+                Error='recycle unavailable'
+                State=[pscustomobject]@{ CompletedTracks=@(1,2) }
+            })
+        }
+        { Invoke-RipperPostProcess -RipFolder 'C:\rip' -LogFile 'C:\rip\album.log' `
+            -Metadata (New-FakeMetadata) -DiscId 'discABC' -LibraryRoot 'C:\Library' } |
+            Should -Not -Throw
+    }
 }
 
 Describe 'Invoke-RipperPostProcess (review route)' {
@@ -167,6 +191,7 @@ Describe 'Invoke-RipperPostProcess (review route)' {
         Mock -CommandName Write-RipperReviewTxt    -MockWith { $null }
         Mock -CommandName New-RipperReviewImage    -MockWith { $null }
         Mock -CommandName Add-RipperLibraryDiscIndexEntry -MockWith { $null }
+        Mock -CommandName Remove-RipperFailedRipAttempts -MockWith { @() }
     }
 
     It 'reports IsReviewQueue=$true and the review-queue target' {
@@ -201,6 +226,12 @@ Describe 'Invoke-RipperPostProcess (review route)' {
         Invoke-RipperPostProcess -RipFolder 'C:\rip' -LogFile 'C:\rip\album.log' `
             -Metadata (New-FakeMetadata) -DiscId 'discABC' -LibraryRoot 'C:\Library' | Out-Null
         Should -Invoke -CommandName Add-RipperLibraryDiscIndexEntry -Times 0 -Exactly
+    }
+
+    It 'does NOT recycle failed attempts while the replacement needs review' {
+        Invoke-RipperPostProcess -RipFolder 'C:\rip' -LogFile 'C:\rip\album.log' `
+            -Metadata (New-FakeMetadata) -DiscId 'discABC' -LibraryRoot 'C:\Library' | Out-Null
+        Should -Invoke -CommandName Remove-RipperFailedRipAttempts -Times 0 -Exactly
     }
 }
 

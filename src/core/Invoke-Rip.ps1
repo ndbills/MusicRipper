@@ -130,6 +130,7 @@ Import-Module (Join-Path $repoRoot 'src\lib\Common.psd1')     -Force
 Import-Module (Join-Path $repoRoot 'src\lib\Logging.psd1')    -Force
 Import-Module (Join-Path $repoRoot 'src\lib\Config.psd1')     -Force
 Import-Module (Join-Path $repoRoot 'src\lib\RipHelpers.psd1') -Force
+Import-Module (Join-Path $repoRoot 'src\lib\FailedRips.psd1') -Force
 
 # Lazy DLL loading mirrors Get-DiscId.ps1's pattern. Loading at
 # dot-source time would force every test that touches this file to
@@ -162,6 +163,29 @@ function Initialize-RipAssemblies {
         Add-Type -Path $dll
     }
     $script:RipAssembliesLoaded = $true
+}
+
+function Get-RipperCompletedTrackRecords {
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)] [object]$Metadata,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]]$FlacNames,
+        [Parameter(Mandatory)] [int]$CompletedTrackCount,
+        [Parameter(Mandatory)] [string]$OutputDir
+    )
+
+    $records = for ($i = 0; $i -lt $CompletedTrackCount -and $i -lt $FlacNames.Count; $i++) {
+        $fileName = [string]$FlacNames[$i]
+        if ($fileName -and (Test-Path -LiteralPath (Join-Path $OutputDir $fileName) -PathType Leaf)) {
+            [pscustomobject]@{
+                Number   = [int]$Metadata.Tracks[$i].Number
+                Title    = [string]$Metadata.Tracks[$i].Title
+                FileName = $fileName
+            }
+        }
+    }
+    return @($records)
 }
 
 function Invoke-RipperRip {
@@ -206,6 +230,14 @@ function Invoke-RipperRip {
         New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
     }
     if (Test-Path -LiteralPath $outDir) {
+        $failedMarker = Join-Path $outDir 'failed-rip.json'
+        if (Test-Path -LiteralPath $failedMarker -PathType Leaf) {
+            $libraryRoot = Split-Path -Parent $OutputRoot
+            $quarantined = Move-RipperMarkedFailedRip -RipFolder $outDir -LibraryRoot $libraryRoot
+            Write-RipperLog WARN 'Invoke-Rip' "Quarantined marked failed attempt before fresh retry: $quarantined"
+        }
+    }
+    if (Test-Path -LiteralPath $outDir) {
         # Wipe a previous attempt: a partial rip from a crashed session must
         # not contaminate this one. The Phase-3 dialog already confirmed the
         # user wants to rip; we don't second-guess.
@@ -248,6 +280,11 @@ function Invoke-RipperRip {
     # Encoders we open during the rip — tracked so cancel/cleanup can
     # Delete() any in-progress encoder safely.
     $encoders = [System.Collections.Generic.List[object]]::new()
+    $flacNames = [string[]]@()
+    $trackCount = 0
+    $currentTrack = 0
+    $completedTrackCount = 0
+    $extractionStarted = $false
     # Phase 6.4.6: pre-init so the catch block can safely reference it
     # even if the inner try fails before $driveFirmware is assigned
     # below (StrictMode 3 throws on uninitialized-variable reads).
@@ -428,6 +465,7 @@ function Invoke-RipperRip {
         $currentTrack   = 0
         $lastProgressMs = -1000  # force first callback
         $stopwatch      = [Diagnostics.Stopwatch]::StartNew()
+        $extractionStarted = $true
 
         while ($samplesRead -lt $totalSamples) {
             if (& $isCancelled) {
@@ -458,6 +496,7 @@ function Invoke-RipperRip {
                 while ($currentTrack -lt ($trackCount - 1) -and
                        $absoluteStart -ge $boundaries[$currentTrack + 1]) {
                     $encoders[$currentTrack].Close() | Out-Null
+                    $completedTrackCount = $currentTrack + 1
                     $currentTrack++
                 }
                 $boundaryEnd = $boundaries[$currentTrack + 1]
@@ -527,6 +566,7 @@ function Invoke-RipperRip {
         if (-not $cancelled) {
             for ($i = $currentTrack; $i -lt $trackCount; $i++) {
                 $encoders[$i].Close() | Out-Null
+                $completedTrackCount = $i + 1
             }
         }
 
@@ -633,7 +673,11 @@ function Invoke-RipperRip {
         }
     }
     catch {
-        # Hard failure mid-rip: clean up encoders + folder, then rethrow.
+        # Hard failure mid-rip: preserve tracks whose encoders already
+        # crossed a track boundary and closed successfully. Delete the
+        # current/incomplete encoder and all later placeholders, then archive
+        # the marked attempt outside _inbox. Cancellation is handled earlier
+        # and intentionally retains its delete-everything behavior.
         # Phase 6.4.6: when the failure matches the known
         # "drive cannot do raw audio reads" signature, rewrite the
         # exception text into a parent-friendly explanation that names
@@ -642,10 +686,46 @@ function Invoke-RipperRip {
         # diagnostics still have it.
         $rawMsg = $_.Exception.Message
         Write-RipperLog ERROR 'Invoke-Rip' "Rip failed: $rawMsg"
-        foreach ($e in $encoders) {
-            try { $e.Delete() | Out-Null } catch { }
+        for ($i = $completedTrackCount; $i -lt $encoders.Count; $i++) {
+            try { $encoders[$i].Delete() | Out-Null } catch { }
         }
-        try { Remove-Item -LiteralPath $outDir -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+
+        $completedTracks = @(Get-RipperCompletedTrackRecords -Metadata $Metadata `
+            -FlacNames $flacNames -CompletedTrackCount $completedTrackCount -OutputDir $outDir)
+        $failedTrackNumber = 0
+        $failedTrackTitle = ''
+        if ($trackCount -gt 0 -and $completedTrackCount -lt $trackCount) {
+            $failedTrackNumber = [int]$Metadata.Tracks[$completedTrackCount].Number
+            $failedTrackTitle = [string]$Metadata.Tracks[$completedTrackCount].Title
+        }
+
+        $preservedPath = $null
+        $preserveError = $null
+        if ($extractionStarted) { try {
+            $libraryRoot = Split-Path -Parent $OutputRoot
+            $arName = ''
+            try { $arName = [string]$reader.ARName } catch { }
+            $preservedPath = Save-RipperFailedRip `
+                -RipFolder          $outDir `
+                -LibraryRoot        $libraryRoot `
+                -DiscId             ([string]$DiscIdInfo.DiscId) `
+                -Metadata           $Metadata `
+                -CompletedTracks    $completedTracks `
+                -FailedTrackNumber  $failedTrackNumber `
+                -FailedTrackTitle   $failedTrackTitle `
+                -ErrorMessage       $rawMsg `
+                -DriveLetter        "$driveChar`:" `
+                -DriveName          $arName `
+                -FirmwareRevision   $driveFirmware `
+                -DriveOffset        ([int]$cfg.DriveOffset) `
+                -SessionLogPath     (Get-RipperLogPath)
+            Write-RipperLog WARN 'Invoke-Rip' "Preserved failed rip: completedTracks=$($completedTracks.Count), failedTrack=$failedTrackNumber, path='$preservedPath'."
+        } catch {
+            $preserveError = $_.Exception.Message
+            Write-RipperLog ERROR 'Invoke-Rip' "Failed-rip archival failed; marked source remains at '$outDir': $preserveError"
+        } } else {
+            try { Remove-Item -LiteralPath $outDir -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+        }
 
         $arName  = ''
         try { $arName = [string]$reader.ARName } catch { }
@@ -655,8 +735,12 @@ function Invoke-RipperRip {
                         -FirmwareRevision $driveFirmware
         if ($friendly) {
             Write-RipperLog ERROR 'Invoke-Rip' "Drive incompatibility detected; surfacing parent-friendly message."
+            if ($preservedPath) { $friendly += "`n`nFailed-rip evidence preserved at: $preservedPath" }
+            elseif ($preserveError) { $friendly += "`n`nFailed-rip evidence remains marked at: $outDir`nArchival error: $preserveError" }
             throw $friendly
         }
+        if ($preservedPath) { throw "$rawMsg`n`nFailed-rip evidence preserved at: $preservedPath" }
+        if ($preserveError) { throw "$rawMsg`n`nFailed-rip evidence remains marked at: $outDir`nArchival error: $preserveError" }
         throw
     }
     finally {
