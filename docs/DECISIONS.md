@@ -2736,4 +2736,55 @@ always-update-available.
 
 **Pester:** 606/0/1 (was 597; +9 new tests).
 
+## D-033 -- Preserve hard-failed extraction attempts; retry from track 1
+
+**Date:** 2026-09-10.
+**Status:** Implemented on `fix/preserve-failed-rips`; pending manual verification.
+
+### Problem
+
+The original Phase 4 engine deleted the entire `_inbox` album folder when
+`CDDriveReader.Read()` threw. That was appropriate for an explicit user
+cancel, but unnecessarily destroyed tracks whose FLAC encoders had already
+closed successfully. A real LG GP65NB60 failure on track 16 discarded the
+first 15 completed tracks and the most useful local evidence.
+
+### Decision
+
+- **Cancel remains destructive:** remove every partial file and return
+  `Cancelled`, as Phase 4 explicitly specified.
+- **Hard extraction failures preserve evidence:** keep only FLACs whose
+  encoders closed successfully. Delete the incomplete current track and all
+  later placeholders.
+- Move the attempt out of `_inbox` to
+  `<LibraryRoot>\_FailedRips\<DiscId>\<timestamp-drive-guid>\`.
+- Write `failed-rip.json`, parent-readable `FAILED-RIP.txt`, and a snapshot
+  of the per-disc session log. Record disc id, metadata, drive/firmware,
+  offset, completed tracks, failed track, timestamp, and raw exception.
+- If archival fails, leave the marked source intact. A later retry must move
+  that marked folder to `_FailedRips` before creating fresh output; it must
+  never overwrite or silently delete the evidence.
+- Every retry starts again at track 1. CUETools accumulates AccurateRip and
+  CTDB state over one continuous whole-disc read; combining tracks from
+  separate attempts would weaken the invariant that a completed album came
+  from one extraction and one verification pass.
+- After a replacement completes the normal pipeline with a `Library`
+  quality destination, recycle all failed attempts with the exact same disc
+  id. Log each recycled path and completed-track count. Cleanup failures are
+  warnings and cannot turn the replacement into a failure.
+- `ReviewQueue` replacements do not trigger cleanup. A suspect or
+  user-review result is not yet the clean replacement that supersedes the
+  preserved evidence.
+
+The Recycle Bin primitive now belongs to `src/lib/FailedRips.psm1` rather
+than a WPF dialog file so the rip worker, post-process worker, retention
+policy, and target-exists dialog all use the same recoverable operation.
+
+### Rejected alternative: resume at the failed track
+
+Rejected because it would require restoring CUETools reader position,
+secure-read retry/cache state, encoder boundaries, drive offset context, and
+whole-disc AR/CTDB accumulation across processes. The saved time is not worth
+creating a complete-looking album with ambiguous extraction provenance.
+
 

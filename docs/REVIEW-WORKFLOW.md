@@ -18,6 +18,13 @@ Five cases, each tagged with a folder-name prefix:
 
 Main library = trustworthy. The review queue is your backlog.
 
+`_FailedRips` is different from `_ReviewQueue`. It contains incomplete
+extraction attempts after a hard drive/read failure, not complete albums that
+need a quality or metadata decision. MusicRipper retries those discs from
+track 1 and recycles the matching failed attempts only after a clean
+library-bound replacement completes. See `docs/TROUBLESHOOTING.md` for the
+failed-rip folder contents and recovery steps.
+
 ## What's in the folder?
 
 ```
